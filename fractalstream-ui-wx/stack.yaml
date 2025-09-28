@@ -5,7 +5,6 @@ packages:
 - ../fractalstream-core
 - ../fractalstream-backend-llvm
 
-
 extra-deps:
 - cabal-macosx-0.2.4.2@sha256:6794dab50ca2a062b9c54455442ccc3d9d9ffa6dbdb81940597329e3b377436b,3045
 - megaparsec-9.1.0@sha256:f2ef8a08cc1e3fa6628965732f588e07e886a01f8267310404e31072fa9e802b,3238
@@ -18,7 +17,7 @@ extra-deps:
   commit: 15a15db1fba50fd0ce52f26f43550fbad5529bf8
 
 - git: https://github.com/matt-noonan/wxHaskell.git
-  commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+  commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
   subdirs:
       - wx
       - wxcore

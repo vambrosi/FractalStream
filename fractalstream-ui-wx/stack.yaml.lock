@@ -63,11 +63,11 @@ packages:
     pantry-tree:
       size: 1265
       sha256: c37c510210385ac5a73a96b4e1d9c9818f9762409c036b58bbf0c996e9777d54
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
   original:
     subdir: wx
     git: https://github.com/matt-noonan/wxHaskell.git
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
 - completed:
     subdir: wxcore
     name: wxcore
@@ -76,11 +76,11 @@ packages:
     pantry-tree:
       size: 1631
       sha256: e2f7d551558229a4ba1fb260549463b2a4ce6c90e31e5035eada1d2731821db9
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
   original:
     subdir: wxcore
     git: https://github.com/matt-noonan/wxHaskell.git
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
 - completed:
     subdir: wxc
     name: wxc
@@ -88,12 +88,12 @@ packages:
     git: https://github.com/matt-noonan/wxHaskell.git
     pantry-tree:
       size: 9113
-      sha256: d57ee1c8c54491a1013b57e9bb6a666a7541eeacdcefd3b85f01c69c722e0357
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+      sha256: 62b4e06ab57751efc42bf465b5856c7cdc04eebad362e9ff49e8d3faae53bfb2
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
   original:
     subdir: wxc
     git: https://github.com/matt-noonan/wxHaskell.git
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
 - completed:
     subdir: wxdirect
     name: wxdirect
@@ -102,11 +102,11 @@ packages:
     pantry-tree:
       size: 922
       sha256: a3fb951117cbbefa6ea25609751b5c4c87310809178d29a3ed501ebf664e956a
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
   original:
     subdir: wxdirect
     git: https://github.com/matt-noonan/wxHaskell.git
-    commit: d0853dc1530855cf32ff4a6a73c0e941a77b7864
+    commit: a9b3a0b9bcf868790c509e99325edeabb83b6595
 snapshots:
 - completed:
     size: 586923
