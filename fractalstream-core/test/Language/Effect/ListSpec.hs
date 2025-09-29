@@ -12,6 +12,7 @@ import Language.Value.Evaluator
 import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Effect.List
+import Control.Monad
 import Control.Monad.State
 import Language.Effect
 
@@ -32,7 +33,7 @@ runWithXY t (Scalar xt x) (Scalar yt y) list0 input = withKnownType xt $ withKno
         (_, xs) <- get
         pure (v, xs)
   in fmap ((`evalState` (ctx, list0)) . (>>= getList) . simulate (Handler listHandler NoHandler))
-   $ parseCode (EP (ParseEff listEffectParser NoEffs)) (envProxy Proxy) t input
+   $ parseCode (EP (ParseEff listEffectParser NoEffs)) (envProxy Proxy) EmptyContext t input
 
 -- | Evaluate a value in the current environment
 eval :: forall t env s

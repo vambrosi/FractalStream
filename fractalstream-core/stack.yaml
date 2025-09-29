@@ -1,8 +1,4 @@
 resolver: lts-24.12
-#resolver: nightly-2022-12-17
 
 packages:
 - .
-
-#extra-deps:
-#  - megaparsec-9.2.0@sha256:0c272aa13b9f663dbd7b74ef81e9b1f9f05cafde50f5362ce87ffd4913046e0b,3213

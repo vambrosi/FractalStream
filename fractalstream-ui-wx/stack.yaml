@@ -11,7 +11,7 @@ extra-deps:
   commit: 7e892fbeb761f4adb29d52b5377e6a1869faf48d
 
 - git: https://github.com/matt-noonan/llvm-hs.git
-  commit: 530205d7d85882348a04c1c5422ba5e6af7b7d45
+  commit: 46fbe902a83a4198f296e2062c767b34ecc6be65
   subdirs:
     - llvm-hs
     - llvm-hs-pure
@@ -26,10 +26,9 @@ extra-deps:
     - wxcore
     - wxdirect
 
-# Override default flag values for local packages and extra-deps
 flags:
   llvm-hs:
-    shared-llvm: true
+    shared-llvm: false
 
 ghc-options:
   llvm-hs:

@@ -1,5 +1,3 @@
-{-# language TemplateHaskell #-}
-
 module UI.Menu
   ( makeMenuBar
   ) where
@@ -8,15 +6,14 @@ import UI.ProjectActions
 
 import qualified System.Info as Info
 import Control.Monad
-import Development.IncludeFile
-import qualified Data.ByteString.UTF8 as Utf8
 
 import Graphics.UI.WX hiding (when)
 
-$(includeFileInSource "../CONTRIBUTORS" "contributorsFileContents")
-
+-- TODO: read this out of the CONTRIBUTORS file instead
 contributors :: [String]
-contributors = lines (Utf8.toString contributorsFileContents)
+contributors =
+  [ "Matt Noonan"
+  ]
 
 makeMenuBar :: ProjectActions -> Frame a -> [Menu ()] -> IO ()
 makeMenuBar ProjectActions{..} f addlMenus = do
@@ -40,7 +37,7 @@ makeMenuBar ProjectActions{..} f addlMenus = do
                , help := "Modify an existing FractalStream project"
                , on command := getProject "Edit" projectEdit ]
 
-  when (Info.os /= "darwin" || True) $ do
+  when (Info.os /= "darwin") $ do
     void $ menuQuit prj [ text := "&Quit"
                         , help := "Quit FractalStream" ]
 

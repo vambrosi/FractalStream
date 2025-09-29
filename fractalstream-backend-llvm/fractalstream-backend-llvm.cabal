@@ -64,8 +64,8 @@ library
                        Backend.LLVM.Code
   build-depends:       base >=4.8 && <5
                      , fractalstream-core
-                     , llvm-hs
-                     , llvm-hs-pure
+                     , llvm-hs == 12.1.0
+                     , llvm-hs-pure == 12.1.0
                      , containers
                      , first-class-families
                      , bytestring

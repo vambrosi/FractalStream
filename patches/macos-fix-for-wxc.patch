@@ -1,0 +1,77 @@
+diff --git a/wxc/CMakeLists.txt b/wxc/CMakeLists.txt
+index c521973..5544d3e 100644
+--- a/wxc/CMakeLists.txt
++++ b/wxc/CMakeLists.txt
+@@ -5,8 +5,7 @@ project(wxc VERSION 1.0.0.2 DESCRIPTION "A C wrapper library around wxWidgets."
+     LANGUAGES CXX)
+ include(GNUInstallDirs)
+ 
+-# Using SHARED here is a bad practice ??
+-add_library(wxc SHARED
++add_library(wxc
+     src/cpp/apppath.cpp
+     src/cpp/dragimage.cpp
+     src/cpp/eljaccelerator.cpp
+diff --git a/wxc/src/cpp/eljprinting.cpp b/wxc/src/cpp/eljprinting.cpp
+index 877f0ed..0d67a72 100644
+--- a/wxc/src/cpp/eljprinting.cpp
++++ b/wxc/src/cpp/eljprinting.cpp
+@@ -4,18 +4,12 @@
+ # include <wx/dcprint.h>
+ #endif
+ 
+-#if defined(wxUSE_POSTSCRIPT) && (wxUSE_POSTSCRIPT==0)
+ # undef wxUSE_POSTSCRIPT
+-#endif
+ 
+-#ifdef wxUSE_POSTSCRIPT
+ # include <wx/dcps.h>
+ # include "wx/generic/prntdlgg.h"
+-#endif
+ 
+-#ifndef wxUSE_POSTSCRIPT
+ # define wxPostScriptDC        void
+-#endif
+ 
+ extern "C"
+ {
+diff --git a/wxc/src/cpp/ewxw_main.cpp b/wxc/src/cpp/ewxw_main.cpp
+index fcf1e98..6c0cf3e 100644
+--- a/wxc/src/cpp/ewxw_main.cpp
++++ b/wxc/src/cpp/ewxw_main.cpp
+@@ -46,7 +46,7 @@ EWXWEXPORT(void, ELJApp_InitializeC) (wxClosure* closure, int _argc, char** _arg
+ 
+   initClosure = closure;
+   APPTerminating = 0;
+-  
++
+   /* Pretty lame way to detect if we are running in GHCI */
+   /* TODO: detect when running program with runhaskell as well */
+   if(_argc > 0 && !wcscmp(((wchar_t**)_argv)[0], L"<interactive>")) {
+@@ -56,7 +56,7 @@ EWXWEXPORT(void, ELJApp_InitializeC) (wxClosure* closure, int _argc, char** _arg
+   else {
+     wxEntry(wxhInstance, NULL, (_argc > 0 ? _argv[0] : NULL), SW_SHOWNORMAL);
+   }
+-  
++
+   APPTerminating = 1;
+ 
+   /* wxPendingEvents is deleted but not set to NULL -> disaster when restarted from an interpreter */
+@@ -125,7 +125,7 @@ EWXWEXPORT(void, ELJApp_InitializeC) (wxClosure* closure, int _argc, char** _arg
+   APPTerminating = 1;
+   /* wxPendingEvents is deleted but not set to NULL -> disaster when restarted from an interpreter */
+ #if !defined(WXMAKINGDLL) && !defined(WXUSINGDLL)
+-  wxPendingEvents = NULL;
++  //  wxPendingEvents = NULL;
+ #endif
+ }
+ 
+@@ -136,7 +136,7 @@ EWXWEXPORT(void, ELJApp_initialize) (void* _obj, AppInitFunc _func, int _argc, v
+   APPTerminating = 1;
+   /* wxPendingEvents is deleted but not set to NULL -> disaster when restarted from an interpreter */
+ #if !defined(WXMAKINGDLL) && !defined(WXUSINGDLL)
+-  wxPendingEvents = NULL;
++  //wxPendingEvents = NULL;
+ #endif
+ }
+ 

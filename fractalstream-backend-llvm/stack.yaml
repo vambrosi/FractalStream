@@ -7,12 +7,13 @@ packages:
 - ../../llvm-hs/llvm-hs-pure
 
 extra-deps:
-#- git: https://github.com/llvm-hs/llvm-hs.git
-#  commit: 423220bffac4990d019fc088c46c5f25310d5a33
+
+#- git: https://github.com/matt-noonan/llvm-hs.git
+#  commit: 46fbe902a83a4198f296e2062c767b34ecc6be65
 #  subdirs:
 #    - llvm-hs
 #    - llvm-hs-pure
-#- megaparsec-9.2.0@sha256:0c272aa13b9f663dbd7b74ef81e9b1f9f05cafde50f5362ce87ffd4913046e0b,3213
+
 - git: https://github.com/mgrabmueller/disassembler
   commit: 15a15db1fba50fd0ce52f26f43550fbad5529bf8
 

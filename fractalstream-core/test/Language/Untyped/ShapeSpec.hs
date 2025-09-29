@@ -8,6 +8,7 @@ import Language.Value.Parser
 import Helper.UnionFind
 
 import qualified Data.Map as Map
+import Control.Monad
 import Control.Monad.State
 import Data.STRef
 

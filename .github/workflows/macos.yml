@@ -6,26 +6,193 @@ on:
 jobs:
   build:
 
-    runs-on: macos-latest
+    runs-on: macos-14
 
     steps:
     - uses: actions/checkout@v1
-    - name: Setup
+    - name: Install homebrew packages
       run: |
+        ##################################################################
+        # Install the developer tools and homebrew (already done in CI)
+        ##################################################################
+
+        #xcode-select --install
+        #/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+        ##################################################################
+        # Prerequisites
+        ##################################################################
+
+        brew install wget
         brew install haskell-stack
         brew install libffi
-        brew install llvm-hs/llvm/llvm-12
-        echo WX `which wx-config`
+
+        ##################################################################
+        # wxWidgets dependencies
+        ##################################################################
+
+        brew install pkgconf
+        brew install libtiff
+        brew install libpng
+        brew install jpeg-turbo
+        brew install pcre2
+
+    - if: 0 == 1
+      name: Get cached build of wxWidgets 3.2
+      id: cache-wxwidgets-static
+      uses: actions/cache@v4
+      with:
+        key: ${{ runner.os }}-cache-wxwidgets-static
+        path: wxWidgets-3.2.8
+
+    - if: 1 == 1 #if: ${{ steps.cache-wxwidgets-static.outputs.cache-hit != 'true' }}
+      name: Build wxWidgets 3.2
+      run: |
+
+        ##################################################################
+        # Build wxWidgets for the Cocoa toolkit (homebrew seems to use
+        # a Carbon version, maybe?)
+        ##################################################################
+
+        # This worked locally but failed in CI due to not finding the tiff.h header,
+        # though libtiff is installed.
+
+        #wget https://github.com/wxWidgets/wxWidgets/releases/download/v3.2.8/wxWidgets-3.2.8.tar.bz2
+        #tar xvf wxWidgets-3.2.8.tar.bz2
+        #cd wxWidgets-3.2.8
+        #mkdir build-cocoa
+        #cd build-cocoa
+        #../configure
+        #make
+        # Tweak the path to pick up wx-config from this build, then print some info
+        #export PATH=`pwd`:$PATH
+        #cd ../..
+
+        #wget https://github.com/wxWidgets/wxWidgets/releases/download/v3.2.8/wxWidgets-3.2.8.tar.bz2
+        #tar xvf wxWidgets-3.2.8.tar.bz2
+        #cd wxWidgets-3.2.8
+        #mkdir build-cocoa
+        #cd build-cocoa
+        #cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxBUILD_MONOLITHIC=OFF ..
+        #cmake --build .
+
+
+        # Since the local build failed in CI, grab the
+        # wxwidgets package from homebrew
         brew install wxwidgets@3.2
-        ln -s `which wx-config-3.2` $(dirname `which wx-config-3.2`)/wx-config
-        ln -s `which wxrc-3.2` $(dirname `which wxrc-3.2`)/wxrc
-        echo `which wx-config`
+        ln -s `which wx-config-3.2` /usr/local/bin/wx-config
+        ln -s `which wxrc-3.2` /usr/local/bin/wxrc
+
+
         wx-config --list
         wx-config --version
         wx-config --version-full
         wx-config --libs
-    - name: Build
+
+    - if: 0 == 1
+      name: Install wxWidgets 3.2
+      run: |
+        cd wxWidgets-3.2.8/build-cocoa
+        sudo cmake --build . --target=install
+
+    - name: Get cached build of wxc
+      id: cache-wxc
+      uses: actions/cache@v4
+      with:
+        key: ${{ runner.os }}-cache-wxc
+        path: wxHaskell
+
+    - if: ${{ steps.cache-wxc.outputs.cache-hit != 'true' }}
+      name: Build wxc from wxHaskell
+      run: |
+        ##################################################################
+        # Before building wxHaskell we need to manually build the wxc
+        # program and make it available on the path.
+        ##################################################################
+
+        git clone https://codeberg.org/wxHaskell/wxHaskell.git
+        cd wxHaskell
+        cp ../patches/macos-fix-for-wxc.patch .
+        git apply macos-fix-for-wxc.patch
+        cd wxc
+        ./generate-version-header.sh
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+    - name: Install wxc
+      run: |
+        ##################################################################
+        # Install wxc
+        ##################################################################
+        pwd
+        cd wxHaskell/wxc/build
+        sudo cmake --install .
+
+    - name: Get cached build of LLVM 12
+      id: cache-llvm-12-static
+      uses: actions/cache@v4
+      with:
+        key: ${{ runner.os }}-cache-llvm-12-static
+        path: llvm-12.0.1.src
+
+    - if: ${{ steps.cache-llvm-12-static.outputs.cache-hit != 'true' }}
+      name: Build LLVM 12
+      run: |
+        ##################################################################
+        # Build LLVM 12
+        ##################################################################
+
+        # Worked locally but failed in CI
+        #brew install llvm-hs/llvm/llvm-12
+
+        # Fails, deprecated in homebrew
+        #brew install llvm@12
+
+        # Try building from source
+        wget https://github.com/llvm/llvm-project/releases/download/llvmorg-12.0.1/llvm-12.0.1.src.tar.xz
+        tar xvf llvm-12.0.1.src.tar.xz
+        cd llvm-12.0.1.src
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release -DLLVM_BUILD_LLVM_DYLIB=ON ..
+        cmake --build .
+
+    - name: Install LLVM 12
+      run: |
+        ##################################################################
+        # Install LLVM 12
+        ##################################################################
+        cd llvm-12.0.1.src/build
+        sudo cmake --build . --target install
+        sudo ln -s /usr/local/lib/libLLVM.dylib /usr/local/lib/libLLVM-12.dylib
+
+    - name: Get cached .stack
+      id: cache-dot-stack
+      uses: actions/cache@v4
+      with:
+        key: ${{ runner.os }}-cache-dot-stack
+        path: ~/.stack
+
+    - if: ${{ steps.cache-dot-stack.outputs.cache-hit != 'true' }}
+      name: Build Haskell dependencies
       run: |
         cd fractalstream-ui-wx
-        cp stack.yaml.macos stack.yaml
+        stack build --only-snapshot
+
+    - name: Build FractalStream
+      env:
+        TARGET_BUNDLE_NAME: FractalStream-${{ runner.os }}-${{ github.sha }}
+      run: |
+        cd fractalstream-ui-wx
         stack build
+        mv `find . -name "FractalStream.app"` ../$TARGET_BUNDLE_NAME.app
+        cd ..
+        zip -r $TARGET_BUNDLE_NAME.zip $TARGET_BUNDLE_NAME.app
+
+    - name: Archive app bundle
+      uses: actions/upload-artifact@v4
+      with:
+          name: FractalStream-${{ runner.os }}-${{ github.sha }}.zip
+          path: FractalStream-${{ runner.os }}-${{ github.sha }}.zip

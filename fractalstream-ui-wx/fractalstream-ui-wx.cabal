@@ -99,4 +99,3 @@ executable FractalStream
                      , utf8-string
                      , include-file
   hs-source-dirs:      src
-  extra-lib-dirs:      /usr/local/opt/libffi/lib
