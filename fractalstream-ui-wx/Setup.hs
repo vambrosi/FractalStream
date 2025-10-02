@@ -9,7 +9,7 @@ import Distribution.Simple.Setup hiding (Flag)
 main :: IO ()
 main = defaultMainWithHooks $ simpleUserHooks
        { postBuild = appBundleBuildHook guiApps -- no-op if not MacOS X
-       , confHook = wxConfHook
+       -- , confHook = wxConfHook
        }
 
 guiApps :: [MacApp]

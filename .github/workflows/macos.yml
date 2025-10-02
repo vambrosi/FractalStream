@@ -81,7 +81,7 @@ jobs:
         cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxBUILD_MONOLITHIC=OFF ..
         cmake --build .
         ln -s wx-config /usr/local/bin/wx-config-3.2
-        ln -s wxrc /usr/local/bin/wxrc-3.2
+        ln -s lib/wxrc /usr/local/bin/wxrc-3.2
 
     - if: ${{ inputs.wxwidgets == 'build-dynamic' && steps.cache-wxwidgets-static.outputs.cache-hit != 'true' }}
       name: Build wxWidgets 3.2 for dynamic linking
@@ -94,7 +94,7 @@ jobs:
         cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=ON -DwxBUILD_MONOLITHIC=OFF ..
         cmake --build .
         ln -s wx-config /usr/local/bin/wx-config-3.2
-        ln -s wxrc /usr/local/bin/wxrc-3.2
+        ln -s lib/wxrc /usr/local/bin/wxrc-3.2
 
     - if: ${{ inputs.wxwidgets != 'homebrew' }}
       name: Install wxWidgets 3.2
