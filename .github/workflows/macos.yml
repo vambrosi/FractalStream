@@ -21,7 +21,7 @@ jobs:
 
     steps:
     - uses: actions/checkout@v1
-    - name: Install homebrew packages
+    - name: Install homebrew packages for dependencies
       run: |
         ##################################################################
         # Install the developer tools and homebrew (already done in CI)
@@ -57,7 +57,7 @@ jobs:
         path: wxWidgets-3.2.8
 
     - if: ${{ inputs.wxwidgets == 'homebrew' }}
-      name: Download wxWidgets 3.2
+      name: Install wxWidgets@3.2 from Homebrew
       run: |
         brew install wxwidgets@3.2
         ln -s `which wx-config-3.2` /usr/local/bin/wx-config
@@ -80,6 +80,8 @@ jobs:
         cd build-cocoa
         cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxBUILD_MONOLITHIC=OFF ..
         cmake --build .
+        ln -s wx-config /usr/local/bin/wx-config-3.2
+        ln -s wxrc /usr/local/bin/wxrc-3.2
 
     - if: ${{ inputs.wxwidgets == 'build-dynamic' && steps.cache-wxwidgets-static.outputs.cache-hit != 'true' }}
       name: Build wxWidgets 3.2 for dynamic linking
@@ -91,6 +93,8 @@ jobs:
         cd build-cocoa
         cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=ON -DwxBUILD_MONOLITHIC=OFF ..
         cmake --build .
+        ln -s wx-config /usr/local/bin/wx-config-3.2
+        ln -s wxrc /usr/local/bin/wxrc-3.2
 
     - if: ${{ inputs.wxwidgets != 'homebrew' }}
       name: Install wxWidgets 3.2
