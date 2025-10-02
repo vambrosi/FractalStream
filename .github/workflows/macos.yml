@@ -6,7 +6,7 @@ on:
       wxwidgets:
         description: 'How should we get the wxWidgets 3.2 dependency?'
         required: true
-        default: 'homebrew'
+        default: 'build-static'
         type: choice
         options:
           - 'homebrew'

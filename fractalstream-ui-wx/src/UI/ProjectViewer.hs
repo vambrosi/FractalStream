@@ -98,19 +98,21 @@ makeWxComplexViewer
           newCV <- cloneComplexViewer theViewer
           makeWxComplexViewer addMenuBar vup newCV
 
+    let (width, height) = (fst vpSize, snd vpSize)
     f <- frame [ text := vpTitle
                , on resize := propagateEvent
                ]
     WX.windowOnClose f (set f [ visible := False ])
 
-    let (width, height) = (fst vpSize, snd vpSize)
-    p <- panel f [ clientSize := sz width height ]
+    p <- panel f [ ]
 
     -- Viewer status bar
     status <- statusField [ text := "Pointer location" ]
     toolStatus <- statusField [text := ""]
+
     set f [ statusBar := [toolStatus, status]
           , layout := fill (minsize (sz 128 128) (widget p))
+          , clientSize := sz width height
           ]
 
     -- `requestRefresh` can be used from any thread to queue up a
@@ -457,13 +459,7 @@ makeWxComplexViewer
     -- For each variable that the viewer code depends on, trigger a repaint whenever
     -- that variable changes.
     let usedVars = execState (indexedFoldM gatherUsedVarsInCode cvCode') Set.empty
-        gatherUsedVars :: Value et -> State (Set String) ()
-        gatherUsedVars = indexedFoldM @Unit gatherUsedVarsInValue
-        gatherUsedVarsInValue :: ValueF Unit et -> State (Set String) ()
-        gatherUsedVarsInValue = \case
-          Var name _ _ -> modify' (Set.insert (symbolVal name))
-          LocalLet name _ _ _ _ _ -> modify' (Set.delete (symbolVal name))
-          _ -> pure ()
+
         gatherUsedVarsInCode :: CodeF '[] (Pure1 Value) Unit et -> State (Set String) ()
         gatherUsedVarsInCode = \case
           Let _ name _ v _ _ -> do
@@ -479,6 +475,15 @@ makeWxComplexViewer
           DoWhile{} -> pure ()
           IfThenElse _ tf _ _ -> gatherUsedVars tf
           Effect{} -> pure () -- FIXME, should also inspect the effects
+
+        gatherUsedVars :: Value et -> State (Set String) ()
+        gatherUsedVars = indexedFoldM @Unit gatherUsedVarsInValue
+
+        gatherUsedVarsInValue :: ValueF Unit et -> State (Set String) ()
+        gatherUsedVarsInValue = \case
+          Var name _ _ -> modify' (Set.insert (symbolVal name))
+          LocalLet name _ _ _ _ _ -> modify' (Set.delete (symbolVal name))
+          _ -> pure ()
 
     fromContextM_ (\name _ v ->
                       when (symbolVal name `Set.member` usedVars)
@@ -509,10 +514,14 @@ makeWxComplexViewer
                                    set currentToolIndex [value := Nothing]
                                ]
 
-    let addToToolMenu ix ToolInfo{..} = menuRadioItem tools
+    -- Add each tool to the tool menu
+    forM_  (zip [0..] . map toolInfo $ theTools) $ \(ix, ToolInfo{..}) -> menuRadioItem tools
           [ text := tiName ++ maybe "" (\c -> "\t" ++ (c : "")) tiShortcut
           , help := tiShortHelp
           , on command := do
+              -- When the menu item is selected, send the current tool
+              -- a Deactivated event, and then send the selected tool
+              -- an Activated event.
               get currentToolIndex value >>= \case
                 Nothing -> pure ()
                 Just i -> do
@@ -524,7 +533,7 @@ makeWxComplexViewer
               cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
           ]
 
-    mapM_ (uncurry addToToolMenu) ( zip [0..] . map toolInfo $ theTools )
+    -- Select the Navigate tool to start
     set nav [ checked := True ]
 
     let menuBarItems =
