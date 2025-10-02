@@ -70,7 +70,7 @@ jobs:
         wx-config --libs
 
 
-    - if: ${{ inputs.wxwidgets == 'build-static' && steps.cache-wxwidgets-static.outputs.cache-hit != 'true' }}
+    - if: ${{ inputs.wxwidgets == 'build-static' && steps.cache-wxwidgets.outputs.cache-hit != 'true' }}
       name: Build wxWidgets 3.2 for static linking
       run: |
         wget https://github.com/wxWidgets/wxWidgets/releases/download/v3.2.8/wxWidgets-3.2.8.tar.bz2
@@ -83,7 +83,7 @@ jobs:
         ln -s wx-config /usr/local/bin/wx-config-3.2
         ln -s lib/wxrc /usr/local/bin/wxrc-3.2
 
-    - if: ${{ inputs.wxwidgets == 'build-dynamic' && steps.cache-wxwidgets-static.outputs.cache-hit != 'true' }}
+    - if: ${{ inputs.wxwidgets == 'build-dynamic' && steps.cache-wxwidgets.outputs.cache-hit != 'true' }}
       name: Build wxWidgets 3.2 for dynamic linking
       run: |
         wget https://github.com/wxWidgets/wxWidgets/releases/download/v3.2.8/wxWidgets-3.2.8.tar.bz2
