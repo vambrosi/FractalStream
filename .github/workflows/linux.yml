@@ -9,18 +9,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
     - uses: actions/checkout@v1
-    - name: Setup
+
+    - name: Install dependencies
+      run: |
+        sudo apt install libffi-dev
+
+    - name: Install wxWidgets 3.2
+      run: |
+        sudo apt install libwxgtk3.0-gtk3-dev
+        sudo apt install libwxgtk-media3.0-gtk3-dev
+
+    - name: Build wxc from wxHaskell
+      run: |
+        git clone https://codeberg.org/wxHaskell/wxHaskell.git
+        cd wxHaskell
+        cp ../patches/static-build-for-wxc.patch .
+        git apply static-build-for-wxc.patch
+        cd wxc
+        ./generate-version-header.sh
+        mkdir build
+        cd build
+        cmake ..
+        cmake --build .
+
+    - name: Install wxc
+      run: |
+        pwd
+        cd wxHaskell/wxc/build
+        sudo cmake --install .
+
+    - name: Install LLVM 12
       run: |
         printf "deb http://apt.llvm.org/xenial/ llvm-toolchain-xenial-12 main" |sudo tee /etc/apt/sources.list.d/llvm-toolchain-xenial-12.list
         wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key |sudo apt-key add -
         sudo apt update
-        sudo apt install libffi-dev
         sudo apt install llvm-12-dev
-        sudo apt install libwxgtk3.0-gtk3-dev
-        sudo apt install libwxgtk-media3.0-gtk3-dev
-    - name: Build
+
+    - name: Build FractalStream
       run: |
         cd fractalstream-ui-wx
-        cp stack.yaml.ubuntu stack.yaml
         stack build

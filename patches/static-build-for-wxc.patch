@@ -1,0 +1,14 @@
+diff --git a/wxc/CMakeLists.txt b/wxc/CMakeLists.txt
+index c521973..5544d3e 100644
+--- a/wxc/CMakeLists.txt
++++ b/wxc/CMakeLists.txt
+@@ -5,8 +5,7 @@ project(wxc VERSION 1.0.0.2 DESCRIPTION "A C wrapper library around wxWidgets."
+     LANGUAGES CXX)
+ include(GNUInstallDirs)
+ 
+-# Using SHARED here is a bad practice ??
+-add_library(wxc SHARED
++add_library(wxc
+     src/cpp/apppath.cpp
+     src/cpp/dragimage.cpp
+     src/cpp/eljaccelerator.cpp
