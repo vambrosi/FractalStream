@@ -18,8 +18,8 @@ jobs:
 
     - name: Install wxWidgets 3.2
       run: |
-        sudo apt install libwxgtk3.0-gtk3-dev
-        sudo apt install libwxgtk-media3.0-gtk3-dev
+        sudo apt install libwxgtk3.2-dev
+        sudo apt install libwxgtk-media3.2-dev
 
     - name: Build wxc from wxHaskell
       run: |
