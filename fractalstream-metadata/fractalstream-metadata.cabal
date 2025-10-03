@@ -1,0 +1,19 @@
+cabal-version:       3.0
+name:                fractalstream-metadata
+version:             2.0.0.0
+synopsis:            Metadata about the FractalStream build
+description:         Dynamical system visualization
+license:             BSD-3-Clause
+license-file:        LICENSE
+author:              Matt Noonan
+maintainer:          matt.noonan@gmail.com
+copyright:           2025, Matt Noonan
+category:            Math
+build-type:          Simple
+
+library
+  exposed-modules: FractalStream.Metadata
+  build-depends:   base >=4.8 && <5, include-file, utf8-string,
+                   githash
+
+  hs-source-dirs:  src
