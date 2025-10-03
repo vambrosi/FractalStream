@@ -24,7 +24,8 @@ jobs:
         sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
         # Install Haskell stack
-        curl -sSL https://get.haskellstack.org/ | sh
+        #     (nope, already installed in this runner)
+        #curl -sSL https://get.haskellstack.org/ | sh
 
     - name: Install wxWidgets 3.2
       run: |
