@@ -5,11 +5,14 @@ import Distribution.PackageDescription hiding (updatePackageDescription)
 import Distribution.Simple.LocalBuildInfo (LocalBuildInfo)
 import Distribution.Simple.Program
 import Distribution.Simple.Setup hiding (Flag)
+import qualified System.Info as System
+import Data.Either (partitionEithers)
+import Data.List (isSuffixOf)
 
 main :: IO ()
 main = defaultMainWithHooks $ simpleUserHooks
        { postBuild = appBundleBuildHook guiApps -- no-op if not MacOS X
-       -- , confHook = wxConfHook
+       , confHook = wxConfHook
        }
 
 guiApps :: [MacApp]
@@ -37,35 +40,46 @@ guiApps = [MacApp "FractalStream"
                   --
                   -- See: https://developer.apple.com/forums/thread/655588
                   --
-                  DoNotChase --(ChaseWith $ defaultExclusions ++ ["/usr/lib"])
+                  (ChaseWith $ defaultExclusions ++ ["/usr/lib"])
           ]
 
-wxConfHook :: (GenericPackageDescription, HookedBuildInfo) -> ConfigFlags -> IO LocalBuildInfo
+
+wxConfHook :: (GenericPackageDescription, HookedBuildInfo)
+           -> ConfigFlags
+           -> IO LocalBuildInfo
 wxConfHook (pkg_descr, hooked_bi) flags = do
   -- Get wx-config --libs output
   wxConfig <- getWxConfig flags
-  wxLibs0 <- words <$> wxConfig ["--libs"]
-  -- from ls /opt/homebrew/lib/libwx*-3.2.dylib | sed 's/\/opt\/homebrew\/lib\/lib/"-l/g'  | sed 's/-3.2.dylib/"
-  let wxLibs = wxLibs0 ++ ["-framework", "AppKit",
-                           "-lwx_baseu_net-3.2",
-                           "-lwx_baseu_xml-3.2",
-                           "-lwx_baseu-3.2",
-                           "-lwx_osx_cocoau_adv-3.2",
-                           "-lwx_osx_cocoau_aui-3.2",
-                           "-lwx_osx_cocoau_core-3.2",
-                           "-lwx_osx_cocoau_gl-3.2",
-                           "-lwx_osx_cocoau_html-3.2",
-                           "-lwx_osx_cocoau_media-3.2",
-                           "-lwx_osx_cocoau_propgrid-3.2",
-                           "-lwx_osx_cocoau_qa-3.2",
-                           "-lwx_osx_cocoau_ribbon-3.2",
-                           "-lwx_osx_cocoau_richtext-3.2",
-                           "-lwx_osx_cocoau_stc-3.2",
-                           "-lwx_osx_cocoau_webview-3.2",
-                           "-lwx_osx_cocoau_xrc-3.2"
-                          ]
-  let pkg_descr' = updatePackageDescription wxLibs pkg_descr
+  output0 <- words <$> wxConfig ["--libs"]
+  (includes, cxxOpts) <- partitionEithers . map splitCxxOptions . words
+                         <$> wxConfig ["--cxxflags"]
+  let output = if System.os == "darwin"
+               then output0 ++ ["-framework", "AppKit"]
+               else output0
+      (wxLibs, wxLdDirsOrOpts) = partitionEithers (concatMap splitLdOptions output)
+      (wxLdDirs, wxLdOpts) = partitionEithers wxLdDirsOrOpts
+      pkg_descr' = updatePackageDescription wxLibs wxLdOpts wxLdDirs includes cxxOpts pkg_descr
   confHook simpleUserHooks (pkg_descr', hooked_bi) flags
+
+splitLdOptions :: String -> [Either String (Either String String)]
+splitLdOptions opt = case opt of
+  '-' : 'l' : libname -> [Left libname]
+  '-' : 'L' : dirname -> [Right (Left dirname)]
+  -- This is a hack to work around a bug(?) in wx-config where some frameworks
+  -- are given as a full path, which confuses the linker.
+  _ | ".framework" `isSuffixOf` opt
+                      -> [ Right (Right "-framework")
+                         , Right . Right
+                         . takeWhile (/= ".") . reverse
+                         . takeWhile (/= "/") . reverse
+                         $ opt
+                         ]
+    | otherwise       -> [Right (Right opt)]
+
+splitCxxOptions :: String -> Either String String
+splitCxxOptions opt = case opt of
+  '-' : 'I' : include -> Left include
+  _                   -> Right opt
 
 getWxConfig :: ConfigFlags -> IO ([String] -> IO String)
 getWxConfig confFlags = do
@@ -74,20 +88,24 @@ getWxConfig confFlags = do
                                    (configPrograms confFlags)
   return $ getProgramOutput verbosity program
 
-updatePackageDescription :: [String] -> GenericPackageDescription -> GenericPackageDescription
-updatePackageDescription wxLibs gpd =
-  gpd { condExecutables = map (updateExecutable wxLibs) (condExecutables gpd)
-      , condTestSuites = map (updateTestSuite wxLibs) (condTestSuites gpd)
-      , condBenchmarks = map (updateBenchmark wxLibs) (condBenchmarks gpd)
-      }
-
-updateExecutable wxLibs (name, condTree) =
-  (name, fmap (\exe -> exe { buildInfo = (buildInfo exe) { ldOptions = ldOptions (buildInfo exe) ++ wxLibs }}) condTree)
-
-updateTestSuite wxLibs (name, condTree) =
-  (name, fmap (\test -> test { testBuildInfo = updateBuildInfo wxLibs (testBuildInfo test) }) condTree)
-
-updateBenchmark wxLibs (name, condTree) =
-  (name, fmap (\bench -> bench { benchmarkBuildInfo = updateBuildInfo wxLibs (benchmarkBuildInfo bench) }) condTree)
-
-updateBuildInfo wxLibs bi = bi { extraLibs = extraLibs bi ++ wxLibs }
+updatePackageDescription :: [String]
+                         -> [String]
+                         -> [String]
+                         -> [String]
+                         -> [String]
+                         -> GenericPackageDescription
+                         -> GenericPackageDescription
+updatePackageDescription wxLibs wxLdOpts wxLdDirs wxIncludes wxCxxOpts gpd =
+    gpd { condExecutables = map updateExecutable (condExecutables gpd) }
+  where
+    updateExecutable (name, condTree) =
+      (name, fmap (\exe -> exe {
+                      buildInfo = (buildInfo exe)
+                        { ldOptions = ldOptions (buildInfo exe) ++ wxLdOpts
+                        , extraLibs = extraLibs (buildInfo exe) ++ wxLibs
+                        , extraLibDirs = extraLibDirs (buildInfo exe) ++ wxLdDirs
+                        , cxxOptions = cxxOptions (buildInfo exe) ++ wxCxxOpts
+                        , ccOptions  = ccOptions (buildInfo exe) ++ wxCxxOpts
+                        , includeDirs = includeDirs (buildInfo exe) ++ wxIncludes
+                        }
+                      }) condTree)

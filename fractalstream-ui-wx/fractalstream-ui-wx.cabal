@@ -99,5 +99,3 @@ executable FractalStream
                      , text
                      , utf8-string
   hs-source-dirs:      src
-  extra-libraries: wxc wx_osx_cocoau-3.2 wxregexu-3.2 wxjpeg-3.2 wxpng-3.2 wxtiff-3.2 wxscintilla-3.2
-  ld-options: -framework AppKit
