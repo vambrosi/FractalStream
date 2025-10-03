@@ -8,6 +8,7 @@ module Language.Environment
   , type NotPresent
   , Context(..)
   , type (:**:)
+  , (#)
   , contextToEnv
   , envToContext
   , envToContextM
@@ -446,6 +447,14 @@ data Context (value :: Symbol -> FSType -> Exp Type) (env :: Environment) where
        -> Eval (value name ty)
        -> Context value env
        -> Context value ( '(name, ty) ': env)
+
+(#) :: forall name ty env value
+      . (KnownSymbol name, KnownType ty, NotPresent name env)
+     => Eval (value name ty)
+     -> Context value env
+     -> Context value ( '(name, ty) ': env)
+(#) = Bind Proxy typeProxy
+
 
 contextToEnv :: Context value env -> EnvironmentProxy env
 contextToEnv = \case

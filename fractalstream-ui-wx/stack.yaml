@@ -4,6 +4,7 @@ packages:
 - .
 - ../fractalstream-core
 - ../fractalstream-backend-llvm
+- ../fractalstream-metadata
 
 extra-deps:
 

@@ -133,7 +133,7 @@ editProject yamlFile = do
                 [ fill $ row 5
                   [ margin 3 (label "Title of complex viewer: ")
                   , hfill (widget te) ]
-                , hglue
+--                , hglue
                 , fill (margin 10 $ widget ce)
                 ] ]
 

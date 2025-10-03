@@ -27,7 +27,6 @@ import UI.Layout
 
 import Data.IORef
 import Data.Word
-import Foreign (Ptr)
 
 import Actor.UI
 import Actor.Tool
@@ -38,6 +37,7 @@ import Language.Effect.Draw
 import Data.DynamicValue
 import Language.Value (Value, ValueF(..))
 import Language.Code (CodeF(..))
+import Task.Block (BlockComputeAction)
 
 import Control.Monad
 import Data.Set (Set)
@@ -209,6 +209,9 @@ makeWxComplexViewer
                 newModel <- get model value
                 let midModel = interpolateModel t oldModel newModel
                     withLayer (_opacity :: Double) action = do
+                      -- FIXME: this used to do a crossfade but
+                      -- graphicsContextBeginLayer seems to be gone
+                      -- from wxWidgets 3.2. What is the replacement?
                       --graphicsContextBeginLayer gc opacity
                       action
                       --graphicsContextEndLayer gc
@@ -364,7 +367,7 @@ makeWxComplexViewer
 
               MouseMotion pt modifiers | isNoShiftAltControlDown modifiers -> do
                 mpt <- viewToModel pt
-                set status [text := show (pt, mpt)]
+                set status [text := show mpt]
                 propagateEvent
 
               MouseLeftDClick pt modifiers | isNoShiftAltControlDown modifiers -> do
@@ -542,11 +545,14 @@ makeWxComplexViewer
 
     addMenuBar f menuBarItems
 
+-- | A model of the view, in terms of the underlying coordinate system.
 data Model = Model
   { modelCenter   :: (Double, Double)
   , modelPixelDim :: (Double, Double)
   }
 
+-- | Given the dimensions of the window, work out a rectangle describing
+-- the viewport in the underlying coordinate system.
 modelToRect :: Planar a => (Int,Int) -> Model -> Rectangle a
 modelToRect (w,h) Model{..} = flippedRectangle (fromCoords ul) (fromCoords lr)
   where
@@ -555,6 +561,7 @@ modelToRect (w,h) Model{..} = flippedRectangle (fromCoords ul) (fromCoords lr)
     (cx, cy) = modelCenter
     (px, py) = modelPixelDim
 
+-- | Smoothly interpolate between two models
 interpolateModel :: Double -> Model -> Model -> Model
 interpolateModel t m1 m2 = m2
     { modelCenter   = interpolate modelCenter
@@ -568,9 +575,12 @@ interpolateModel t m1 m2 = m2
     logInterp2  (p1,p2) (q1,q2) = (logInterp p1 q1, logInterp p2 q2)
     logInterpolate f = logInterp2 (f m1) (f m2)
 
+-- | A wrapper around UI.Tile.renderTile that tags each rendering
+-- action with an ID, and will stop rendering when the ID no longer
+-- matches the current ID value.
 renderTile' :: Valued w
             => IORef Int
-            -> (Word32 -> Word32 -> Word32 -> Complex Double -> Complex Double -> Ptr Word8 -> IO ())
+            -> BlockComputeAction
             -> (Int, Int)
             -> w Model
             -> IO Tile
@@ -583,7 +593,6 @@ renderTile' renderId action dim model = do
     renderTile action' dim modelRect
 
 drawCenteredImage :: Image b -> DC d -> Rect -> (Int,Int) -> IO ()
-
 drawCenteredImage img dc windowRect (width, height) = do
     let Point { pointX = fWidth, pointY = fHeight } = rectBottomRight windowRect
     let (x0, y0) = ( (fWidth  + width ) `div` 2 - width  ,
@@ -695,7 +704,8 @@ paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
           let boxpts = [pt1', pt2', pt3', pt4']
           withPen fil (polygon dc boxpts)
 
-        Clear {} -> pure () -- clear operations should be handled upstream, by truncating the draw command list
+        Clear {} -> pure () -- clear operations should be handled upstream,
+                            -- by truncating the draw command list
         SetStroke _ c -> writeIORef currentPen (fsColorToWxColor c)
 
         SetFill _ c -> writeIORef currentBrush (fsColorToWxColor c)

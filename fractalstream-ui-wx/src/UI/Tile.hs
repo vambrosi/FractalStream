@@ -20,7 +20,6 @@ import Data.Color
 import Control.Concurrent
 import Control.Concurrent.Async
 
-import Data.Complex
 import Control.Monad (void)
 import Data.Word
 import Foreign.ForeignPtr
@@ -44,8 +43,9 @@ data Tile = Tile
       -- ^ A value which signals that the tile needs to be redrawn.
     }
 
+-- | Cancel the tile, but don't wait for it to finish
 cancelTile :: Tile -> IO ()
-cancelTile = void . forkIO . cancel . tileWorker -- cancel, but get on with life
+cancelTile = void . forkIO . cancel . tileWorker
 
 withSynchedTileBuffer :: Tile -> (Ptr Word8 -> IO b) -> IO b
 withSynchedTileBuffer tile action = synchedWith (tileBuffer tile) (`withForeignPtr` action)
@@ -73,7 +73,7 @@ ifElseModified tile yes no = do
         Just _  -> yes
 
 -- | Construct a tile from a dynamical system, and begin drawing to it.
-renderTile :: (Word32 -> Word32 -> Word32 -> Complex Double -> Complex Double -> Ptr Word8 -> IO ()) -- ([(Double, Double)] -> IO [Color]) -- ^ The rendering action
+renderTile :: BlockComputeAction -- ^ The rendering action
            -> (Int, Int)   -- ^ The height and width of this tile.
            -> Rectangle (Double, Double)
               -- ^ The region of the dynamical plane corresponding
@@ -82,8 +82,8 @@ renderTile :: (Word32 -> Word32 -> Word32 -> Complex Double -> Complex Double ->
                            --   forks a task which draws into it.
 
 renderTile renderingAction (width, height) mRect = do
-    --putStrLn ("renderTile at w=" ++ show width ++ " h=" ++ show height)
 
+    -- Allocate an red/green/blue pixel byte for each point in the tile
     buf <- mallocForeignPtrBytes (3 * width * height)
 
     -- Initial fill of the image

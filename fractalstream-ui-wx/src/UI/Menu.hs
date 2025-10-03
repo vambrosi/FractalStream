@@ -2,6 +2,8 @@ module UI.Menu
   ( makeMenuBar
   ) where
 
+import FractalStream.Metadata
+
 import UI.ProjectActions
 
 import qualified System.Info as Info
@@ -9,19 +11,13 @@ import Control.Monad
 
 import Graphics.UI.WX hiding (when)
 
--- TODO: read this out of the CONTRIBUTORS file instead
-contributors :: [String]
-contributors =
-  [ "Matt Noonan"
-  ]
-
 makeMenuBar :: ProjectActions -> Frame a -> [Menu ()] -> IO ()
 makeMenuBar ProjectActions{..} f addlMenus = do
 
   let getProject verb k = maybe (pure ()) k =<<
         fileOpenDialog objectNull True True
-           (verb ++ " a FractalStream 2 project")
-           [ ("FractalStream 2 project files", ["*.yaml"])
+           (verb ++ " a FractalStream project")
+           [ ("FractalStream project files", ["*.yaml"])
            , ("All files", ["*.*"])
            ] "" ""
 
@@ -37,7 +33,7 @@ makeMenuBar ProjectActions{..} f addlMenus = do
                , help := "Modify an existing FractalStream project"
                , on command := getProject "Edit" projectEdit ]
 
-  when (Info.os /= "darwin") $ do
+  when (True || Info.os /= "darwin") $ do
     void $ menuQuit prj [ text := "&Quit"
                         , help := "Quit FractalStream" ]
 
@@ -50,5 +46,6 @@ makeMenuBar ProjectActions{..} f addlMenus = do
   set f [ menuBar := menuBarItems
         , on (menu about) :=
             infoDialog f "About FractalStream" $ unlines
-              ("Contributors:" : contributors)
+              ("Contributors:" : contributors ++
+               ["", "Build info:", gitBranch ++ "@" ++ take 8 gitHash ++ if gitDirty then "*" else ""])
         ]

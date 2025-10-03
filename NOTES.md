@@ -42,9 +42,83 @@ datatype defined in `Language.Environment`. For each `env` type of kind
 Make use of `EnvironmentProxy env` when you want to get your hands on
 the type-level `Environment` `env`.
 
-An `Environment` is made up of a sequence of `Symbol` / `FSType` pairs. If
-you have a way to turn any `Symbol` and `FSType` into some Haskell type,
-then you can create a `Context` where [FIXME THIS EXPLANATION IS GOING NOWHERE]
+An `Environment` is made up of a sequence of `Symbol` / `FSType` pairs and
+describes the name and types of variables that are available at some point
+in a script.
+
+What if we wanted to represent the *values* of those variables too? In that
+case, we'd reach for a `Context`. A `Context` takes an `Environment` and
+some way of assigning Haskell types to each `Symbol`/`FSType` pair, and
+produces a Haskell type that represents some values in that environment.
+
+For example, let's say we had the environment:
+
+```haskell
+type MyEnvironment = '[ '("z", 'ComplexT), '("r", 'RealT)]
+```
+
+representing a variable `z` of complex type and a variable `r` of real type.
+Let's make a `Context` that holds some Haskell values corresponding to each
+type. We'll first define how we want to translate `Symbol`/`FSType` pairs to
+Haskell types:
+
+```haskell
+data AsPlainHaskellType :: Symbol -> FSType -> Exp Type
+type instance Eval (AsPlainHaskellType _ ComplexT) = (Double, Double)
+type instance Eval (AsPlainHaskellType _ RealT)    = Double
+```
+
+Then we can create a value of type `Context AsPlainHaskellType MyEnvironment`:
+
+```haskell
+myContext :: Context AsPlainHaskellType MyEnvironment
+myContext = Bind Proxy ComplexType (0.0, 1.0)
+          $ Bind Proxy RealType    3.141592
+          $ EmptyContext
+```
+
+Or, using the `(#)` operator from `Language.Environment`, we can let the name
+and type proxies be inferred:
+
+``` haskell
+myContext :: Context AsPlainHaskellType MyEnvironment
+myContext = (0.0, 1.0)
+          # 3.141592
+          # EmptyContext
+```
+
+If we were writing a parser, we might want each value to be represented by a
+string that will be parsed:
+
+``` haskell
+data AsString :: Symbol -> FSType -> Exp Type
+type instance Eval (AsString _ _) = String
+
+myStringyContext :: Context AsString MyEnvironment
+myStringyContext = "e^(pi i / 3)"
+                 # "|i|"
+                 # EmptyContext
+```
+
+If we wanted mutable values, we could do something like:
+
+``` haskell
+data Mutable :: (Symbol -> FSType -> Exp Type) -> Symbol -> FSType -> Exp Type
+type instance Eval (Mutable f n t) = IORef (Eval (f n t))
+
+makeMutableContext :: IO (Context (Mutable AsPlainHaskellType)) MyEnvironment
+makeMutableContext = do
+  z <- newIORef (0.0, 1.0)
+  r <- newIORef 3.141592
+  pure (z # r # EmptyContext)
+```
+
+`Language.Environment` has some useful utility functions for working with
+environments and contexts, so the last example could also be written as
+
+``` haskell
+makeMutableContext = mapContextM (\_ _ -> newIORef) myContext
+```
 
 ## The `Value` AST
 
@@ -57,6 +131,41 @@ meaning "`z^2 + C` is a complex-valued expression that involves two complex-valu
 variables called `z` and `C`". The type parameters to `Value` are used to ensure
 that no expressions refer to undefined variables, and all subexpressions are
 well-typed.
+
+## The `Code` AST
+
+The AST representing the code / commands in a FractalStream script is the
+`Code` datatype, defined in the `Language.Code` module. Much like `Value`s,
+each `Code` has a type parameter that defines both the resulting `FSType` of
+the command, and the `Environment` that the command requires. For example,
+the command `set z to e^(pi i / 3)` could have the type `Code '( '[ '("z", 'ComplexT) ]) 'VoidT` since it makes use of a complex-valued variable `z`, and produces
+no result value.
+
+## Code effects
+
+In different situations, there may be different commands available to a
+FractalStream script. A tool may be allowed to issue drawing commands or
+change the values of parameters, but these kind of actions would not make
+sense for a dynamical plane viewer. We handle this by splitting different kinds of
+"extension commands" into `Effect`s, and script compilers can provide different
+effect handlers for different situations.
+
+The currently-used effects are:
+
+- `Language.Effect.Draw`: Commands for drawing on the window. For example, the
+trace tool uses this effect to draw a chain of line segments onto the window,
+following the dynamics.
+- `Language.Effect.Output`: Commands for producing additional values from
+a script. This is currently used by tools as a mechanism for altering
+configuration values.
+
+There are a number of experimental effects that are not fully implemented yet,
+including:
+
+- `Language.Effect.Provide`: An effect that provides a new value
+- `Language.Effect.List`: Commands for operating on lists of data
+- `Language.Effect.Render`: Commands for drawing into and using bitmaps
+- `Language.Effect.ThrowEvent`: Commands for generating new UI events
 
 ## User interface events
 
@@ -73,6 +182,7 @@ FractalStream script.
 
 The arrangement of UI elements is represented by a `Layout`, defined in
 `Actor.Layout`.
+
 ## Ensembles and FractalStream script save files
 
 A FractalStream `Ensemble` is a collection of viewers, configuration values, and

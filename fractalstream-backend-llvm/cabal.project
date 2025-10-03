@@ -1,4 +1,4 @@
-packages: . ../fractalstream-core ../../llvm-hs/llvm-hs ../../llvm-hs/llvm-hs-pure
+packages: . ../fractalstream-core
 
 source-repository-package
     type: git

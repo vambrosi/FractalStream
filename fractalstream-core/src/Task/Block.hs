@@ -7,6 +7,7 @@ Description : Blocks encapsulate the task of rendering a picture of a
 -}
 module Task.Block
   ( Block(..)
+  , BlockComputeAction
   , fillBlock
   , progressively
   ) where
@@ -24,19 +25,20 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Complex
 import Foreign (Ptr, peekByteOff, pokeByteOff, allocaArray)
 
+type BlockComputeAction = Word32 -- ^ Block width, in subsamples
+                       -> Word32 -- ^ Block height, in subsamples
+                       -> Word32 -- ^ Subsamples per point length
+                       -> Complex Double -- ^ Initial (x,y) values
+                       -> Complex Double -- ^ (dx,dy) values
+                       -> Ptr Word8 -- ^ Output array of colors
+                       -> IO ()
+
 -- | A Block carries the information required to go from a
---   runnable dynamical system and choice of color scheme
---   to a buffer filled with the resulting color data.
+--   runnable dynamical system to a buffer filled with the
+--   resulting color data.
 data Block =
   Block { coordToModel  :: (Double, Double) -> (Double, Double)
-        , compute       :: Word32 -> Word32 -> Word32 -> Complex Double -> Complex Double -> Ptr Word8 -> IO ()
-          -- ^ The arguments of the compute function are:
-          --     * Block width, in subsamples
-          --     * Block height, in subsamples
-          --     * Subsamples per point length
-          --     * Array of two doubles: initial (x,y) values
-          --     * Array of two doubles: (dx,dy)
-          --     * Output color samples
+        , compute       :: BlockComputeAction
         , logSampleRate :: Int
           -- ^ The rate of over- or under-sampling to use.
           --      * logSampleRate == 0: draw one point per pixel.

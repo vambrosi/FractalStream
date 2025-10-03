@@ -217,7 +217,7 @@ data ValueF (value :: (Environment, FSType) -> Exp Type) (et :: (Environment, FS
 
 fix2 :: (Value '(env, t) -> Value '(env, t) -> ValueF (Pure1 Value) '(env, t))
      ->  Value '(env, t) -> Value '(env, t) -> Value '(env, t)
-fix2 (#) x y = Fix (x # y)
+fix2 op x y = Fix (x `op` y)
 
 instance KnownEnvironment env => Num (Value '(env, 'IntegerT)) where
   (+) = fix2 AddI

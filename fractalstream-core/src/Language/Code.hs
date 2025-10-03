@@ -86,7 +86,7 @@ data CodeF (effs :: [Effect])
        -> CodeF effs value code '(env, ty)
 
   -- | A block of statements with VoidT type, followed by a
-  -- statement with any time. The type of the block is the
+  -- statement with any type. The type of the block is the
   -- type of the final statement.
   Block :: forall effs env ty code value
          . KnownEnvironment env
