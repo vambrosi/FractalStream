@@ -77,7 +77,7 @@ jobs:
     - if: ${{ steps.cache-dot-stack.outputs.cache-hit != 'true' }}
       name: Build Haskell dependencies
       run: |
-        cd fractalstream-core
+        cd fractalstream-ui-wx
         stack build --only-snapshot
 
     - if: 0 == 1
