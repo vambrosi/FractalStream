@@ -3,7 +3,6 @@ module Language.Value.EvaluatorSpec (spec) where
 import Test.Hspec
 import Language.Value
 import Language.Value.Evaluator
-import Data.Indexed.Functor
 
 spec :: Spec
 spec = do
@@ -19,7 +18,7 @@ spec = do
           -- get computed by Haskell *before* it was
           -- turned into a Value.
           v1_outermost_add = case v1 of
-            Fix (AddF _ _) -> True
+            AddF _ _ -> True
             _ -> False
       v1_outermost_add `shouldBe` True
       evaluate v1 EmptyContext `shouldBe` 9
@@ -29,9 +28,9 @@ spec = do
     it "computes integer values from an empty context" $ do
       let v1, v2, v3, v4 :: Value '( '[], 'IntegerT)
           v1 = abs(20 - 30)
-          v2 = Fix (DivI (10 * 10) 20) - 30
-          v3 = Fix (DivI 20 7)
-          v4 = Fix (ModI 20 7)
+          v2 = DivI (10 * 10) 20 - 30
+          v3 = DivI 20 7
+          v4 = ModI 20 7
       evaluate v1 EmptyContext `shouldBe` 10
       evaluate v2 EmptyContext `shouldBe` (-25)
       evaluate v3 EmptyContext `shouldBe` 2
@@ -39,23 +38,23 @@ spec = do
 
     it "computes boolean values from an empty context" $ do
       let yes, no, v1, v2, v3, v4 :: Value '( '[], 'BooleanT)
-          yes = Fix (Const (Scalar BooleanType True ))
-          no  = Fix (Const (Scalar BooleanType False))
-          v1 = Fix (Eql RealType
-                      (cos(pi) + abs(10 - 20))
-                      (3 * 3))
-          v2 = Fix (Eql BooleanType
-                      (Fix (Or yes no))
-                      (Fix (And yes no)))
-          v3 = Fix (NEq IntegerType
-                      (Fix (DivI (10 * 10) 20) - 30)
-                      (50 - 75))
-          v4 = Fix (Eql (PairType IntegerType IntegerType)
-                      (Fix (PairV (PairType IntegerType IntegerType)
-                                  (Fix (DivI 20 7))
-                                  (Fix (ModI 20 7))))
-                      (Fix (PairV (PairType IntegerType IntegerType)
-                                  2 6)))
+          yes = Const (Scalar BooleanType True )
+          no  = Const (Scalar BooleanType False)
+          v1 = Eql RealType
+                   (cos(pi) + abs(10 - 20))
+                   (3 * 3)
+          v2 = Eql BooleanType
+                   (Or yes no)
+                   (And yes no)
+          v3 = NEq IntegerType
+                   (DivI (10 * 10) 20 - 30)
+                   (50 - 75)
+          v4 = Eql (PairType IntegerType IntegerType)
+                   (PairV (PairType IntegerType IntegerType)
+                         (DivI 20 7)
+                         (ModI 20 7))
+                   (PairV (PairType IntegerType IntegerType)
+                     2 6)
       evaluate v1 EmptyContext `shouldBe` True
       evaluate v2 EmptyContext `shouldBe` False
       evaluate v3 EmptyContext `shouldBe` False

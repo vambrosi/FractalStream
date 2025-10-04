@@ -11,7 +11,7 @@ import Data.Indexed.Functor
 
 import Control.Monad.State
 import GHC.TypeLits
-import Fcf (Exp, Eval, Pure1)
+import Fcf (Exp, Eval)
 import Data.Kind
 
 data HaskellTypeM :: Type -> (Environment, FSType) -> Exp Type
@@ -43,7 +43,7 @@ simulate :: forall effs env t s
           . Handlers effs (HaskellTypeM s)
          -> Code effs env t
          -> State (Context HaskellTypeOfBinding env, s) (HaskellType t)
-simulate handlers = indexedFold @(HaskellTypeM s) @(Fix (CodeF effs (Pure1 Value))) @(CodeF effs (Pure1 Value)) $ \case
+simulate handlers = indexedFold @(HaskellTypeM s) $ \case
   Let pf name vt v _ body -> recallIsAbsent (absentInTail pf) $ do
     (ctx, s) <- get
     value <- eval v

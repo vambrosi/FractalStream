@@ -323,9 +323,9 @@ complexToReal :: ( KnownType rt, KnownEnvironment env
               -> Code eff ( '(px, 'RealT) ': '(z, 'ComplexT) ': env ) rt
               -> Code eff env rt
 complexToReal reZ imZ vpx =
-  let z = Fix (AddC (Fix (R2C (Fix (Var Proxy RealType reZ))))
-                    (Fix (MulC (Fix (Const (Scalar ComplexType (0 :+ 1))))
-                               (Fix (R2C (Fix (Var Proxy RealType imZ)))))))
-      px = Fix (Var Proxy RealType vpx)
+  let z = AddC (R2C (Var Proxy RealType reZ))
+               (MulC (Const (Scalar ComplexType (0 :+ 1)))
+                     (R2C (Var Proxy RealType imZ)))
+      px = Var Proxy RealType vpx
   in  let_ z  typeProxy
     . let_ px typeProxy

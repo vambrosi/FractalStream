@@ -1,12 +1,11 @@
 {-# language PolyKinds #-}
 module Data.Indexed.Functor
   ( IFunctor(..)
-  , IFixpoint(..)
   , (:.:)
   , (:+:)
   , (:*:)
   , ITraversable(..)
-  , Fix(..)
+  , FIX
   , indexedFold
   , indexedFoldM
   , indexedFoldWithOriginal
@@ -15,7 +14,6 @@ module Data.Indexed.Functor
   ) where
 
 import Control.Monad
-import Data.Coerce
 import Fcf
 import Data.Kind
 
@@ -26,10 +24,6 @@ class IFunctor (f :: (k -> Exp Type) -> (k -> Type)) where
        -> f a i
        -> f b i
   toIndex :: forall a i. f a i -> IndexProxy f i
-
-class IFunctor f => IFixpoint (t :: k -> Type) (f :: (k -> Exp Type) -> (k -> Type)) | t -> f where
-  unrollIx :: forall i. t i -> f (Pure1 t) i
-  rerollIx :: forall i. f (Pure1 t) i -> t i
 
 data (:.:) (m :: Type -> Type) (a :: k -> Exp Type) (i :: k) :: Exp Type
 type instance Eval ((m :.: a) i) = m (Eval (a i))
@@ -55,60 +49,56 @@ class IFunctor f => ITraversable (f :: (k -> Exp Type) -> (k -> Type)) where
             -> m (f b i)
   itraverse f = isequence . imap f
 
-newtype Fix (f :: (k -> Exp Type) -> k -> Type) (i :: k)
-  = Fix (f (Pure1 (Fix f)) i)
+data FIX :: ((k -> Exp Type) -> k -> Type) -> k -> Exp Type
+type instance Eval (FIX f i) = f (FIX f) i
 
-instance IFunctor f => IFixpoint (Fix f) f where
-  unrollIx = coerce
-  rerollIx = coerce
 
-indexedFold :: forall a t f i
-             . IFixpoint t f
+indexedFold :: forall a f i. IFunctor f
             => (forall j. f a j -> Eval (a j))
-            -> t i
+            -> Eval (FIX f i)
             -> Eval (a i)
 indexedFold f x =
-  let go :: forall k. IndexProxy f k -> t k -> Eval (a k)
-      go _ = f . imap go . unrollIx
-  in go (toIndex (unrollIx @_ @t @f x)) x
+  let go :: forall k. IndexProxy f k -> Eval (FIX f k) -> Eval (a k)
+      go _ = f . imap go
+  in go (toIndex x) x
 
-indexedFoldM :: forall a t f i m
-              . (IFixpoint t f, ITraversable f, Monad m)
+indexedFoldM :: forall a f i m
+              . (ITraversable f, Monad m)
              => (forall j. f a j -> m (Eval (a j)))
-             -> t i
+             -> Eval (FIX f i)
              -> m (Eval (a i))
 indexedFoldM f x =
-  let go :: forall k. IndexProxy f k -> t k -> m (Eval (a k))
-      go _ = f <=< (itraverse go . unrollIx)
-  in go (toIndex (unrollIx @_ @t @f x)) x
+  let go :: forall k. IndexProxy f k -> Eval (FIX f k) -> m (Eval (a k))
+      go _ = f <=< itraverse go
+  in go (toIndex x) x
 
-indexedUnfold :: forall a t f i
-               . IFixpoint t f
+indexedUnfold :: forall a f i
+               . IFunctor f
               => (forall j. IndexProxy f j -> Eval (a j) -> f a j)
               -> IndexProxy f i
               -> Eval (a i)
-              -> t i
+              -> Eval (FIX f i)
 indexedUnfold f =
-  let go :: forall k. IndexProxy f k -> Eval (a k) -> t k
-      go = \k -> rerollIx @_ @t @f . imap go . f k
+  let go :: forall k. IndexProxy f k -> Eval (a k) -> Eval (FIX f k)
+      go = \k -> imap go . f k
   in go
 
-indexedUnfoldM :: forall a t f i m
-               . (IFixpoint t f, ITraversable f, Monad m)
+indexedUnfoldM :: forall a f i m
+               . (IFunctor f, ITraversable f, Monad m)
               => (forall j. IndexProxy f j -> Eval (a j) -> m (f a j))
               -> IndexProxy f i
               -> Eval (a i)
-              -> m (t i)
+              -> m (Eval (FIX f i))
 indexedUnfoldM f =
-  let go :: forall k. IndexProxy f k -> Eval (a k) -> m (t k)
-      go = \k x -> (fmap (rerollIx @_ @t @f) . itraverse go) =<< f k x
+  let go :: forall k. IndexProxy f k -> Eval (a k) -> m (Eval (FIX f k))
+      go = \k x -> itraverse go =<< f k x
   in go
 
 indexedFoldWithOriginal
-  :: forall a t f i
-   . IFixpoint t f
-  => (forall j. f (Pure1 t :*: a) j -> Eval (a j))
-  -> t i
+  :: forall a f i
+   . IFunctor f
+  => (forall j. f (FIX f :*: a) j -> Eval (a j))
+  -> Eval (FIX f i)
   -> Eval (a i)
 indexedFoldWithOriginal f =
-  snd . indexedFold (\x -> (rerollIx @_ @t @f (imap (const fst) x), f x))
+  snd . indexedFold (\x -> ((imap (const fst) x), f x))

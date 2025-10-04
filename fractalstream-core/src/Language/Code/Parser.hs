@@ -75,13 +75,13 @@ pBlock eps env splices = \case
     tok_ Indent
     body <- some (pCode eps env splices VoidType)
     tok_ Dedent
-    withEnvironment env (pure (Fix (Block VoidType (init body) (last body))))
+    withEnvironment env (pure (Block VoidType (init body) (last body)))
   t -> dbg ("pBlock @" ++ showType t) $ do
     tok_ Indent
     -- This is kind of stupid
     (body, final) <- manyTill_ (pCode eps env splices VoidType) (try (pCode eps env splices t))
     tok_ Dedent
-    withEnvironment env (pure (Fix (Block t body final)))
+    withEnvironment env (pure (Block t body final))
 
 -- | Parse a single line; in practice, this is more complex because
 -- let-bindings are syntactically a single line, but they introduce a
@@ -160,17 +160,17 @@ pIfThenElse eps env splices t = dbg "if/then/else statement" $ withEnvironment e
   no <- case t of
     VoidType -> try (tok_ Else >> pIfThenElse eps env splices t)
                  <|> (tok_ Else >> eol >> pBlock eps env splices t)
-                 <|> pure (Fix (NoOp @env))
+                 <|> pure (NoOp @env)
     _         -> try (tok_ Else >> pIfThenElse eps env splices t)
                  <|> (tok_ Else >> eol >> pBlock eps env splices t)
-  pure (Fix (IfThenElse t cond yes no))
+  pure (IfThenElse t cond yes no)
 
 -- | pass
 pPass :: EnvironmentProxy env -> Parser (Code effs env 'VoidT)
 pPass env = do
   tok_ (Identifier "pass")
   eol
-  pure (withEnvironment env (Fix NoOp))
+  pure (withEnvironment env NoOp)
 
 -- | pure VALUE
 pPure :: forall effs env splices t
@@ -181,7 +181,7 @@ pPure :: forall effs env splices t
 pPure env splices t = dbg ("pure @" <> showType t) $ do
   toks <- manyTill anyToken eol
   withEnvironment env $ do
-    result <- Fix . Pure t <$> nest (parseValueFromTokens env splices t toks)
+    result <- Pure t <$> nest (parseValueFromTokens env splices t toks)
     pure result
 
 -- |
@@ -202,7 +202,7 @@ pLoop eps env splices = dbg "loop" $ do
   tok_ Dedent
 -}
   tok_ (Identifier "loop") >> eol
-  withEnvironment env (Fix . DoWhile <$> pBlock eps env splices BooleanType)
+  withEnvironment env (DoWhile <$> pBlock eps env splices BooleanType)
 
 -- |
 -- set VAR to VALUE
@@ -228,7 +228,7 @@ pSet effs env splices = dbg "set" $ do
         Absent' _ -> mzero
         Found' t pf -> do
           v <- nest (parseValueFromTokens env splices t toks)
-          withEnvironment env (pure (Fix (Set pf name t v)))
+          withEnvironment env (pure (Set pf name t v))
 
   pBind n = do
     -- Figure out what type the RHS should have, and try to parse some
@@ -238,7 +238,7 @@ pSet effs env splices = dbg "set" $ do
         Absent' _ -> mzero
         Found' t pf -> do
           code <- pCode effs env splices t
-          withEnvironment env (pure (Fix (SetBind pf name t code)))
+          withEnvironment env (pure (SetBind pf name t code))
 
 -- | Variable initialization
 pVar :: forall effs env splices t
@@ -283,7 +283,7 @@ pVarValue eps env splices t pf name vt = do
     -- peek at the next token, which should be a dedent; we should have parsed the
     -- remainder of the current scope's block.
     lookAhead (tok_ Dedent)
-    pure (Fix (Let pf' name vt v t (Fix (Block t body final))))
+    pure (Let pf' name vt v t (Block t body final))
 
 pVarCode  :: forall effs env splices t ty name
            . KnownSymbol name
@@ -309,7 +309,7 @@ pVarCode eps env splices t pf name vt = do
     -- peek at the next token, which should be a dedent; we should have parsed the
     -- remainder of the current scope's block.
     lookAhead (tok_ Dedent)
-    pure (Fix (LetBind pf' name vt c t (Fix (Block t body final))))
+    pure (LetBind pf' name vt c t (Block t body final))
 
 
 -- | Parse type name
@@ -340,7 +340,7 @@ pEffects (EP eps) env _splices t = dbg "effects" $ go eps
     go :: forall effs'. EffectParsers_ effs' effs -> Parser (Code effs env t)
     go NoEffs = mzero
     go (ParseEff (EffectParser eff p) etc) =
-      withEnvironment env (Fix . Effect eff Proxy t
+      withEnvironment env (Effect eff Proxy t
                            <$> p (envTypeProxy env t) (\(et' :: EnvTypeProxy et') ->
                                                          case lemmaEnvTy @et' of
                                                            Refl -> pCode' (EP eps) et' EmptyContext))

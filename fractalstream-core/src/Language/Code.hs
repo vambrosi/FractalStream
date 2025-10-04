@@ -4,7 +4,6 @@ module Language.Code
   ( module Language.Value
   , module Language.Effect
   , Code
-  , Fix(..)
   , CodeF(..)
   , SomeCode(..)
   , mapValues
@@ -27,7 +26,8 @@ data SomeCode where
 -- Code
 ---------------------------------------------------------------------------------
 
-type Code effs env t = Fix (CodeF effs (Pure1 Value)) '(env, t)
+--type Code effs env t = Fix (CodeF effs (Pure1 Value)) '(env, t)
+type Code effs env t = CodeF effs (FIX ValueF) (FIX (CodeF effs (FIX ValueF))) '(env, t)
 
 instance Show (Code effs env t) where show _ = "<code>"
 
@@ -232,9 +232,9 @@ transformValues :: forall eff env result
 transformValues f = indexedFold phi
   where
     phi :: forall et
-         . CodeF eff (Pure1 Value) (Pure1 (Fix (CodeF eff (Pure1 Value)))) et
-        -> Fix (CodeF eff (Pure1 Value)) et
-    phi x = Fix (mapValues (const f) x)
+         . CodeF eff (FIX ValueF) (FIX (CodeF eff (FIX ValueF))) et
+        -> CodeF eff (FIX ValueF) (FIX (CodeF eff (FIX ValueF))) et
+    phi x = mapValues (const f) x
 
 ---------------------------------------------------------------------------------
 -- Indexed traversable instance
@@ -273,7 +273,7 @@ let_ :: forall name env effs ty result
      -> TypeProxy result
      -> Code effs ('(name, ty) ': env) result
      -> Code effs env result
-let_ v t = Fix . Let bindingEvidence (Proxy @name) (typeOfValue v) v t
+let_ v t = Let bindingEvidence (Proxy @name) (typeOfValue v) v t
 
 
 -- | Set the value of a variable.
@@ -292,4 +292,4 @@ set :: forall name env effs ty
        , KnownSymbol name, KnownEnvironment env)
     => Value '(env, ty)
     -> Code effs env 'VoidT
-set v = Fix (Set bindingEvidence (Proxy @name) (typeOfValue v) v)
+set v = Set bindingEvidence (Proxy @name) (typeOfValue v) v

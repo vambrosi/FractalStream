@@ -1,3 +1,5 @@
+{-# language UndecidableInstances #-}
+{-# options_ghc -Wno-unused-imports #-}
 module Language.Untyped.Infer
   ( infer
   , TypeVar_
@@ -8,7 +10,8 @@ import Language.Untyped.Value (ValueWith)
 import Language.Untyped.Shape
 import Language.Value hiding (get, Ty)
 import Data.Indexed.Functor
-import Data.Recursive hiding (Fix)
+import Data.Recursive hiding (FIX)
+import qualified Data.Recursive as U
 
 import GHC.TypeLits hiding (LTI, GTI)
 import Control.Monad hiding (foldM)
@@ -21,7 +24,7 @@ import Data.Graph
 import Data.Foldable hiding (fold)
 import qualified Data.Array as Array
 
-import Fcf (Exp, Eval)
+import Fcf (Exp, Eval, Pure)
 import Data.Type.Equality ((:~:)(..))
 import Data.Kind
 
@@ -194,7 +197,7 @@ toTypedValue :: forall env0 t0 m
              -> ValueWith TypeVar
              -> m (Value '(env0, t0))
 toTypedValue getType =
-    indexedUnfoldM @ValueWithTypeVar_ @Value @ValueF (\(EnvType t) -> go t)
+    indexedUnfoldM @ValueWithTypeVar_ (\(EnvType t) -> go t)
   where
     lookupName :: forall env t a
                 . KnownEnvironment env
@@ -278,18 +281,10 @@ toTypedValue getType =
         U.Not x       -> pure (Not x)
         U.Eql lhs rhs -> withJoinedType lhs rhs (\ct -> pure (Eql ct lhs rhs))
         U.NEq lhs rhs -> withJoinedType lhs rhs (\ct -> pure (NEq ct lhs rhs))
-        U.Cmp op lhs rhs -> withJoinedType lhs rhs $ \case
-          IntegerType -> case op of
-            U.LE -> pure (LEI lhs rhs)
-            U.LT -> pure (LTI lhs rhs)
-            U.GE -> pure (GEI lhs rhs)
-            U.GT -> pure (GTI lhs rhs)
-          RealType -> case op of
-            U.LE -> pure (LEF lhs rhs)
-            U.LT -> pure (LTF lhs rhs)
-            U.GE -> pure (GEF lhs rhs)
-            U.GT -> pure (GTF lhs rhs)
-          _         -> error "bad"
+        U.LT lhs rhs -> withJoinedType lhs rhs $ \case
+          IntegerType -> pure (LTI lhs rhs)
+          RealType    -> pure (LTF lhs rhs)
+          _ -> error "bad"
         _ -> error "bad"
       ColorType -> case uv of
         U.ConstColor c  -> pure (Const (Scalar ColorType c))
@@ -373,7 +368,7 @@ toTypedValue getType =
           U.Tanh      -> pure (TanhC x)
           _           -> error "bad"
         _             -> error "bad"
-      _ -> error ("FIXME: " ++ show (unfold @U.Value (\(Ann _ v) -> v) tvv))
+      _ -> error ("FIXME: " ++ show (unfold (\(Ann _ v) -> v) tvv))
 
 data ValueWithTypeVar_ :: (Environment, FSType) -> Exp Type
 type instance Eval (ValueWithTypeVar_ et) = ValueWith TypeVar
@@ -385,9 +380,9 @@ uniques = Set.toList . Set.fromList
 -- constraints as a side effect.
 genConstraintsAlg :: forall m
                    . (MonadState TCState m, MonadError TCError m)
-                  => AnnF U.ValueF TypeVar TypeVar
+                  => AnnF U.ValueF TypeVar (Pure TypeVar)
                   -> m TypeVar
-genConstraintsAlg (AnnF tv0 val) = do
+genConstraintsAlg (Ann tv0 val) = do
   cs <- constraints val
   addConstraints cs
   pure tv0
@@ -559,6 +554,6 @@ genConstraintsAlg (AnnF tv0 val) = do
       assertBoolean tv0
       pure []
 
-    U.Cmp {} -> do
+    U.LT {} -> do
       assertBoolean tv0
       pure []

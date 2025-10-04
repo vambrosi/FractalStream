@@ -154,19 +154,19 @@ pDrawCommand env = do
 
     pDrawPoint = withEnvironment env $ do
       tok_ "point" >> tok_ "at"
-      DrawPoint env . Fix . C2R2 <$> value_ EmptyContext
+      DrawPoint env . C2R2 <$> value_ EmptyContext
 
     pDrawLine = withEnvironment env $ do
       tok_ "line" >> tok_ "from"
       valueTokens <- manyTill anyToken (tok_ "to")
-      p1 <- Fix . C2R2 <$> nest (parseValueFromTokens env EmptyContext ComplexType valueTokens)
-      p2 <- Fix . C2R2 <$> value_ EmptyContext
+      p1 <- C2R2 <$> nest (parseValueFromTokens env EmptyContext ComplexType valueTokens)
+      p2 <- C2R2 <$> value_ EmptyContext
       pure (DrawLine env p1 p2)
 
     pDrawCircle fill = withEnvironment env $ do
       tok_ "circle" >> tok_ "at"
       valueTokens <- manyTill anyToken (tok_ "with")
-      center <- Fix . C2R2 <$> nest (parseValueFromTokens env EmptyContext ComplexType valueTokens)
+      center <- C2R2 <$> nest (parseValueFromTokens env EmptyContext ComplexType valueTokens)
       tok_ "radius"
       r <- value_ EmptyContext
       pure (DrawCircle env fill r center)
@@ -174,8 +174,8 @@ pDrawCommand env = do
     pDrawRect fill = withEnvironment env $ do
       tok_ "rectangle" >> tok_ "from"
       valueTokens <- manyTill anyToken (tok_ "to")
-      p1 <- Fix . C2R2 <$> nest (parseValueFromTokens env EmptyContext ComplexType valueTokens)
-      p2 <- Fix . C2R2 <$> value_ EmptyContext
+      p1 <- C2R2 <$> nest (parseValueFromTokens env EmptyContext ComplexType valueTokens)
+      p2 <- C2R2 <$> value_ EmptyContext
       pure (DrawRect env fill p1 p2)
 
     pDrawFilled = do

@@ -53,18 +53,17 @@ partialEvaluate :: forall env t name ty
                 -> Value '(env, t)
                 -> Value '(env `WithoutBinding` name, t)
 partialEvaluate name ty v _pf =
-  unsafeCoerce . (indexedFold @(Pure1 Value) @Value @ValueF $ \case
+  unsafeCoerce . (indexedFold @(FIX ValueF) $ \case
 
     Var name' ty' pf' -> case sameSymbol name name' of
       Just Refl -> case sameHaskellType ty ty' of -- was: case typeIsUnique pf pf' of
-        Just Refl -> Fix (Const (Scalar ty v))
+        Just Refl -> Const (Scalar ty v)
         -- The invariant is: "if X is bound to type T at the outer scope, and X
         -- is referenced within the value, that reference will *also* be at type T.
         -- In other words: we don't have name shadowing, so the environment only grows.
         Nothing   -> error "internal error: should be unreachable"
-      Nothing   -> Fix (Var name' ty' pf')
-    etc -> Fix etc
-  )
+      Nothing   -> Var name' ty' pf'
+    etc -> etc)
 
 -- | ValueOrConstant is used during constant folding. It
 -- can represent either a value of type @Value env t@,
@@ -78,7 +77,7 @@ data ValueOrConstant (et :: (Environment, FSType)) where
 toV :: ValueOrConstant et -> Value et
 toV = \case
   V v -> v
-  C c -> Fix (Const c)
+  C c -> Const c
 
 -- | Turn a ValueOrConstant into a constant. This
 -- could fail, hence the Maybe.
@@ -91,10 +90,10 @@ envTypeToType (EnvType t) = t
 -- | Perform a constant-folding transformation over a 'Value'
 constantFold :: forall et. Value et -> Value et
 constantFold =
-  toV . (indexedFold @(Pure1 ValueOrConstant) @Value @ValueF $ \case
+  toV . (indexedFold @(Pure1 ValueOrConstant) $ \case
     -- Base cases: constants are constant, variables aren't.
     Const c     -> C c
-    Var name ty pf -> V (Fix (Var name ty pf))
+    Var name ty pf -> V (Var name ty pf)
 
     -- Special cases, where we can constant-fold even with variables
     MulI (C x@(Scalar _ 0)) _ -> C x
@@ -111,11 +110,12 @@ constantFold =
     -- use the 'evaluator' algebra to compute the value of the constructor.
     -- If not all children are constants, create a non-constant Value.
     etc -> case itraverse @_ @_ @_ @_ @(Pure1 ValueOrConstant) @HaskellType_ (const toC) etc of
-        Nothing -> V (Fix (imap (const toV) etc))
+        Nothing -> V (imap (const toV) etc)
         Just  c -> case (lemmaEnvTy' (toIndex etc), toIndex etc) of
           (Refl, EnvType _) -> C (Scalar (envTypeToType (toIndex etc))
                                   (evaluator (imap (\_ t _ -> t) c) impossible))
-   )
+        )
+
  where
    impossible = error "unreachable, Var constructor is already handled in constantFold"
 
@@ -138,9 +138,9 @@ evaluate :: forall env t
          -> Context HaskellTypeOfBinding env
          -> HaskellType t
 evaluate =
-  indexedFold @ScalarFromContext @Value @ValueF $ \v ->
+  indexedFold @ScalarFromContext (\v ->
     case lemmaEnvTy' (toIndex v) of
-      Refl -> evaluator v
+      Refl -> evaluator v)
 
 -- | Evaluation algebra
 evaluator :: forall et
@@ -241,11 +241,5 @@ evaluator v0 ctx = case v0 of
     Eql t x y -> Scalar t (x ctx) == Scalar t (y ctx)
     NEq t x y -> Scalar t (x ctx) /= Scalar t (y ctx)
 
-    LEI x y -> x ctx <= y ctx
-    LEF x y -> x ctx <= y ctx
-    GEI x y -> x ctx >= y ctx
-    GEF x y -> x ctx >= y ctx
     LTI x y -> x ctx < y ctx
     LTF x y -> x ctx < y ctx
-    GTI x y -> x ctx > y ctx
-    GTF x y -> x ctx > y ctx

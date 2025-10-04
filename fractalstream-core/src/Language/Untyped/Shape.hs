@@ -1,3 +1,4 @@
+{-# language UndecidableInstances #-}
 module Language.Untyped.Shape
   ( inferShape
   , ValueWithShape
@@ -20,6 +21,7 @@ import Language.Untyped.Constraints
 import Control.Monad.State
 import Control.Monad.Except
 import Data.STRef
+import Fcf (Pure)
 
 ---------------------------------------------------------------------------------
 -- Shapes
@@ -74,16 +76,20 @@ unifyShapes (STShape x0) (STShape y0) = STShape <$> case (x0, y0) of
 ---------------------------------------------------------------------------------
 
 type ValueWithShape s = ValueWith (UF s (STShape s))
+-- = Ann ValueF (UF s (STShape s))
+-- = Eval (FIX (AnnF ValueF (UF s (STShape s))))
+-- = AnnF ValueF (UF s (STShape s)) (FIX (AnnF ValueF (UF s (STShape s))))
 
 -- | Shape inference is the first phase of type inference. Here,
 -- we associate a shape variable to each AST node, and unify
 -- shape variables as needed. Shapes collapse the subtype relation
 -- between non-top and non-bottom types into an equivalence, smooshing
 -- together Z, R, and C but leaving other types distinct.
-inferShape :: Map String (UF s (STShape s))
+inferShape :: forall s
+            . Map String (UF s (STShape s))
            -> U.Value
            -> ST s (ValueWithShape s)
-inferShape env = foldM $ \v -> do
+inferShape env = foldM  @(FIX (AnnF U.ValueF (UF s (STShape s)))) $ \v -> do
   let freshShape = fresh (STShape Unknown)
   sv <- freshShape
 
@@ -99,7 +105,7 @@ inferShape env = foldM $ \v -> do
         unify lhs rhs
         unify lhs sv
 
-  case annotation <$> v of
+  case emap @_ @_ @(Pure _) annotation v of
     U.ConstB _ -> shapeIs BoolShape
     U.ConstI _ -> shapeIs NumShape
     U.ConstF _ -> shapeIs NumShape
@@ -160,7 +166,7 @@ inferShape env = foldM $ \v -> do
     U.NEq lhs rhs -> do
       shapeIs BoolShape
       unify lhs rhs
-    U.Cmp _ lhs rhs -> do
+    U.LT lhs rhs -> do
       shapeIs BoolShape
       unify lhs rhs
       n <- fresh (STShape NumShape)
@@ -183,7 +189,7 @@ toTypeShape :: forall s
              . STRef s TV
             -> ValueWithShape s
             -> StateT (Map String TypeVar) (ST s) (Either ShapeError (ValueWith TypeVar))
-toTypeShape nextTV = runExceptT . (foldM $ \(AnnF uf v) -> do
+toTypeShape nextTV = runExceptT . (foldM $ \(Ann uf v) -> do
   case v of
     U.Var n -> do
       env <- get

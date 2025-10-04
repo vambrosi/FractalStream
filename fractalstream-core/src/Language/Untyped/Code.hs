@@ -1,4 +1,4 @@
-{-# language TemplateHaskell #-}
+{-# language UndecidableInstances #-}
 module Language.Untyped.Code
   ( type Code
   , CodeF(..)
@@ -11,25 +11,26 @@ import Data.Recursive
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Control.Monad.Except
-import Data.Bifunctor
-import Data.Bifunctor.TH
 import Control.Monad
+import Fcf (Eval, Exp, Pure)
+import Data.Kind
+
 import Debug.Trace
 
-type Code = Fix (CodeF Value)
+type Code = Eval (FIX (CodeF Value))
 
-data CodeF value code
-  = Let String value code
-  | LetBind String code code
+data CodeF (value :: Type) (code :: Exp Type)
+  = Let String value (Eval code)
+  | LetBind String (Eval code) (Eval code)
   | Set String value
-  | SetBind String code
-  | Call code
-  | Block [code]
+  | SetBind String (Eval code)
+  | Call (Eval code)
+  | Block [(Eval code)]
   | Pure value
-  | DoWhile code
-  | IfThenElse value code code
+  | DoWhile (Eval code)
+  | IfThenElse value (Eval code) (Eval code)
   -- Render effect
-  | Render String String value value value code
+  | Render String String value value value (Eval code)
   | HaltRender value
   | Blit value value value value
   | ClearTo value
@@ -43,30 +44,121 @@ data CodeF value code
   | Clear
   -- List effect
   | Insert String value
-  | Lookup String String value code code
+  | Lookup String String value (Eval code) (Eval code)
   | ClearList String
   | Remove String String value
-  | ForEach String String code
+  | ForEach String String (Eval code)
   -- Output effect
   | Output String value
   -- Provide effect
-  | Provide (Set String) code
-  deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
+  | Provide (Set String) (Eval code)
 
-$(deriveBifunctor ''CodeF)
+deriving instance (Eq   value,   Eq (Eval code)) => Eq   (CodeF value code)
+deriving instance (Ord  value,  Ord (Eval code)) => Ord  (CodeF value code)
+deriving instance (Show value, Show (Eval code)) => Show (CodeF value code)
+
+vmap :: (a -> b) -> CodeF a c -> CodeF b c
+vmap f = \case
+  Let n v x -> Let n (f v) x
+  LetBind n x y -> LetBind n x y
+  Set n v -> Set n (f v)
+  SetBind n c -> SetBind n c
+  Call c -> Call c
+  Block cs -> Block cs
+  Pure v -> Pure (f v)
+  DoWhile c -> DoWhile c
+  IfThenElse c y n -> IfThenElse (f c) y n
+  Render x y a b c w -> Render x y (f a) (f b) (f c) w
+  HaltRender x -> HaltRender (f x)
+  Blit a b c d -> Blit (f a) (f b) (f c) (f d)
+  ClearTo a -> ClearTo (f a)
+  DrawPoint x -> DrawPoint (f x)
+  DrawCircle a b c -> DrawCircle a (f b) (f c)
+  DrawLine a b -> DrawLine (f a) (f b)
+  DrawRect a b c -> DrawRect a (f b) (f c)
+  SetStroke a -> SetStroke (f a)
+  SetFill a -> SetFill (f a)
+  Clear -> Clear
+  Insert s v -> Insert s (f v)
+  Lookup a b c x y -> Lookup a b (f c) x y
+  ClearList a -> ClearList a
+  Remove a b c -> Remove a b (f c)
+  ForEach a b c -> ForEach a b c
+  Output a b -> Output a (f b)
+  Provide a c -> Provide a c
+
+instance EFunctor (CodeF v) where
+  emap f = \case
+    Let n v x -> Let n v (f x)
+    LetBind n x y -> LetBind n (f x) (f y)
+    Set n v -> Set n v
+    SetBind n c -> SetBind n (f c)
+    Call c -> Call (f c)
+    Block cs -> Block (map f cs)
+    Pure v -> Pure v
+    DoWhile c -> DoWhile (f c)
+    IfThenElse c y n -> IfThenElse c (f y) (f n)
+    Render x y a b c w -> Render x y a b c (f w)
+    HaltRender x -> HaltRender x
+    Blit a b c d -> Blit a b c d
+    ClearTo a -> ClearTo a
+    DrawPoint x -> DrawPoint x
+    DrawCircle a b c -> DrawCircle a b c
+    DrawLine a b -> DrawLine a b
+    DrawRect a b c -> DrawRect a b c
+    SetStroke a -> SetStroke a
+    SetFill a -> SetFill a
+    Clear -> Clear
+    Insert s v -> Insert s v
+    Lookup a b c x y -> Lookup a b c (f x) (f y)
+    ClearList a -> ClearList a
+    Remove a b c -> Remove a b c
+    ForEach a b c -> ForEach a b (f c)
+    Output a b -> Output a b
+    Provide a c -> Provide a (f c)
+
+instance ETraversable (CodeF v) where
+  etraverse f = \case
+    Let n v x -> Let n v <$> f x
+    LetBind n x y -> LetBind n <$> f x <*> f y
+    Set n v -> pure $ Set n v
+    SetBind n c -> SetBind n <$> f c
+    Call c -> Call <$> f c
+    Block cs -> Block <$> traverse f cs
+    Pure v -> pure $ Pure v
+    DoWhile c -> DoWhile <$> f c
+    IfThenElse c y n -> IfThenElse c <$> f y <*> f n
+    Render x y a b c w -> Render x y a b c <$> f w
+    HaltRender x -> pure $ HaltRender x
+    Blit a b c d -> pure $ Blit a b c d
+    ClearTo a -> pure $ ClearTo a
+    DrawPoint x -> pure $ DrawPoint x
+    DrawCircle a b c -> pure $ DrawCircle a b c
+    DrawLine a b -> pure $ DrawLine a b
+    DrawRect a b c -> pure $ DrawRect a b c
+    SetStroke a -> pure $ SetStroke a
+    SetFill a -> pure $ SetFill a
+    Clear -> pure $ Clear
+    Insert s v -> pure $ Insert s v
+    Lookup a b c x y -> Lookup a b c <$> f x <*> f y
+    ClearList a -> pure $ ClearList a
+    Remove a b c -> pure $ Remove a b c
+    ForEach a b c -> ForEach a b <$> f c
+    Output a b -> pure $ Output a b
+    Provide a c -> Provide a <$> f c
 
 data BindingError
   = Shadowing String
   | Unbound String
   deriving Show
 
-type CodeWithEnv  = Ann  (CodeF (Set String, Value)) (Set String)
-type CodeWithEnvF = AnnF (CodeF (Set String, Value)) (Set String)
+type CodeWithEnv = Ann (CodeF (Set String, Value)) (Set String)
+type CodeWithEnvF t = AnnF (CodeF (Set String, Value)) (Set String) (Pure t)
 
 -- | Annotate each 'Code' AST node and @value@ with its environment.
 withBindings :: (Set String, Code)
              -> Either BindingError (CodeWithEnvF (Set String, Code))
-withBindings (env, Fix code) = AnnF env <$> case code of
+withBindings (env, code) = Ann env <$> case code of
   Let n v body -> do
     when (Set.member n env) (throwError (Shadowing n))
     pure (Let n (env, v) (Set.insert n env, body))
@@ -107,7 +199,7 @@ withBindings (env, Fix code) = AnnF env <$> case code of
       (n:_) -> throwError (Shadowing n)
       []    -> pure (Provide ns (env `Set.union` ns, c))
 
-  etc -> pure (bimap (env,) (env,) etc)
+  etc -> pure (vmap (env,) $ emap @_ (env,) etc) -- (bimap (env,) (env,) etc)
 
 attachScope :: Set String
             -> Code
@@ -120,30 +212,29 @@ attachScope = curry (unfoldM withBindings)
 promoteSetToLet :: Set String -> Code -> Code
 promoteSetToLet = curry (unfold phi)
   where
-    phi :: (Set String, Code) -> CodeF Value (Set String, Code)
-    phi (scope, Fix ast) = trace (show ast) $ case ast of
+    phi :: (Set String, Code) -> CodeF Value (Pure (Set String, Code))
+    phi (scope, ast) = trace (show ast) $ case ast of
       -- In a block, find any Set or SetBind instructions that
       -- are setting an unbound variable. Convert these to
       -- Let / LetBind, scoping over the remainder of the block.
       Block instrs ->
         let setsUnboundVar = \case
-              Fix (Set v _)     -> not (v `Set.member` scope)
-              Fix (SetBind v _) -> not (v `Set.member` scope)
-              _                 -> False
+              Set v _     -> not (v `Set.member` scope)
+              SetBind v _ -> not (v `Set.member` scope)
+              _           -> False
 
-            toBlock [Fix x] = x
-            toBlock xs      = Block xs
+            toBlock = \case { [x] -> x; xs -> Block xs }
 
             toLet = \case
               -- Set -> Let promotion
-              (Fix (Set var value) : more) ->
+              (Set var value : more) ->
                 [(Set.insert var scope,
-                  Fix (Let var value (Fix (toBlock more))))]
+                  Let var value (toBlock more))]
 
               -- SetBind -> LetBind promotion
-              (Fix (SetBind var code) : more) ->
+              (SetBind var code : more) ->
                 [(Set.insert var scope,
-                  Fix (LetBind var code (Fix (toBlock more))))]
+                  LetBind var code (toBlock more))]
 
               []  -> []
               etc -> error ("unreachable case in promoteSetToLet: " ++ show etc)
@@ -168,4 +259,4 @@ promoteSetToLet = curry (unfold phi)
         Provide names (names `Set.union` scope, body)
 
       -- Default case: recurse without modifying the scope
-      _ -> (scope,) <$> ast
+      _ -> emap (scope,) ast

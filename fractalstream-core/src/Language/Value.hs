@@ -31,7 +31,7 @@ import Data.Kind
 -- Value
 ---------------------------------------------------------------------------------
 
-type Value = Fix ValueF
+--type Value = Fix ValueF
 
 data Value_ :: Environment -> FSType -> Exp Type
 type instance Eval (Value_ env t) = Value '(env, t)
@@ -48,6 +48,8 @@ data SomeConstantValue where
                      . TypeProxy ty
                     -> Value '( '[], ty )
                     -> SomeConstantValue
+
+type Value = ValueF (FIX ValueF)
 
 data ValueF (value :: (Environment, FSType) -> Exp Type) (et :: (Environment, FSType)) where
 
@@ -205,85 +207,85 @@ data ValueF (value :: (Environment, FSType) -> Exp Type) (et :: (Environment, FS
   Eql :: forall env t value. KnownEnvironment env => TypeProxy t -> Eval (value '(env, t)) -> Eval (value '(env, t)) -> ValueF value '(env, 'BooleanT)
   NEq :: forall env t value. KnownEnvironment env => TypeProxy t -> Eval (value '(env, t)) -> Eval (value '(env, t)) -> ValueF value '(env, 'BooleanT)
 
-  -- Scalar comparisons
-  LEI :: forall env value. KnownEnvironment env => Eval (value '(env, 'IntegerT)) -> Eval (value '(env, 'IntegerT)) -> ValueF value '(env, 'BooleanT)
-  LEF :: forall env value. KnownEnvironment env => Eval (value '(env, 'RealT)) -> Eval (value '(env, 'RealT)) -> ValueF value '(env, 'BooleanT)
-  GEI :: forall env value. KnownEnvironment env => Eval (value '(env, 'IntegerT)) -> Eval (value '(env, 'IntegerT)) -> ValueF value '(env, 'BooleanT)
-  GEF :: forall env value. KnownEnvironment env => Eval (value '(env, 'RealT)) -> Eval (value '(env, 'RealT)) -> ValueF value '(env, 'BooleanT)
-  LTI :: forall env value. KnownEnvironment env => Eval (value '(env, 'IntegerT)) -> Eval (value '(env, 'IntegerT)) -> ValueF value '(env, 'BooleanT)
-  LTF :: forall env value. KnownEnvironment env => Eval (value '(env, 'RealT)) -> Eval (value '(env, 'RealT)) -> ValueF value '(env, 'BooleanT)
-  GTI :: forall env value. KnownEnvironment env => Eval (value '(env, 'IntegerT)) -> Eval (value '(env, 'IntegerT)) -> ValueF value '(env, 'BooleanT)
-  GTF :: forall env value. KnownEnvironment env => Eval (value '(env, 'RealT)) -> Eval (value '(env, 'RealT)) -> ValueF value '(env, 'BooleanT)
+  -- Scalar comparisons. We only keep < here, other comparisions should be
+  -- transformed to < beforehand.
+  LTI :: forall env value
+       . KnownEnvironment env
+      => Eval (value '(env, 'IntegerT))
+      -> Eval (value '(env, 'IntegerT))
+      -> ValueF value '(env, 'BooleanT)
 
-fix2 :: (Value '(env, t) -> Value '(env, t) -> ValueF (Pure1 Value) '(env, t))
-     ->  Value '(env, t) -> Value '(env, t) -> Value '(env, t)
-fix2 op x y = Fix (x `op` y)
+  LTF :: forall env value
+       . KnownEnvironment env
+      => Eval (value '(env, 'RealT))
+      -> Eval (value '(env, 'RealT))
+      -> ValueF value '(env, 'BooleanT)
 
 instance KnownEnvironment env => Num (Value '(env, 'IntegerT)) where
-  (+) = fix2 AddI
-  (-) = fix2 SubI
-  (*) = fix2 MulI
-  abs = Fix . AbsI
-  negate = Fix . NegI
-  fromInteger = Fix . Const . Scalar IntegerType . fromInteger
+  (+) = AddI
+  (-) = SubI
+  (*) = MulI
+  abs = AbsI
+  negate = NegI
+  fromInteger = Const . Scalar IntegerType . fromInteger
   signum = error "TODO"
 
 instance KnownEnvironment env => Num (Value '(env, 'RealT)) where
-  (+) = fix2 AddF
-  (-) = fix2 SubF
-  (*) = fix2 MulF
-  abs = Fix . AbsF
-  negate = Fix . NegF
-  fromInteger = Fix . Const . Scalar RealType . fromInteger
+  (+) = AddF
+  (-) = SubF
+  (*) = MulF
+  abs = AbsF
+  negate = NegF
+  fromInteger = Const . Scalar RealType . fromInteger
   signum = error "TODO"
 
 instance KnownEnvironment env => Fractional (Value '(env, 'RealT)) where
-  (/) = fix2 DivF
+  (/) = DivF
   fromRational q = fromInteger (numerator q) / fromInteger (denominator q)
 
 instance KnownEnvironment env => Floating (Value '(env, 'RealT)) where
-  pi = Fix (Const (Scalar RealType pi))
-  exp = Fix . ExpF
-  log = Fix . LogF
-  sin = Fix . SinF
-  cos = Fix . CosF
-  tan = Fix . TanF
-  asin = Fix . ArcsinF
-  acos = Fix . ArccosF
-  atan = Fix . ArctanF
-  sinh = Fix . SinhF
-  cosh = Fix . CoshF
-  tanh = Fix . TanhF
+  pi = Const (Scalar RealType pi)
+  exp = ExpF
+  log = LogF
+  sin = SinF
+  cos = CosF
+  tan = TanF
+  asin = ArcsinF
+  acos = ArccosF
+  atan = ArctanF
+  sinh = SinhF
+  cosh = CoshF
+  tanh = TanhF
   asinh = error "TODO"
   acosh = error "TODO"
   atanh = error "TODO"
 
 instance KnownEnvironment env => Num (Value '(env, 'ComplexT)) where
-  (+) = fix2 AddC
-  (-) = fix2 SubC
-  (*) = fix2 MulC
-  abs = Fix . R2C . Fix . AbsC
-  negate = Fix . NegC
-  fromInteger = Fix . Const . Scalar ComplexType . fromInteger
+  (+) = AddC
+  (-) = SubC
+  (*) = MulC
+  abs = R2C . AbsC
+  negate = NegC
+  fromInteger = Const . Scalar ComplexType . fromInteger
   signum = error "TODO"
 
 instance KnownEnvironment env => Fractional (Value '(env, 'ComplexT)) where
-  (/) = fix2 DivC
+  (/) = DivC
   fromRational q = fromInteger (numerator q) / fromInteger (denominator q)
 
 instance KnownEnvironment env => Floating (Value '(env, 'ComplexT)) where
-  pi = Fix (Const (Scalar ComplexType pi))
-  exp = Fix . ExpC
-  log = Fix . LogC
-  sin = Fix . SinC
-  cos = Fix . CosC
-  tan = Fix . TanC
+  pi = Const (Scalar ComplexType pi)
+  exp = ExpC
+  log = LogC
+  sin = SinC
+  cos = CosC
+  tan = TanC
   asin = error "TODO"
   acos = error "TODO"
   atan = error "TODO"
-  sinh = Fix . SinhC
-  cosh = Fix . CoshC
-  tanh = Fix . TanhC
+  sinh = SinhC
+  cosh = CoshC
+  tanh = TanhC
   asinh = error "TODO"
   acosh = error "TODO"
   atanh = error "TODO"
@@ -293,7 +295,7 @@ instance KnownEnvironment env => Floating (Value '(env, 'ComplexT)) where
 ---------------------------------------------------------------------------------
 
 typeOfValue :: forall env t. Value '(env, t) -> TypeProxy t
-typeOfValue v = case toIndex (unrollIx @_ @Value @ValueF v) of
+typeOfValue v = case toIndex v of
   EnvType t -> t
 
 instance IFunctor ValueF where
@@ -387,14 +389,8 @@ instance IFunctor ValueF where
     Eql {} -> EnvType BooleanType
     NEq {} -> EnvType BooleanType
 
-    LEI {} -> EnvType BooleanType
-    LEF {} -> EnvType BooleanType
-    GEI {} -> EnvType BooleanType
-    GEF {} -> EnvType BooleanType
     LTI {} -> EnvType BooleanType
     LTF {} -> EnvType BooleanType
-    GTI {} -> EnvType BooleanType
-    GTF {} -> EnvType BooleanType
 
   imap :: forall a b i
         . (forall j. EnvTypeProxy j -> Eval (a j) -> Eval (b j))
@@ -492,14 +488,8 @@ instance IFunctor ValueF where
       Eql t x y -> Eql t (f (withEnv t) x) (f (withEnv t) y)
       NEq t x y -> NEq t (f (withEnv t) x) (f (withEnv t) y)
 
-      LEI x y -> LEI (f (withEnv IntegerType) x) (f (withEnv IntegerType) y)
-      LEF x y -> LEF (f (withEnv RealType)    x) (f (withEnv RealType)    y)
-      GEI x y -> GEI (f (withEnv IntegerType) x) (f (withEnv IntegerType) y)
-      GEF x y -> GEF (f (withEnv RealType)    x) (f (withEnv RealType)    y)
       LTI x y -> LTI (f (withEnv IntegerType) x) (f (withEnv IntegerType) y)
       LTF x y -> LTF (f (withEnv RealType)    x) (f (withEnv RealType)    y)
-      GTI x y -> GTI (f (withEnv IntegerType) x) (f (withEnv IntegerType) y)
-      GTF x y -> GTF (f (withEnv RealType)    x) (f (withEnv RealType)    y)
 
 ---------------------------------------------------------------------------------
 -- Indexed traversable instance for values
@@ -595,14 +585,8 @@ instance ITraversable ValueF  where
     Eql t mx my -> Eql t <$> mx <*> my
     NEq t mx my -> NEq t <$> mx <*> my
 
-    LEI mx my -> LEI <$> mx <*> my
-    LEF mx my -> LEF <$> mx <*> my
-    GEI mx my -> GEI <$> mx <*> my
-    GEF mx my -> GEF <$> mx <*> my
     LTI mx my -> LTI <$> mx <*> my
     LTF mx my -> LTF <$> mx <*> my
-    GTI mx my -> GTI <$> mx <*> my
-    GTF mx my -> GTF <$> mx <*> my
 
 
 instance Show (Value et) where show = pprint
@@ -611,7 +595,7 @@ data PrecString :: (Environment, FSType) -> Exp Type
 type instance Eval (PrecString et) = String -- (Int, String)
 
 pprint :: Value et -> String
-pprint = indexedFold @PrecString @Value @ValueF go
+pprint = indexedFold @PrecString @ValueF go
  where
   go :: forall et'. ValueF PrecString et' -> String
   go = \case
@@ -652,14 +636,8 @@ pprint = indexedFold @PrecString @Value @ValueF go
     Not x    -> "!" ++ x
     Eql _ x y -> binop "=" x y
     NEq _ x y -> binop "≠" x y
-    LEI x y  -> binop "≤" x y
-    LEF x y  -> binop "≤" x y
     LTI x y  -> binop "<" x y
     LTF x y  -> binop "<" x y
-    GEI x y  -> binop "≥" x y
-    GEF x y  -> binop "≥" x y
-    GTI x y  -> binop ">" x y
-    GTF x y  -> binop ">" x y
     ITE _ c x y -> unwords ["if", c, "then", x, "else", y]
     RGB r g b     -> fun "rgb" [r,g,b]
     Blend s c1 c2 -> fun "blend" [s,c1,c2]
@@ -732,4 +710,4 @@ get :: forall name env ty
        , KnownSymbol name, KnownEnvironment env)
     => TypeProxy ty
     -> Value '(env, ty)
-get ty = Fix (Var (Proxy @name) ty bindingEvidence)
+get ty = Var (Proxy @name) ty bindingEvidence

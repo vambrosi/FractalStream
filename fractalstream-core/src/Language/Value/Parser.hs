@@ -142,15 +142,15 @@ parseUntypedValueFromTokens :: [Token]
 parseUntypedValueFromTokens = parse untypedValue_
 
 untypedValue_ :: Parser U.Value
-untypedValue_ = parsePrio (valueRules U.Fix)
+untypedValue_ = parsePrio (valueRules id)
 
 ---------------------------------------------------------------------------------
 -- Rules
 ---------------------------------------------------------------------------------
 
 valueRules :: forall value
-            . (U.ValueF value -> value)
-           -> PriorityParser value
+            . (U.ValueF value -> Eval value)
+           -> PriorityParser (Eval value)
 valueRules inj = mconcat rules
   where
     op2 c x y = inj (c x y)
@@ -160,7 +160,7 @@ valueRules inj = mconcat rules
     color = inj . U.ConstColor
     twoThirds = inj (U.ConstF 0.66)
 
-    rules :: [PriorityParser value]
+    rules :: [PriorityParser (Eval value)]
     rules =
       ---------------------------------------------------------------------
       -- Boolean operators
@@ -173,8 +173,8 @@ valueRules inj = mconcat rules
       , leveledParser 2800 $ \ParserStep{..} -> dbg "boolean operator" (do
           lhs <- pNext
           (do
-              opTok <- satisfy (`Map.member` bops)
-              inj <$> (bops Map.! opTok) lhs <$> pNext) <|> pure lhs
+              opTok <- satisfy (`Map.member` bops inj)
+              inj <$> (bops inj Map.! opTok) lhs <$> pNext) <|> pure lhs
         ) <?> "comparison"
       , prefixOp Not_   2602 "boolean negation" (op1 U.Not)
 
@@ -350,8 +350,13 @@ functions = Map.fromList
   , ("re", U.Re), ("im", U.Im), ("arg", U.Arg)
   ]
 
-bops :: forall value. Map Token (value -> value -> U.ValueF value)
-bops = Map.fromList
-  [ (GreaterThan, U.Cmp U.GT), (GreaterThanOrEqual, U.Cmp U.GE)
-  , (LessThan, U.Cmp U.LT), (LessThanOrEqual, U.Cmp U.LE)
-  , (Equal, U.Eql), (NotEqual, U.NEq) ]
+bops :: forall value
+      . (U.ValueF value -> Eval value)
+     -> Map Token (Eval value -> Eval value -> U.ValueF value)
+bops inj = Map.fromList
+  [ (GreaterThan, \x y -> U.LT y x)
+  , (GreaterThanOrEqual, \x y -> U.Not (inj $ U.LT x y))
+  , (LessThan, \x y -> U.LT x y)
+  , (LessThanOrEqual, \x y -> U.Not (inj $ U.LT y x))
+  , (Equal, U.Eql)
+  , (NotEqual, U.NEq) ]

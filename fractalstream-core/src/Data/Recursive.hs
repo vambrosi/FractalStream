@@ -1,98 +1,85 @@
-{-# language UndecidableInstances #-}
+{-# language UndecidableInstances, PolyKinds #-}
 module Data.Recursive
-  ( Fix(..)
-  , Fix1(..)
-  , Fixpoint(..)
+  ( FIX
+  , EFunctor(..)
+  , ETraversable(..)
   , fold
   , foldM
   , unfold
   , unfoldM
   , AnnF(..)
   , type Ann
-  , pattern Ann
   , annotation
   ) where
 
-import Data.Coerce
 import Control.Monad hiding (foldM)
-import Data.Bifunctor
 import Data.Kind
+import Fcf (Eval, Exp)
+
 
 ---------------------------------------------------------------------------------
--- Fixpoint class
+-- Expression functors: functors that take an Exp Type instead of a Type
 ---------------------------------------------------------------------------------
 
-class Functor f => Fixpoint t f | t -> f where
-  unroll :: t -> f t
-  default unroll :: Coercible t (f t) => t -> f t
-  unroll = coerce
-  reroll :: f t -> t
-  default reroll :: Coercible t (f t) => f t -> t
-  reroll = coerce
+class EFunctor (f :: Exp Type -> Type) where
+  emap :: forall a b. (Eval a -> Eval b) -> f a -> f b
+
+class EFunctor f => ETraversable f where
+  etraverse :: forall a b m
+             . Applicative m
+            => (Eval a -> m (Eval b))
+            -> f a
+            -> m (f b)
 
 ---------------------------------------------------------------------------------
--- Fixpoint of a functor
+-- Fixpoint of an expression functor
 ---------------------------------------------------------------------------------
 
-newtype Fix f = Fix (f (Fix f))
-
-deriving instance Eq   (f (Fix f)) => Eq   (Fix f)
-deriving instance Ord  (f (Fix f)) => Ord  (Fix f)
-deriving instance Show (f (Fix f)) => Show (Fix f)
-
-instance Functor f => Fixpoint (Fix f) f
-
----------------------------------------------------------------------------------
--- Fixpoint of a bifunctor, which will itself be a functor
----------------------------------------------------------------------------------
-
-newtype Fix1 f a = Fix1 (f a (Fix1 f a))
-
-deriving instance Eq   (f a (Fix1 f a)) => Eq   (Fix1 f a)
-deriving instance Ord  (f a (Fix1 f a)) => Ord  (Fix1 f a)
-deriving instance Show (f a (Fix1 f a)) => Show (Fix1 f a)
-
-instance Bifunctor f => Functor (Fix1 f) where
-  fmap f = \(Fix1 x) -> Fix1 (bimap f (fmap f) x)
-
-instance Functor (f a) => Fixpoint (Fix1 f a) (f a)
+data FIX :: (Exp Type -> Type) -> Exp Type
+type instance Eval (FIX f) = f (FIX f)
 
 ---------------------------------------------------------------------------------
 -- Annotated recursive types
 ---------------------------------------------------------------------------------
 
--- | If @t@ is a recursive type that can be represented as
--- a fixpoint of the functor @f@, then @Ann f a@ represents
--- @t@ with each node annotated with a value of type @a@.
-type Ann f = Fix1 (AnnF f)
+data AnnF (f :: Exp Type -> Type) (a :: Type) (x :: Exp Type) = Ann a (f x)
 
-data AnnF f a x = AnnF a (f x)
-  deriving (Show, Functor, Foldable, Traversable)
-
-pattern Ann :: forall (f :: Type -> Type) a
-             . a
-            -> f (Fix1 (AnnF f) a)
-            -> Fix1 (AnnF f) a
-pattern Ann a v = Fix1 (AnnF a v)
-{-# COMPLETE Ann #-}
+type Ann f a = Eval (FIX (AnnF f a))
 
 annotation :: Ann f a -> a
 annotation (Ann a _) = a
+
+instance EFunctor f => EFunctor (AnnF f a) where
+  emap f (Ann a v) = Ann a (emap f v)
+
+instance ETraversable f => ETraversable (AnnF f a) where
+  etraverse f (Ann a v) = Ann a <$> etraverse f v
 
 ---------------------------------------------------------------------------------
 -- Folds and unfolds
 ---------------------------------------------------------------------------------
 
-fold :: forall t f a. Fixpoint t f => (f a -> a) -> t -> a
-fold f = let go = f . fmap go . unroll in go
+fold :: forall a f
+      . EFunctor f
+     => (f a -> Eval a)
+     -> f (FIX f)
+     -> Eval a
+fold f = let go = f . emap go in go
 
-foldM :: forall t f a m. (Fixpoint t f, Traversable f, Monad m)
-      => (f a -> m a) -> t -> m a
-foldM f = let go = (f <=< traverse go) . unroll in go
+foldM :: forall a f m. (ETraversable f, Monad m)
+      => (f a -> m (Eval a))
+      -> f (FIX f)
+      -> m (Eval a)
+foldM f = let go = (f <=< etraverse go) in go
 
-unfold :: forall t f a. Fixpoint t f => (a -> f a) -> a -> t
-unfold f = let go = reroll . fmap go . f in go
+unfold :: forall a f. EFunctor f
+       => (Eval a -> f a)
+       -> Eval a
+       -> f (FIX f)
+unfold f = let go = emap go . f in go
 
-unfoldM :: forall t f a m. (Fixpoint t f, Traversable f, Monad m)
-        => (a -> m (f a)) -> a -> m t
-unfoldM f = let go = fmap reroll . join . fmap (traverse go) . f in go
+unfoldM :: forall a f m. (ETraversable f, Monad m)
+        => (Eval a -> m (f a))
+        -> Eval a
+        -> m (f (FIX f))
+unfoldM f = let go = join . fmap (etraverse go) . f in go

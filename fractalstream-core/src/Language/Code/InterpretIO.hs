@@ -20,7 +20,7 @@ import Data.Indexed.Functor
 import Data.IORef
 import Control.Monad.State
 import GHC.TypeLits
-import Fcf (Exp, Eval, Pure1)
+import Fcf (Exp, Eval)
 import Data.Kind
 
 data ScalarIORefM :: (Environment, FSType) -> Exp Type
@@ -112,7 +112,7 @@ interpretToIO_ :: forall effs env t s
                -> Code effs env t
                -> StateT (Context IORefTypeOfBinding env, s) IO (HaskellType t)
 interpretToIO_ handlers =
-  indexedFold @(ScalarIORefMWith s) @(Fix (CodeF effs (Pure1 Value))) @(CodeF effs (Pure1 Value)) $ \case
+  indexedFold @(ScalarIORefMWith s) $ \case
     Let pf name vt v _ body -> recallIsAbsent (absentInTail pf) $ do
       (ctxRef, s) <- get
       value <- eval v
