@@ -74,6 +74,10 @@ jobs:
         key: ${{ runner.os }}-cache-dot-stack
         path: ~/.stack
 
+    - name: Apply patch
+      run: |
+        git apply patches/shared-llvm.patch
+
     - if: ${{ steps.cache-dot-stack.outputs.cache-hit != 'true' }}
       name: Build Haskell dependencies
       run: |
@@ -83,6 +87,5 @@ jobs:
     - if: 0 == 1
       name: Build FractalStream
       run: |
-        git apply patches/shared-llvm.patch
         cd fractalstream-ui-wx
         stack build

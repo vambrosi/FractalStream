@@ -17,11 +17,11 @@ data TProxy (ty :: T) where
   IsBool :: TProxy 'BoolT
 
 -----------------------------------------------------
--- An indexed functor describing the same tree.
--- This is built mechanically from the an Ast type
--- by adding a type parameter `ast` of kind T -> Exp Type,
--- where T is the index type, and replacing all
--- recursive uses of Ast with `ast`.
+-- An indexed functor describing an expression AST.
+-- This is built mechanically from the a normal recursive
+-- Ast type by adding a type parameter `ast` of kind
+-- T -> Exp Type, where T is the index type, and replacing
+-- all recursive uses of `Ast i` with `Eval (ast i)`.
 -----------------------------------------------------
 
 type Ast = AstF (FIX AstF)
