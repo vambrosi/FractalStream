@@ -43,7 +43,7 @@ buildValue :: forall env t' m
            => (String -> Operand)
            -> Value '(env, t')
            -> ReaderT (Context OperandPtr env) m (Op t')
-buildValue getExtern = indexedFold @(CtxOp m) @(Fix ValueF) @ValueF go'
+buildValue getExtern = indexedFold go'
   where
     go' :: forall et. ValueF (CtxOp m) et -> Eval (CtxOp m et)
     go' x = case toIndex x of { EnvType _ -> go x }
@@ -220,22 +220,10 @@ buildValue getExtern = indexedFold @(CtxOp m) @(Fix ValueF) @ValueF go'
 
       NEq {} -> error "unhandled NEq type"
 
-      LEI x y -> ((,) <$> x <*> y) >>= \case
-        (IntegerOp lhs, IntegerOp rhs) -> BooleanOp <$> icmp P.SLE lhs rhs
       LTI x y -> ((,) <$> x <*> y) >>= \case
          (IntegerOp lhs, IntegerOp rhs) -> BooleanOp <$> icmp P.SLT lhs rhs
-      GEI x y -> ((,) <$> x <*> y) >>= \case
-         (IntegerOp lhs, IntegerOp rhs) -> BooleanOp <$> icmp P.SGE lhs rhs
-      GTI x y -> ((,) <$> x <*> y) >>= \case
-         (IntegerOp lhs, IntegerOp rhs) -> BooleanOp <$> icmp P.SGT lhs rhs
-      LEF x y -> ((,) <$> x <*> y) >>= \case
-         (RealOp lhs, RealOp rhs) -> BooleanOp <$> fcmp P.OLE lhs rhs
       LTF x y -> ((,) <$> x <*> y) >>= \case
          (RealOp lhs, RealOp rhs) -> BooleanOp <$> fcmp P.OLT lhs rhs
-      GEF x y -> ((,) <$> x <*> y) >>= \case
-         (RealOp lhs, RealOp rhs) -> BooleanOp <$> fcmp P.OGE lhs rhs
-      GTF x y -> ((,) <$> x <*> y) >>= \case
-         (RealOp lhs, RealOp rhs) -> BooleanOp <$> fcmp P.OGT lhs rhs
 
       AddI x y -> ((,) <$> x <*> y) >>= \case
          (IntegerOp lhs, IntegerOp rhs) -> IntegerOp <$> add lhs rhs

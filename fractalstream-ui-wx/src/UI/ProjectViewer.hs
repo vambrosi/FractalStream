@@ -45,7 +45,7 @@ import qualified Data.Set as Set
 import GHC.TypeLits
 import Data.Kind
 import Data.Indexed.Functor
-import Fcf (Exp, Eval, Pure1)
+import Fcf (Exp, Eval)
 
 viewProject :: (forall a. Frame a -> [Menu ()] -> IO ())
             -> UI
@@ -463,7 +463,8 @@ makeWxComplexViewer
     -- that variable changes.
     let usedVars = execState (indexedFoldM gatherUsedVarsInCode cvCode') Set.empty
 
-        gatherUsedVarsInCode :: CodeF '[] (Pure1 Value) Unit et -> State (Set String) ()
+        gatherUsedVarsInCode :: CodeF '[] (FIX ValueF) Unit et
+                             -> State (Set String) ()
         gatherUsedVarsInCode = \case
           Let _ name _ v _ _ -> do
             modify' (Set.delete (symbolVal name))

@@ -25,7 +25,7 @@ import Control.Monad.Fix
 import Language.Type
 import Language.Code
 import Data.Indexed.Functor
-import Fcf (Exp, Eval, Pure1)
+import Fcf (Exp, Eval)
 import GHC.TypeLits
 import Data.String
 
@@ -422,7 +422,7 @@ compileCode :: forall m env t
             => (String -> Operand)
             -> Code '[] env t
             -> ReaderT (Context OperandPtr env) m (Op t)
-compileCode getExtern = indexedFold @(CtxOp m) @(Fix (CodeF '[] (Pure1 Value))) @(CodeF '[] (Pure1 Value)) $ \case
+compileCode getExtern = indexedFold @(CtxOp m) @(CodeF '[] (FIX ValueF)) $ \case
 
   Block _ body end -> sequence_ body >> end
 
