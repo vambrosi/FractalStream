@@ -79,8 +79,8 @@ jobs:
         cd fractalstream-core
         stack build --only-snapshot
 
-    - if: 0 == 1
-      name: Build FractalStream
+    - name: Build FractalStream
       run: |
+        git apply patches/shared-llvm.patch
         cd fractalstream-ui-wx
         stack build
