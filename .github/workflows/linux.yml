@@ -84,8 +84,7 @@ jobs:
         cd fractalstream-ui-wx
         stack build --only-snapshot
 
-    - if: 0 == 1
-      name: Build FractalStream
+    - name: Build FractalStream
       run: |
         cd fractalstream-ui-wx
         stack build
