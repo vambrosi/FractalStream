@@ -422,7 +422,7 @@ compileCode :: forall m env t
             => (String -> Operand)
             -> Code '[] env t
             -> ReaderT (Context OperandPtr env) m (Op t)
-compileCode getExtern = indexedFold @(CtxOp m) @(CodeF '[] (FIX ValueF)) $ \case
+compileCode getExtern = indexedFold @(CtxOp m) @(CodeF '[]) $ \case
 
   Block _ body end -> sequence_ body >> end
 

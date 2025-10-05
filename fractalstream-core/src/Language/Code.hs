@@ -6,7 +6,6 @@ module Language.Code
   , Code
   , CodeF(..)
   , SomeCode(..)
-  , mapValues
   , transformValues
   , set
   , let_
@@ -27,7 +26,7 @@ data SomeCode where
 ---------------------------------------------------------------------------------
 
 --type Code effs env t = Fix (CodeF effs (Pure1 Value)) '(env, t)
-type Code effs env t = CodeF effs (FIX ValueF) (FIX (CodeF effs (FIX ValueF))) '(env, t)
+type Code effs env t = CodeF effs (FIX (CodeF effs)) '(env, t)
 
 instance Show (Code effs env t) where show _ = "<code>"
 
@@ -36,11 +35,10 @@ instance Show (Code effs env t) where show _ = "<code>"
 -- we need to use both the environment *and* the type as indices
 -- in order to make an indexed functor.
 data CodeF (effs :: [Effect])
-           (value :: (Environment, FSType) -> Exp Type)
            (code :: (Environment, FSType) -> Exp Type)
            (et :: (Environment, FSType)) where
 
-  Let :: forall name ty env result effs code value
+  Let :: forall name ty env result effs code
        . (KnownSymbol name, KnownEnvironment env)
       => NameIsPresent name ty ( '(name, ty) ': env)
       -> Proxy (name :: Symbol)
@@ -48,77 +46,77 @@ data CodeF (effs :: [Effect])
       -> Eval (code '(env, ty))
       -> TypeProxy result
       -> Eval (code '( '(name, ty) ': env, result))
-      -> CodeF effs value code '(env, result)
+      -> CodeF effs code '(env, result)
 
-  Set :: forall name ty env effs code value
+  Set :: forall name ty env effs code
         . (KnownSymbol name, KnownEnvironment env)
        => NameIsPresent name ty env
        -> Proxy name
        -> TypeProxy ty
        -> Eval (code '(env, ty))
-       -> CodeF effs value code '(env, 'VoidT)
+       -> CodeF effs code '(env, 'VoidT)
 
   -- | Invoke another chunk of 'Code', using a copy of the environment.
   -- Variable mutations within the called code will not be reflected
   -- back in the caller.
-  Call :: forall effs env ty code value
+  Call :: forall effs env ty code
         . KnownEnvironment env
        => TypeProxy ty
        -> Eval (code '(env, ty))
-       -> CodeF effs value code '(env, ty)
+       -> CodeF effs code '(env, ty)
 
   -- | A block of statements with VoidT type, followed by a
   -- statement with any type. The type of the block is the
   -- type of the final statement.
-  Block :: forall effs env ty code value
+  Block :: forall effs env ty code
          . KnownEnvironment env
         => TypeProxy ty
         -> [Eval (code '(env, 'VoidT))]
         -> Eval (code '(env, ty))
-        -> CodeF effs value code '(env, ty)
+        -> CodeF effs code '(env, ty)
 
   -- | Lift a pure value to a bit of code
-  Pure :: forall effs env ty code value
+  Pure :: forall effs env ty code
         . KnownEnvironment env
        => TypeProxy ty
-       -> Eval (value '(env, ty))
-       -> CodeF effs value code '(env, ty)
+       -> Value '(env, ty)
+       -> CodeF effs code '(env, ty)
 
-  NoOp :: forall env effs code value
+  NoOp :: forall env effs code
         . KnownEnvironment env
-       => CodeF effs value code '(env, 'VoidT)
+       => CodeF effs code '(env, 'VoidT)
 
   -- | Do-while loop
-  DoWhile :: forall env effs code value
+  DoWhile :: forall env effs code
            . KnownEnvironment env
           => Eval (code '(env, 'BooleanT))
-          -> CodeF effs value code '(env, 'VoidT)
+          -> CodeF effs code '(env, 'VoidT)
 
   -- | If/else statement
-  IfThenElse :: forall env effs t code value
+  IfThenElse :: forall env effs t code
        . KnownEnvironment env
       => TypeProxy t
-      -> Eval (value '(env, 'BooleanT))
+      -> Value '(env, 'BooleanT) -- could be (Eval code '(env, 'BooleanT))?
       -> Eval (code '(env, t))
       -> Eval (code '(env, t))
-      -> CodeF effs value code '(env, t)
+      -> CodeF effs code '(env, t)
 
   -- | Embedded effect sub-language
-  Effect :: forall env effs eff t code value
+  Effect :: forall env effs eff t code
           . (HasEffect eff effs, KnownEnvironment env)
          => Proxy eff
          -> Proxy env
          -> TypeProxy t
          -> eff code '(env, t)
-         -> CodeF effs value code '(env, t)
+         -> CodeF effs code '(env, t)
 
 ---------------------------------------------------------------------------------
 -- Indexed functor instance for Code
 ---------------------------------------------------------------------------------
 
-instance IFunctor (CodeF eff value) where
+instance IFunctor (CodeF eff) where
 
-  type IndexProxy (CodeF eff value) = EnvTypeProxy
+  type IndexProxy (CodeF eff) = EnvTypeProxy
 
   toIndex = \case
     Let _ _ _ _ t _ -> EnvType t
@@ -133,8 +131,8 @@ instance IFunctor (CodeF eff value) where
 
   imap :: forall a b et
         . (forall et'. EnvTypeProxy et' -> Eval (a et') -> Eval (b et'))
-       -> CodeF eff value a et
-       -> CodeF eff value b et
+       -> CodeF eff a et
+       -> CodeF eff b et
   imap f x =
     let env :: EnvironmentProxy (Env et)
         env = case toIndex x of { EnvType _ -> envProxy (Proxy @(Env et)) }
@@ -164,45 +162,22 @@ instance IFunctor (CodeF eff value) where
       Effect e en t c -> Effect e en t (imap f c)
 
 ---------------------------------------------------------------------------------
--- Mapping over `value`; CodeF is an indexed bifunctor
+-- Apply an operation to the @Value@s in a @Code@
 ---------------------------------------------------------------------------------
-
-mapValues :: forall a b eff code et
-          . (forall et'. EnvTypeProxy et' -> Eval (a et') -> Eval (b et'))
-         -> CodeF eff a code et
-         -> CodeF eff b code et
-mapValues f x =
-  let env :: EnvironmentProxy (Env et)
-      env = case toIndex x of { EnvType _ -> envProxy (Proxy @(Env et)) }
-      index :: forall i. TypeProxy i -> EnvTypeProxy '(Env et, i)
-      index i = withEnvironment env (EnvType i)
-  in case x of
-      Let pf n vt cv t b -> Let pf n vt cv t b
-      Set pf n ty c -> Set pf n ty c
-      Call t c -> Call t c
-      Block t cs c -> Block t cs c
-      Pure t v -> Pure t (f (index t) v)
-      NoOp -> NoOp
-      DoWhile c -> DoWhile c
-      IfThenElse t v yes no -> IfThenElse t (f (index BooleanType) v) yes no
-      Effect e en t c -> Effect e en t c
 
 transformValues :: forall eff env result
                 . (forall et. Value et -> Value et)
                -> Code eff env result
                -> Code eff env result
-transformValues f = indexedFold phi
-  where
-    phi :: forall et
-         . CodeF eff (FIX ValueF) (FIX (CodeF eff (FIX ValueF))) et
-        -> CodeF eff (FIX ValueF) (FIX (CodeF eff (FIX ValueF))) et
-    phi x = mapValues (const f) x
+transformValues f = indexedFold @(FIX (CodeF eff)) $ \case
+  Pure t v -> Pure t (f v)
+  other    -> other
 
 ---------------------------------------------------------------------------------
 -- Indexed traversable instance
 ---------------------------------------------------------------------------------
 
-instance ITraversable (CodeF effs value) where
+instance ITraversable (CodeF effs) where
   isequence = \case
     Let pf n vt cv t c -> Let pf n vt <$> cv <*> pure t <*> c
     Set pf n ty c -> Set pf n ty <$> c

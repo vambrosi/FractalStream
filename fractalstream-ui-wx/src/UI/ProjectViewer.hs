@@ -463,7 +463,7 @@ makeWxComplexViewer
     -- that variable changes.
     let usedVars = execState (indexedFoldM gatherUsedVarsInCode cvCode') Set.empty
 
-        gatherUsedVarsInCode :: CodeF '[] (FIX ValueF) Unit et
+        gatherUsedVarsInCode :: CodeF '[] Unit et
                              -> State (Set String) ()
         gatherUsedVarsInCode = \case
           Let _ name _ _ _ _ -> modify' (Set.delete (symbolVal name))
