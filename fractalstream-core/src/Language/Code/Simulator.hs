@@ -44,15 +44,8 @@ simulate :: forall effs env t s
          -> Code effs env t
          -> State (Context HaskellTypeOfBinding env, s) (HaskellType t)
 simulate handlers = indexedFold @(HaskellTypeM s) $ \case
-  Let pf name vt v _ body -> recallIsAbsent (absentInTail pf) $ do
-    (ctx, s) <- get
-    value <- eval v
-    let ctx' = Bind name vt value ctx
-        (result, (Bind _ _ _ ctx'', s'')) = runState body (ctx', s)
-    put (ctx'', s'')
-    pure result
 
-  LetBind pf name tv vc _tr body -> recallIsAbsent (absentInTail pf) $ do
+  Let pf name tv vc _tr body -> recallIsAbsent (absentInTail pf) $ do
     (ctx, s) <- get
     value <- vc
     let ctx' = Bind name tv value ctx
@@ -60,11 +53,7 @@ simulate handlers = indexedFold @(HaskellTypeM s) $ \case
     put (ctx'', s'')
     pure result
 
-  Set pf name ty v -> do
-    result <- eval v
-    update pf name ty result
-
-  SetBind pf name tv vc -> do
+  Set pf name tv vc -> do
     result <- vc
     update pf name tv result
 

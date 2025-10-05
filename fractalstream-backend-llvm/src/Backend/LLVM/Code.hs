@@ -430,27 +430,13 @@ compileCode getExtern = indexedFold @(CtxOp m) @(CodeF '[] (FIX ValueF)) $ \case
 
   NoOp -> pure VoidOp
 
-  Set pf _ t v -> do
-    x <- value_ getExtern v
-    ctx <- ask
-    storeOperand x (withKnownType t (getBinding ctx pf))
-    pure VoidOp
-
-  SetBind pf _ t body -> do
+  Set pf _ t body -> do
     x <- body
     ctx <- ask
     storeOperand x (withKnownType t (getBinding ctx pf))
     pure VoidOp
 
-  Let pf name t v _ body -> do
-    x <- value_ getExtern v
-    ptr <- allocaOp t
-    storeOperand x ptr
-    recallIsAbsent (absentInTail pf) $ do
-      ctx <- Bind name t ptr <$> ask
-      lift (runReaderT body ctx)
-
-  LetBind pf name t val _ body -> do
+  Let pf name t val _ body -> do
     x <- val
     ptr <- allocaOp t
     storeOperand x ptr

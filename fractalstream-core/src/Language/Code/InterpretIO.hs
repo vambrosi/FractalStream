@@ -113,14 +113,8 @@ interpretToIO_ :: forall effs env t s
                -> StateT (Context IORefTypeOfBinding env, s) IO (HaskellType t)
 interpretToIO_ handlers =
   indexedFold @(ScalarIORefMWith s) $ \case
-    Let pf name vt v _ body -> recallIsAbsent (absentInTail pf) $ do
-      (ctxRef, s) <- get
-      value <- eval v
-      valueRef <- lift (newIORef value)
-      let ctxRef' = Bind name vt valueRef ctxRef
-      lift (evalStateT body (ctxRef', s))
 
-    LetBind pf name tv vc _ body -> recallIsAbsent (absentInTail pf) $ do
+    Let pf name tv vc _ body -> recallIsAbsent (absentInTail pf) $ do
       (ctxRef, _) <- get
       value <- vc
       valueRef <- lift (newIORef value)
@@ -128,11 +122,7 @@ interpretToIO_ handlers =
       s <- snd <$> get
       lift (evalStateT body (ctxRef', s))
 
-    Set pf name ty v -> do
-      value <- eval v
-      update pf name ty value
-
-    SetBind pf name tv vc -> do
+    Set pf name tv vc -> do
       value <- vc
       update pf name tv value
 

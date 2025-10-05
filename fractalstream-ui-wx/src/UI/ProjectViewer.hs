@@ -466,12 +466,8 @@ makeWxComplexViewer
         gatherUsedVarsInCode :: CodeF '[] (FIX ValueF) Unit et
                              -> State (Set String) ()
         gatherUsedVarsInCode = \case
-          Let _ name _ v _ _ -> do
-            modify' (Set.delete (symbolVal name))
-            gatherUsedVars v
-          LetBind _ name _ _ _ _ -> modify' (Set.delete (symbolVal name))
-          Set _ _ _ v -> gatherUsedVars v
-          SetBind{} -> pure ()
+          Let _ name _ _ _ _ -> modify' (Set.delete (symbolVal name))
+          Set{} -> pure ()
           Call{} -> pure ()
           Block{} -> pure ()
           Pure _ v -> gatherUsedVars v

@@ -228,7 +228,7 @@ pSet effs env splices = dbg "set" $ do
         Absent' _ -> mzero
         Found' t pf -> do
           v <- nest (parseValueFromTokens env splices t toks)
-          withEnvironment env (pure (Set pf name t v))
+          withEnvironment env (pure (Set pf name t (Pure t v)))
 
   pBind n = do
     -- Figure out what type the RHS should have, and try to parse some
@@ -238,7 +238,7 @@ pSet effs env splices = dbg "set" $ do
         Absent' _ -> mzero
         Found' t pf -> do
           code <- pCode effs env splices t
-          withEnvironment env (pure (SetBind pf name t code))
+          withEnvironment env (pure (Set pf name t code))
 
 -- | Variable initialization
 pVar :: forall effs env splices t
@@ -283,7 +283,7 @@ pVarValue eps env splices t pf name vt = do
     -- peek at the next token, which should be a dedent; we should have parsed the
     -- remainder of the current scope's block.
     lookAhead (tok_ Dedent)
-    pure (Let pf' name vt v t (Block t body final))
+    pure (Let pf' name vt (Pure vt v) t (Block t body final))
 
 pVarCode  :: forall effs env splices t ty name
            . KnownSymbol name
@@ -309,7 +309,7 @@ pVarCode eps env splices t pf name vt = do
     -- peek at the next token, which should be a dedent; we should have parsed the
     -- remainder of the current scope's block.
     lookAhead (tok_ Dedent)
-    pure (LetBind pf' name vt c t (Block t body final))
+    pure (Let pf' name vt c t (Block t body final))
 
 
 -- | Parse type name
