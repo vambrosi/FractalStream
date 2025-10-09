@@ -25,9 +25,9 @@ spec = do
   describe "when parsing values" $ do
 
     let eval = fmap (`evaluate` EmptyContext)
-        parseI = eval . parseValue EmptyEnvProxy IntegerType
-        parseF = eval . parseValue EmptyEnvProxy RealType
-        parseB = eval . parseValue EmptyEnvProxy BooleanType
+        parseI = eval . parseValue endOfDecls IntegerType
+        parseF = eval . parseValue endOfDecls RealType
+        parseB = eval . parseValue endOfDecls BooleanType
 
     it "can parse simple arithmetic expressions" $ do
       let parses1 = parseI "(1 + 2) *3+ 4"
@@ -134,18 +134,18 @@ spec = do
 
   describe "when parsing parameterized values" $ do
 
-    let env = BindingProxy (Proxy @"x") IntegerType EmptyEnvProxy
+    let env = declare @"x" IntegerType $ endOfDecls
         ctx x = Bind (Proxy @"x") IntegerType x EmptyContext
         parseI1 s x = fmap (`evaluate` (ctx x)) (parseValue env IntegerType s)
-        envC = BindingProxy (Proxy @"x") RealType
-             $ BindingProxy (Proxy @"y") RealType
-             $ EmptyEnvProxy
+        envC = declare @"x" RealType
+             $ declare @"y" RealType
+             $ endOfDecls
         ctxC x y = Bind (Proxy @"x") RealType x
                  $ Bind (Proxy @"y") RealType y
                  $ EmptyContext
-        envC' = BindingProxy (Proxy @"z") ComplexType
-              $ BindingProxy (Proxy @"r") RealType
-              $ EmptyEnvProxy
+        envC' = declare @"z" ComplexType
+              $ declare @"r" RealType
+              $ endOfDecls
         ctxC' z r = Bind (Proxy @"z") ComplexType z
                   $ Bind (Proxy @"r") RealType r
                   $ EmptyContext
@@ -156,11 +156,13 @@ spec = do
       let parses1 = parseI1 "(1 + x) *3 + 4"
           parses2 = parseI1 "x x + 1"
           parses3 = parseBC "re(z) re(z) + im(z) im(z) < r^2"
+          parses4 = parseI1 "x² + 1"
       parses1 0    `shouldBe` Right 7
       parses1 (-1) `shouldBe` Right 4
       parses2 2    `shouldBe` Right 5
       parses3 (1 :+ 2) 2 `shouldBe` Right False
       parses3 (1 :+ 2) 3 `shouldBe` Right True
+      parses4 3 `shouldBe` Right 10
 
     it "will not parse an unbound variable" $ do
       let parses1 = parseI1 "(1 + y) *3 + 4"
@@ -179,10 +181,10 @@ spec = do
       parses3 1 2 `shouldBe` Right (1 :+ 2)
 
   describe "when parsing boolean-valued operations" $ do
-    let env = BindingProxy (Proxy @"x") IntegerType
-            $ BindingProxy (Proxy @"y") RealType
-            $ BindingProxy (Proxy @"z") ComplexType
-            $ EmptyEnvProxy
+    let env = declare @"x" IntegerType
+            $ declare @"y" RealType
+            $ declare @"z" ComplexType
+            $ endOfDecls
         ctx x y z = Bind (Proxy @"x") IntegerType x
                   $ Bind (Proxy @"y") RealType y
                   $ Bind (Proxy @"z") ComplexType z

@@ -37,7 +37,8 @@ import Data.Ord
 import Text.Earley
 
 ident :: Char -> Bool
-ident c = isAlphaNum c || c == '_'
+ident c = (isAlphaNum c && not (c `elem` superscripts) && (c /= '⁻'))
+          || c == '_'
 
 opTokens :: [(String, Token)]
 opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
@@ -130,7 +131,7 @@ tokenize = \case
        -> tok : tokenize cs'
 
   -- Tokenize identifiers
-  cs@(c:_) | isAlpha c ->
+  cs@(c:_) | isAlpha c && not (c `elem` superscripts) && (c /= '⁻') ->
                let ds = takeWhile ident cs
                    cs' = dropWhile ident cs
                    tok = case Map.lookup ds wordlikeTokens of
