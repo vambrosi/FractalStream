@@ -15,7 +15,6 @@ on:
       notarize:
         description: 'Submit the signed app bundle to the Apple notary service?'
         required: true
-        default: 'true'
         type: boolean
 
 jobs:
@@ -221,8 +220,8 @@ jobs:
         # We finally codesign our app bundle, specifying the Hardened runtime option
         /usr/bin/codesign --force -s "$MACOS_CERTIFICATE_NAME" --options runtime --entitlements macos/Entitlements.plist FractalStream.app -v
 
-    - if: ${{ inputs.notarize == 'true' }}
-      name: "Notarize app bundle"
+    - if: ${{ inputs.notarize }}
+      name: Notarize app bundle
       env:
         PROD_MACOS_NOTARIZATION_APPLE_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_APPLE_ID }}
         PROD_MACOS_NOTARIZATION_TEAM_ID: ${{ secrets.PROD_MACOS_NOTARIZATION_TEAM_ID }}
