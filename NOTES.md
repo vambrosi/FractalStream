@@ -146,14 +146,14 @@ The grammar of values and commands is mostly applicative, but does have
 some monadic aspects; for example, an incorrectly-typed value should cause
 the parse to fail, but the type of a value may depend on previous parses
 (for more on the difference between applicative and monadic parsers, see
-[this stackoverflow answer][https://stackoverflow.com/a/7863380]).
+[this stackoverflow answer](https://stackoverflow.com/a/7863380)).
 
 We use a trick to split the simple applicative grammar of values and commands
 out from the more monadic behavior of typechecking and type inference. The
-grammars are defined in a straightforward applicative style using the [Text.Earley][https://hackage.haskell.org/package/Earley-0.13.0.1/docs/Text-Earley.html] package, but instead of the parser
+grammars are defined in a straightforward applicative style using the [Text.Earley](https://hackage.haskell.org/package/Earley-0.13.0.1/docs/Text-Earley.html) package, but instead of the parser
 producing values of type `Value '(env,ty)`, they effectively produce polymorphic functions
 of type `forall env ty. KnownEnvironment env => TypeProxy ty -> M (Value '(env, ty))`
-where `M` is some monad that allows for failure and supports [`(<|>)`][https://hoogle.haskell.org/?hoogle=(%3C%7C%3E)]. This means that the first, applicative phase can succeed and then we can attempt
+where `M` is some monad that allows for failure and supports [`(<|>)`](https://hoogle.haskell.org/?hoogle=(%3C%7C%3E)). This means that the first, applicative phase can succeed and then we can attempt
 to evaluate the resulting function at different types.
 
 This turned out to be a much cleaner solution that using a monadic parser to directly
