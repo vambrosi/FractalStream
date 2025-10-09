@@ -14,7 +14,8 @@ on:
           - 'build-dynamic'
       notarize:
         description: 'Submit the signed app bundle to the Apple notary service?'
-        required: false
+        required: true
+        default: 'true'
         type: boolean
 
 jobs:
