@@ -1,11 +1,24 @@
 # FractalStream scripting language
 
+FractalStream accepts both *expressions* and *scripts* in different
+parts of the program. *Expressions* represent values of various types,
+while *scripts* represent code that FractalStream should execute
+step-by-step. For example, `z² + C` is an expression, but
+
+```
+z ⭠ z² + C
+```
+
+is a very simple script that tells FractalStream to update the value of
+`z` to `z² + C`.
+
 ## Expressions
 
 ### Arithmetic expressions
 
 The usual arithmetic operators `+`, `-`, `*` (multiplication), `/`, and `^` (exponentiation) are available for real and complex types. With the exception of
-`/`, these are also available for integer types.
+`/`, these are also available for integer types. For integer division,
+use `//` instead.
 
 ### Comparisons
 

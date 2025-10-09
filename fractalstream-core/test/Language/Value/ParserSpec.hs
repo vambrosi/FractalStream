@@ -35,11 +35,13 @@ spec = do
           parses3 = parseI "5 - 3"
           parses4 = parseI "-17"
           parses5 = parseI "-2 * -21"
+          parses6 = parseI "6 // 2"
       parses1 `shouldBe` Right 13
       parses2 `shouldBe` Right 13.5
       parses3 `shouldBe` Right 2
       parses4 `shouldBe` Right (-17)
       parses5 `shouldBe` Right 42
+      parses6 `shouldBe` Right 3
 
     it "can parse tuples" $ do
       let ty = PairType IntegerType IntegerType

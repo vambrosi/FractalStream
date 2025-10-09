@@ -149,6 +149,7 @@ valueGrammar splices = mdo
     , mkMul <$> concatenatedFunAps <*> funAp
     , mkMul <$> concatenatedAtoms <*> noFunPower
     , mkDiv <$> (mulOrDiv <* token Divide) <*> negated
+    , mkIDiv <$> (mulOrDiv <* token IntegerDivide) <*> negated
     , negated
     ]
 
@@ -364,7 +365,7 @@ mkArith op makeI makeF makeC lhs rhs = TypedValue $ \ty -> case ty of
              <|> (makeC <$> atType lhs ComplexType <*> atType rhs ComplexType)
   _ -> typeError ty op "numeric"
 
-mkAdd, mkSub, mkMul, mkDiv, mkPow :: TypedValue -> TypedValue -> TypedValue
+mkAdd, mkSub, mkMul, mkDiv, mkIDiv, mkPow :: TypedValue -> TypedValue -> TypedValue
 
 mkAdd = mkArith "+" AddI AddF AddC
 mkSub = mkArith "-" SubI SubF SubC
@@ -377,6 +378,12 @@ mkDiv lhs rhs = TypedValue $ \ty -> case ty of
   ComplexType -> (R2C <$> (DivF <$> atType lhs RealType <*> atType rhs RealType))
              <|> (DivC <$> atType lhs ComplexType <*> atType rhs ComplexType)
   _ -> typeError ty "/" "real or complex"
+
+mkIDiv lhs rhs = TypedValue $ \ty -> case ty of
+  IntegerType -> (DivI <$> atType lhs IntegerType <*> atType rhs IntegerType)
+  RealType    -> I2R <$> (DivI <$> atType lhs IntegerType <*> atType rhs IntegerType)
+  ComplexType -> R2C . I2R <$> (DivI <$> atType lhs IntegerType <*> atType rhs IntegerType)
+  _ -> typeError ty "//" "integer"
 
 mkNeg :: TypedValue -> TypedValue
 mkNeg x = TypedValue $ \ty -> case ty of
