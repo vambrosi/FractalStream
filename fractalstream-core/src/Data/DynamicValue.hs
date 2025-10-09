@@ -11,16 +11,12 @@ module Data.DynamicValue
   , SomeUIValue(..)
   ) where
 
-import Language.Type
-import qualified Language.Untyped.Value as U
+import FractalStream.Prelude
 
-import Control.Monad.IO.Class (MonadIO(..))
-import Data.Kind
+import Language.Type
+import Language.Value.Parser (TypedValue(..))
+
 import Control.Concurrent.MVar
-import Control.Monad
-import GHC.TypeLits
-import Data.Proxy
-import Fcf
 
 -- | A type constructor @f@ is @Dynamic@ when it supports
 -- impure reads and writes, and can inform listeners when its
@@ -100,5 +96,5 @@ data SomeUIExpr where
                . (KnownSymbol name)
               => Proxy name
               -> TypeProxy ty
-              -> IO U.Value
+              -> IO TypedValue
               -> SomeUIExpr

@@ -12,9 +12,7 @@ module Data.Recursive
   , annotation
   ) where
 
-import Control.Monad hiding (foldM)
-import Data.Kind
-import Fcf (Eval, Exp)
+import FractalStream.Prelude hiding (foldM)
 
 
 ---------------------------------------------------------------------------------

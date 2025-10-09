@@ -17,6 +17,8 @@ module Backend.LLVM.Operand
   , Operand
   ) where
 
+import FractalStream.Prelude
+
 import Language.Type
 import Language.Value
 
@@ -30,9 +32,6 @@ import LLVM.IRBuilder.Monad
 import LLVM.IRBuilder.Instruction
 import LLVM.IRBuilder.Constant
 import LLVM.AST.Operand hiding (local)
-
-import Control.Monad.Except
-import Fcf (Exp, Eval)
 
 data OperandPtr :: Symbol -> FSType -> Exp *
 type instance Eval (OperandPtr name t) = PtrOp t

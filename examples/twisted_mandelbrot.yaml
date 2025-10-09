@@ -7,25 +7,25 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        init z : C to 0
-        init k : Z to 0
-        loop
-          set z to f
-          init d : R to |z - twist_center|
+        z : ℂ ⭠ 0
+        k : ℤ ⭠ 0
+        while k < maxIters and not stop
+          z ⭠ f
+          d : ℝ ⭠ |z - twist_center|
           if d > r0 and d < r1 then
-            init theta : R to 2 pi (d - r0) / (r1 - r0)
-            set z to e^(i theta) (z - twist_center) + twist_center
-          set k to k + 1
-          k < maxIters and not stop
+            theta : ℝ ⭠ 2 pi (d - r0) / (r1 - r0)
+            z ⭠ 𝑒^(𝑖 theta) (z - twist_center) + twist_center
+          k ⭠ k + 1
+
         if k = maxIters then
-          black
+          output black to color
         else
-          init c1 : Color to if im(z) > 0 then blue else yellow
-          init c2 : Color to if im(z) > 0 then green else red
-          init s : R to k + 1 - (log (log (|z|^2) / 2 log (maxRadius))) / log 2
-          set s to cos (s pi / 10)
-          set s to s s
-          blend (s, c1, c2)
+          c1 : Color ⭠ if im(z) > 0 then blue else yellow
+          c2 : Color ⭠ if im(z) > 0 then green else red
+          s : ℝ ⭠ k + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
+          s ⭠ cos (s π / 10)²
+          output blend (s, c1, c2) to color
+
     tools:
       - name: "Select C"
         shortcut: s
@@ -44,25 +44,24 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        init C : C to selectedC
-        init k : Z to 0
-        loop
-          set z to f
-          init d : R to |z - twist_center|
+        C : ℂ ⭠ selectedC
+        k : ℤ ⭠ 0
+        while k < maxIters and not stop
+          z ⭠ f
+          d : ℝ ⭠ |z - twist_center|
           if d > r0 and d < r1 then
-            init theta : R to 2 pi (d - r0) / (r1 - r0)
-            set z to e^(i theta) (z - twist_center) + twist_center
-          set k to k + 1
-          k < maxIters and not stop
+            theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
+            z ⭠ 𝑒^(𝑖 theta) (z - twist_center) + twist_center
+          k ⭠ k + 1
+
         if k = maxIters then
-          black
+          output black to color
         else
-          init c1 : Color to if im(z) > 0 then blue else yellow
-          init c2 : Color to if im(z) > 0 then green else red
-          init s : R to k + 1 - (log (log (|z|^2) / 2 log (maxRadius))) / log 2
-          set s to cos (s pi / 10)
-          set s to s s
-          blend (s, c1, c2)
+          c1 : Color ⭠ if im(z) > 0 then blue else yellow
+          c2 : Color ⭠ if im(z) > 0 then green else red
+          s : ℝ ⭠ k + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
+          s ⭠ cos (s π / 10)²
+          output blend (s, c1, c2) to color
 
     tools:
       - name: Trace
@@ -73,21 +72,21 @@ viewers:
 
           - event: click-or-drag
             code: |
-              init C : C to selectedC
-              init prevZ : C to z
-              init k : Z to 0
+              C : ℂ ⭠ selectedC
+              prevZ : ℂ ⭠ z
+              k : ℤ ⭠ 0
               erase
-              loop
-                set prevZ to z
+              while k < 100
+                prevZ ⭠ z
                 draw point at z
-                set z to f
-                init d : R to |z - twist_center|
+                z ⭠ f
+                d : ℝ ⭠ |z - twist_center|
                 if d > r0 and d < r1 then
-                  init theta : R to 2 pi (d - r0) / (r1 - r0)
-                  set z to e^(i theta) (z - twist_center) + twist_center
+                  theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
+                  z ⭠ e^(𝑖 theta) (z - twist_center) + twist_center
                 draw line from z to prevZ
-                set k to k + 1
-                k < 100
+                k ⭠ k + 1
+
 
       - name: Dehn twist
         shortcut: d
@@ -106,29 +105,29 @@ viewers:
           - event: drag
             start: z0
             code: |
-              init eps : R to 5 px
+              eps : ℝ ⭠ 5 px
               if drag_target = 0 then
                 if |z0 - twist_center| < eps then
                   output 1 to drag_target
-                  set drag_target to 1
+                  drag_target ⭠ 1
 
                 else if |(|z0 - twist_center|) - r0| < eps then
                   output 2 to drag_target
-                  set drag_target to 2
+                  drag_target ⭠ 2
 
                 else if |(|z0 - twist_center|) - r1| < eps then
                   output 3 to drag_target
-                  set drag_target to 3
+                  drag_target ⭠ 3
 
               if drag_target = 1 then
                 output z to twist_center
-                set twist_center to z
+                twist_center ⭠ z
               if drag_target = 2 then
                 output |z - twist_center| to r0
-                set r0 to |z - twist_center|
+                r0 ⭠ |z - twist_center|
               if drag_target = 3 then
                 output |z - twist_center| to r1
-                set r1 to |z - twist_center|
+                r1 ⭠ |z - twist_center|
               if drag_target > 0 then
                 erase
                 use red for stroke
@@ -145,7 +144,7 @@ setup:
     - text-entry:
         label: "Iterate f(z) = "
         value: "z^2 + C"
-        type: C
+        type: ℂ
         environment:
           z: C
           C: C
@@ -161,13 +160,13 @@ setup:
         variable: stop
 
 configuration:
-  title: Configuration
+  title: ℂonfiguration
   size: 400x200
   vertical-contents:
     - text-entry:
         label: "Selected value of C:"
         value: -0.1226 + 0.7449i
-        type: C
+        type: ℂ
         variable: selectedC
     - panel:
         title: "Dehn twist"
@@ -175,31 +174,31 @@ configuration:
           - text-entry:
               label: "Center of twist:"
               value: -0.267 + 0.478i
-              type: C
+              type: ℂ
               variable: twist_center
           - horizontal-contents:
               - text-entry:
                   label: "Inner radius"
                   value: 0.2
-                  type: R
+                  type: ℝ
                   variable: r0
               - text-entry:
                   label: "Outer radius"
                   value: 0.5
-                  type: R
+                  type: ℝ
                   variable: r1
     - text-entry:
         label: "Max. iterations: "
         value: "100"
-        type: Z
+        type: ℤ
         variable: maxIters
     - text-entry:
         label: "Max. radius: "
         value: 10
-        type: R
+        type: ℝ
         variable: maxRadius
     - text-entry:
         label: "Dehn tool drag target: "
         value: "0"
-        type: Z
+        type: ℤ
         variable: drag_target

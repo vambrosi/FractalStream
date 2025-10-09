@@ -59,10 +59,12 @@ common FractalStream-common
 library
   import: FractalStream-common
   exposed-modules:
+                       FractalStream.Prelude
+                       FractalStream.Metadata
+
                        UI
 
                        Actor
-                       Actor.Viewer
                        Actor.Tool
 
                        Actor.Configuration
@@ -73,8 +75,6 @@ library
                        Actor.Event
 
                        Event
-
-                       Helper.UnionFind
 
                        Task.Concurrent
                        Task.Block
@@ -97,11 +97,6 @@ library
                        Language.Effect.Provide
                        Language.Effect.List
                        Language.Parser
-                       Language.Untyped.Value
-                       Language.Untyped.Code
-                       Language.Untyped.Infer
-                       Language.Untyped.Constraints
-                       Language.Untyped.Shape
 
                        Project
 
@@ -111,7 +106,6 @@ library
                        Data.Recursive
                        Data.DynamicValue
 
-                       Utilities
 
   build-depends:       base >=4.8 && <5,
                        random,
@@ -133,7 +127,10 @@ library
                        vector,
                        first-class-families,
                        bifunctors,
-                       Earley
+                       Earley,
+                       include-file,
+                       utf8-string,
+                       githash
   hs-source-dirs:      src
 
 test-suite spec
@@ -151,8 +148,6 @@ test-suite spec
   other-modules:      Data.Indexed.FunctorSpec
                     , Language.Value.EvaluatorSpec
                     , Language.Value.ParserSpec
-                    , Language.Untyped.ShapeSpec
-                    , Language.Untyped.CodeSpec
                     , Language.Code.ParserSpec
                     , Language.Effect.ListSpec
   build-tool-depends: hspec-discover:hspec-discover == 2.*

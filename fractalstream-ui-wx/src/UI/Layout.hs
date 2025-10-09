@@ -2,7 +2,7 @@ module UI.Layout
   ( generateWxLayout
   ) where
 
-import Control.Monad
+import FractalStream.Prelude hiding (get)
 
 import Data.Color (colorToRGB, rgbToColor)
 import Data.DynamicValue

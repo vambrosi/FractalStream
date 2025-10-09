@@ -19,33 +19,33 @@ spec = do
               $ declare @"y" RealType
               $ endOfDecls
       let prog1 = [r|
-loop
-  set x to x + 1
-  x < y
-x y
+while x < y
+  x <- x + 1
+output rgb(y / x, 0, 0) to color
 |]
       withCompiledCode env prog1 $ \f -> do
         f1 <- invoke' env RealType f 1.5 5
         f2 <- invoke' env RealType f 1.5 2
-        f1 `shouldBe` (5.5 * 5)
-        f2 `shouldBe` (2.5 * 2)
+        f1 `shouldBe` (rgbToColor (round (255 * 5 / 5.5), 0, 0))
+        f2 `shouldBe` (rgbToColor (round (255 * 2 / 2.5), 0, 0))
 
     it "can compile a basic Mandelbrot set program" $ do
-      let env = declare @"C" ComplexType
+      let env = declare @"x" RealType
+              $ declare @"y" RealType
               $ declare @"maxRadius" RealType
               $ declare @"maxIter" IntegerType
               $ endOfDecls
       let mandel = [r|
-init z : C to 0
-init k : Z to 0
-loop
-  set z to z z + C
-  set k to k + 1
-  re(z) re(z) + im(z) im(z) < maxRadius maxRadius and k < maxIter
+C : C <- x + i y
+z : C <- 0
+k : Z <- 0
+while |z|^2 < maxRadius^2 and k < maxIter
+  z <- z^2 + C
+  k <- k + 1
 if k = maxIter then
-  blue
+  output blue to color
 else
-  red|]
+  output red to color|]
 
       withCompiledCode env mandel $ \f -> do
         v1 <- invoke' env ColorType f (1 :+ 1) 10 100

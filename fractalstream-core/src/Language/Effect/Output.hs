@@ -1,35 +1,31 @@
-{-# language OverloadedStrings #-}
+{-# language OverloadedStrings, RecursiveDo #-}
 module Language.Effect.Output
   ( Output(..)
   , outputEffectParser
   ) where
+
+import FractalStream.Prelude
 
 import Language.Value
 import Language.Effect
 import Language.Parser
 import Language.Value.Parser
 import Data.Indexed.Functor
-import GHC.TypeLits
-import Fcf (Exp)
-import Data.Type.Equality ((:~:)(..))
-import Data.Kind
-
-import Debug.Trace
 
 -- | An 'Output' effect introduces a set of typed write-only variables.
-data Output (outputs :: Environment) (code :: (Environment, FSType) -> Exp Type) (et :: (Environment, FSType)) where
+data Output (outputs :: Environment) (code :: Environment -> Exp Type) (env :: Environment) where
   Output :: forall name ty outputs env code
           . (KnownSymbol name, KnownType ty)
          => EnvironmentProxy env
          -> NameIsPresent name ty outputs
          -> Proxy name
          -> Value '(env, ty)
-         -> Output outputs code '(env, 'VoidT)
+         -> Output outputs code env
 
 instance IFunctor (Output outputs) where
-  type IndexProxy (Output outputs) = EnvTypeProxy
+  type IndexProxy (Output outputs) = EnvironmentProxy
   imap _ (Output env pf name v) = Output env pf name v
-  toIndex (Output env _ _ _) = envTypeProxy env VoidType
+  toIndex (Output env _ _ _) = env
 
 instance ITraversable (Output outputs) where
   isequence (Output env pf name v) = pure (Output env pf name v)
@@ -38,24 +34,29 @@ instance ITraversable (Output outputs) where
 outputEffectParser :: forall outputs
                     . EnvironmentProxy outputs
                    -> EffectParser (Output outputs)
-outputEffectParser outputs = EffectParser (Proxy @(Output outputs)) $
-  \(et :: EnvTypeProxy et) _code -> case lemmaEnvTy @et of
-    Refl -> withEnvType et $ \env -> \case
-      VoidType -> do
-        tok_ "output"
-        -- Grab the tokens corresponding to VALUE, but don't
-        -- parse them yet. We want to peek at the type of
-        -- NAME first, to know what type to parse them at.
-        valueTokens <- manyTill anyToken (tok_ "to")
+outputEffectParser outputs = EffectParser (Proxy @(Output outputs)) $ \value _code -> mdo
 
-        Identifier n <- satisfy (\case { (Identifier _) -> True; _ -> False })
-        case someSymbolVal n of
-          SomeSymbol name -> case lookupEnv' name outputs of
-            Absent' _ -> mzero
-            Found' t pf -> do
-              traceM ("got here, t = " ++ showType t)
-              v <- nest (parseValueFromTokens env EmptyContext t valueTokens)
-              traceM ("parsed v = " ++ pprint v)
-              eol
-              pure (withKnownType t $ Output env pf name v)
-      _ -> mzero
+  output <- rule $
+    mkOutput outputs
+      <$> (tok "output" *> value)
+      <*> (tok "to" *> tokenMatch (\case { Identifier n -> Just n; _ -> Nothing })
+            <* token Newline)
+
+  pure output
+
+mkOutput :: EnvironmentProxy outputs
+         -> TypedValue
+         -> String
+         -> EnvCodeOfEffect (Output outputs) code
+mkOutput outputEnv v n = EnvCodeOfEffect $ \env ->
+  withEnvironment env $ do
+    SomeSymbol name <- pure (someSymbolVal n)
+    case lookupEnv' name outputEnv of
+      Absent' _ -> Errs $ Left ["No output variable named " ++ n ++ " is in scope here."]
+      Found' ty pf -> withKnownType ty $
+        (Output env pf name <$> atType v ty)
+
+tok :: String -> Prod r String Token ()
+tok s = tokenMatch $ \case
+  Identifier n | n == s -> Just ()
+  _ -> Nothing

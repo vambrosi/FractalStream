@@ -12,17 +12,16 @@ module Task.Block
   , progressively
   ) where
 
+import FractalStream.Prelude
+
 import Task.Concurrent
 
 import Control.Concurrent.MVar
-import Control.Monad
-import Data.Word
 import Foreign.ForeignPtr
 import Control.Concurrent
 import Data.Array.IO hiding (index)
 import System.Random
 import Data.Time (diffUTCTime, getCurrentTime)
-import Data.Complex
 import Foreign (Ptr, peekByteOff, pokeByteOff, allocaArray)
 
 type BlockComputeAction = Word32 -- ^ Block width, in subsamples

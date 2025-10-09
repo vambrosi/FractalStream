@@ -2,6 +2,8 @@ module UI.ProjectEditor
   ( editProject
   ) where
 
+import FractalStream.Prelude hiding (get)
+
 import Actor.Ensemble
 import Actor.Configuration
 import Actor.Layout
@@ -16,10 +18,8 @@ import Graphics.UI.WXCore.WxcDefs
 
 import UI.CodeEditor (codeEditor)
 
-import Control.Monad
 import qualified Data.Map as Map
 import Data.IORef
-import Data.Word
 import qualified Data.Yaml as YAML
 
 editProject :: FilePath -> IO ()
@@ -79,11 +79,11 @@ editProject yamlFile = do
                  forM_ ts $ \(t, x) -> do
                    i <- addItem tb ("Tab \"" ++ t ++ "\"")
                    go i x
-               TextBox _ (Dummy YamlVar{..}) -> do
+               TextBox _ (Dummy ConfigVar{..}) -> do
                  void $ addItem r (teName ++ " for \"" ++ varVariable ++ "\"")
-               CheckBox _ (Dummy YamlVar{..}) -> do
+               CheckBox _ (Dummy ConfigVar{..}) -> do
                  void $ addItem r ("Checkbox for \"" ++ varVariable ++ "\"")
-               ColorPicker _ (Dummy YamlVar{..}) -> do
+               ColorPicker _ (Dummy ConfigVar{..}) -> do
                  void $ addItem r ("Color picker for \"" ++ varVariable ++ "\"")
          in go r0
 

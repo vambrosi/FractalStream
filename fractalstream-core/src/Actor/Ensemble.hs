@@ -4,18 +4,18 @@ module Actor.Ensemble
   , runEnsemble
   ) where
 
+import FractalStream.Prelude
+
 import Data.DynamicValue
 import Actor.UI
 import Actor.Configuration
 import Actor.Layout
 import Actor.Viewer.Complex
 import Language.Environment
-import Language.Value.Parser (Splice)
+import Language.Value.Parser (Splices)
 
 import Data.Aeson
-import Control.Monad
-import Control.Monad.Except
-import Data.Proxy
+import qualified Data.Map as Map
 
 data Ensemble = Ensemble
   { ensembleSetup :: Maybe Configuration
@@ -44,10 +44,10 @@ runEnsemble jit UI{..} Ensemble{..} = do
   project <- newEnsemble
 
   -- Make the setup window and let it run
-  let withSplicesFromSetup :: (forall splices. Context Splice splices -> IO ())
+  let withSplicesFromSetup :: (Splices -> IO ())
                            -> IO ()
       withSplicesFromSetup k = case ensembleSetup of
-        Nothing -> k EmptyContext
+        Nothing -> k Map.empty
         Just setup -> do
           setupUI <- runExceptTIO (allocateUIExpressions (coContents setup))
           runSetup project (coTitle setup) (toSomeDynamic setupUI) (withSplices setupUI k)

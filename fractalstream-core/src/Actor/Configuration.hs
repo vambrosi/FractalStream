@@ -2,15 +2,15 @@
 module Actor.Configuration
   ( Configuration(..)
   , withConfigurationEnv
-  , withConfigurationSplices
+  , getConfigurationSplices
   ) where
 
 import Actor.Layout
 import Language.Type
 import Language.Environment
 import Language.Value.Parser
+import qualified Data.Map as Map
 
-import GHC.TypeLits
 import Data.Aeson
 
 data Configuration = Configuration
@@ -42,18 +42,38 @@ withConfigurationEnv (Just Configuration{..}) env0 k
    go ((nameStr, SomeType ty) : etc) env =
      bindInEnv nameStr ty env (go etc)
 
+getConfigurationSplices :: forall m. MonadFail m
+                        => Configuration
+                        -> m Splices
+getConfigurationSplices Configuration{..}
+    = (>>= traverse theOnly)
+    . fmap (Map.fromListWith (<>) . map (\(k,v) -> (k, [v])))
+    . mapM getSplice
+    $ allBindingVars coContents
+  where
+    theOnly :: [a] -> m a
+    theOnly = \case
+      [x] -> pure x
+      _   -> fail ("duplicate splices")
+
+    getSplice :: ConfigVar -> m (String, TypedValue)
+    getSplice (ConfigVar valStr (SomeType _ty) _envMap name) = do
+      case parseTypedValue Map.empty valStr of
+        Left e -> fail e
+        Right v -> pure (name, v)
+{-
 withConfigurationSplices :: forall m t
                           . MonadFail m
                          => Maybe Configuration
-                         -> (forall splices. Context Splice splices -> m t)
+                         -> (Splices -> m t)
                          -> m t
 withConfigurationSplices Nothing k = k EmptyContext
 withConfigurationSplices (Just Configuration{..}) k
    = go (allBindingVars coContents) EmptyEnvProxy EmptyContext
  where
-   go :: forall e. [YamlVar] -> EnvironmentProxy e -> Context Splice e ->  m t
+   go :: forall e. [ConfigVar] -> EnvironmentProxy e -> Context Splice e ->  m t
    go [] _ ctx = k ctx
-   go ((YamlVar valStr (SomeType ty) envMap nameStr) : etc) ctxEnv ctx =
+   go ((ConfigVar valStr (SomeType ty) envMap nameStr) : etc) ctxEnv ctx =
      case someSymbolVal nameStr of
        SomeSymbol name -> bindInEnv' name ty ctxEnv $ \ctxEnv' -> do
          let die e = fail $ "parse error when parsing config argument `" <>
@@ -69,3 +89,4 @@ withConfigurationSplices (Just Configuration{..}) k
                case parseValue env EmptyContext ty valStr of
                  Left e -> die e
                  Right _ -> go etc ctxEnv' (Bind name ty v ctx)
+-}

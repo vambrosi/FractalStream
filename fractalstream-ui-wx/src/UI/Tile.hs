@@ -11,6 +11,8 @@ module UI.Tile ( Tile()
                , withSynchedTileBuffer
                ) where
 
+import FractalStream.Prelude
+
 import Task.Block
 import Task.Concurrent
 import Data.Planar
@@ -20,8 +22,6 @@ import Data.Color
 import Control.Concurrent
 import Control.Concurrent.Async
 
-import Control.Monad (void)
-import Data.Word
 import Foreign.ForeignPtr
 import Foreign.Ptr
 

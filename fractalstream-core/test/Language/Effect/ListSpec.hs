@@ -4,59 +4,50 @@ module Language.Effect.ListSpec (spec) where
 
 import Test.Hspec
 
+import FractalStream.Prelude
+
 import Language.Type
 import Language.Environment
-import Language.Parser
-import Language.Value hiding (get)
 import Language.Value.Evaluator
 import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Effect.List
-import Control.Monad
-import Control.Monad.State
 import Language.Effect
 
+import qualified Data.Map as Map
 import Text.RawString.QQ
 
-runWithXY :: forall t xt yt
-           . TypeProxy t
-          -> Scalar xt
+runWithXY :: forall xt yt
+           . Scalar xt
           -> Scalar yt
           -> [Double]
           -> String
-          -> Either (Int, BadParse) (HaskellType t, [Double])
-runWithXY t (Scalar xt x) (Scalar yt y) list0 input = withKnownType xt $ withKnownType yt $
+          -> Either String [Double]
+runWithXY (Scalar xt x) (Scalar yt y) list0 input = withKnownType xt $ withKnownType yt $
   let ctx = Bind (Proxy @"x") xt x
           $ Bind (Proxy @"y") yt y
           $ EmptyContext
       getList v = do
         (_, xs) <- get
         pure (v, xs)
-  in fmap ((`evalState` (ctx, list0)) . (>>= getList) . simulate (Handler listHandler NoHandler))
-   $ parseCode (EP (ParseEff listEffectParser NoEffs)) (envProxy Proxy) EmptyContext t input
-
--- | Evaluate a value in the current environment
-eval :: forall t env s
-      . Value '(env, t)
-     -> State (Context HaskellTypeOfBinding env, s) (HaskellType t)
-eval v = do
-  ctx <- fst <$> get
-  pure (evaluate v ctx)
+  in fmap (snd . (`evalState` (ctx, list0)) . (>>= getList) . simulate (Handler listHandler NoHandler))
+   $ parseCode (EP (ParseEff listEffectParser NoEffs)) (envProxy Proxy) Map.empty input
 
 -- | Mix in list manipulation effects
 listHandler :: EffectHandler (List "test" 'RealT) (HaskellTypeM [Double])
 listHandler = Handle Proxy handle
   where
-    handle :: forall env t
+    handle :: forall env
             . EnvironmentProxy env
-           -> TypeProxy t
-           -> List "test" 'RealT (HaskellTypeM [Double]) '(env, t)
-           -> State (Context HaskellTypeOfBinding env, [Double]) (HaskellType t)
-    handle _ _ = \case
+           -> List "test" 'RealT (HaskellTypeM [Double]) env
+           -> State (Context HaskellTypeOfBinding env, [Double]) ()
+    handle _ = \case
 
-      Insert _ _ _ v -> do
+      Insert _ _ soe _ v -> do
         x <- eval v
-        modify' (\(ctx, s) -> (ctx, x : s))
+        case soe of
+          Start -> modify' (\(ctx, s) -> (ctx, x : s))
+          End   -> modify' (\(ctx, s) -> (ctx, s ++ [x]))
 
       Lookup _ _ _ pf _ _ test match miss -> recallIsAbsent pf $ do
         let test' item = do
@@ -65,8 +56,8 @@ listHandler = Handle Proxy handle
               pure (evaluate test ctx')
 
             go [] = case miss of
-                VNothing     -> pure ()
-                VJust action -> action
+                Nothing     -> pure ()
+                Just action -> action
             go (item:items) = test' item >>= \case
               False -> go items
               True  -> do -- evaluate continuation with "item" bound
@@ -78,7 +69,7 @@ listHandler = Handle Proxy handle
         (_, items) <- get
         go items
 
-      ClearList _ _ _ -> modify' (\(ctx, _) -> (ctx, []))
+      ClearList _ _ -> modify' (\(ctx, _) -> (ctx, []))
 
       Remove _ _ _ pf _ test -> recallIsAbsent pf $ do
         (ctx, items) <- get
@@ -101,36 +92,32 @@ spec = do
     it "can parse embedded list effects" $ do
 
       let p1 = [r|
-set x to 0
+x <- 0
 for each item in test do
-  set x to x + item
-set y to x
-y|]
-      runWithXY RealType (Scalar RealType 5) (Scalar RealType 7) [1,2,3,4,5] p1
-        `shouldBe` Right (15, [1,2,3,4,5])
+  x <- x + item
+y <- x
+insert y at end of test|]
+      runWithXY (Scalar RealType 5) (Scalar RealType 7) [1,2,3,4,5] p1
+        `shouldBe` Right [1,2,3,4,5,15]
 
       let p2 = [r|
-set x to 3
+x <- 3
 remove each item matching item <= x from test|]
-      runWithXY VoidType (Scalar RealType 5) (Scalar RealType 7) [1,2,3,4,5] p2
-        `shouldBe` Right ((), [4,5])
+      runWithXY (Scalar RealType 5) (Scalar RealType 7) [1,2,3,4,5] p2
+        `shouldBe` Right [4,5]
 
       let p3 = [r|
-set x to 3
+x <- 3
 if |x - y| < 2 then
   remove all items from test|]
 
-      runWithXY VoidType (Scalar RealType 1) (Scalar RealType 10) [1,2,3,4,5] p3
-        `shouldBe` Right ((), [1,2,3,4,5])
-      runWithXY VoidType (Scalar RealType 1) (Scalar RealType 4) [1,2,3,4,5] p3
-        `shouldBe` Right ((), [])
-
+      runWithXY (Scalar RealType 1) (Scalar RealType 10) [1,2,3,4,5] p3
+        `shouldBe` Right [1,2,3,4,5]
+      runWithXY (Scalar RealType 1) (Scalar RealType 4) [1,2,3,4,5] p3
+        `shouldBe` Right []
 
 {-
-with first ac matching |z - proj_1 ac| < minRadius in autocolors
-  output proj_2 ac to color
-else
-  init newColor <- random
-  insert (z, newColor) at end of autocolors
-  output newColor to color
+spec :: Spec
+spec = do
+  pure () -- todo
 -}

@@ -39,8 +39,10 @@ import Language.Value.Evaluator (HaskellTypeOfBinding)
 import Language.Value.Transform
 import Language.Code
 import Language.Code.Parser
+import Language.Effect.Output
 import Data.Color
 
+import qualified Data.Map as Map
 import Foreign hiding (void)
 import GHC.TypeLits
 
@@ -155,8 +157,9 @@ withCompiledCode :: forall env
                  -> ((Ptr Word8 -> Int32 -> Int32 -> Ptr Double -> Int32 -> Double -> Double -> Double -> IO ()) -> IO ())
                  -> IO ()
 withCompiledCode env code run = do
-  c <- case parseCode (EP NoEffs) env EmptyContext ColorType code of
-         Left e  -> error (show e)
+  let outputEnv = BindingProxy (Proxy @"color") ColorType EmptyEnvProxy
+  c <- case parseCode (EP $ ParseEff (outputEffectParser outputEnv) NoEffs) env Map.empty code of
+         Left e  -> error e
          Right c -> pure c
   m <- either error pure (compileRenderer c)
   loadLibraryPermanently Nothing
@@ -181,65 +184,7 @@ withCompiledCode env code run = do
               Right (JITSymbol kernelFn _) -> do
                 let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
                 run (mkJX fn)
-{-
-withViewerCode :: forall x y dx dy env t
-                  . ( KnownEnvironment env
-                    , NotPresent "[internal argument] #blockSize" env
-                    , NotPresent "[internal argument] #subsamples" env
-                    , KnownSymbol x, KnownSymbol y
-                    , KnownSymbol dx, KnownSymbol dy
-                    , Required x env ~ 'RealT
-                    , NotPresent x (env `Without` x)
-                    , Required y env ~ 'RealT
-                    , NotPresent y (env `Without` y)
-                    , Required dx env ~ 'RealT
-                    , NotPresent dx (env `Without` dx)
-                    , Required dy env ~ 'RealT
-                    , NotPresent dy (env `Without` dy)
-                    )
-                 => Proxy x
-                 -> Proxy y
-                 -> Proxy dx
-                 -> Proxy dy
-                 -> Code '[] env 'ColorT
-                 -> ((Int32 -> Int32 -> Context HaskellTypeOfBinding env -> Ptr Word8 -> IO ())
-                      -> IO t)
-                 -> IO t
-withViewerCode x y dx dy c action = do
-  m <- either error pure (compileRenderer' "kernel" x y dx dy c)
-  loadLibraryPermanently Nothing
-  withContext $ \ctx ->
-    withModuleFromAST ctx m $ \md -> do
-      let pm = defaultCuratedPassSetSpec
-      withPassManager pm (`runPassManager` md)
-      asm' <- BS.unpack <$> moduleLLVMAssembly md
-      putStrLn asm'
 
-      withHostTargetMachine' $ \tm -> do
-        withExecutionSession $ \session -> do
-          withClonedThreadSafeModule md $ \tsm -> do
-            let dylibName = "kernel_dylib"
-            dylib <- createJITDylib session dylibName
-            linker <- createRTDyldObjectLinkingLayer session --resolve
-            compileLayer <- createIRCompileLayer session linker tm
-            addDynamicLibrarySearchGeneratorForCurrentProcess compileLayer dylib
-            addModule tsm dylib compileLayer
-            lookupSymbol session compileLayer dylib "kernel" >>= \case
-              Left err -> error ("error JITing kernel: " ++ show err)
-              Right (JITSymbol kernelFn _) -> do
-                let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
-                r <- action $ \blocksize subsamples argCtx buf -> do
-                  (args, frees) <- unzip <$> fromContextM toFFIArg argCtx
-                  let fullArgs = argPtr buf
-                               : argInt32 blocksize
-                               : argInt32 subsamples
-                               : args
-                  callFFI fn retVoid fullArgs
-                  sequence_ frees
-
-                putStrLn "************ WARNING, VIEWER CODE IS DEAD TO ME ****************"
-                pure r
--}
 withViewerCode' :: forall x y dx dy env t
                   . ( KnownEnvironment env
                     , NotPresent "[internal argument] #blockWidth" env
@@ -261,7 +206,7 @@ withViewerCode' :: forall x y dx dy env t
                  -> Proxy y
                  -> Proxy dx
                  -> Proxy dy
-                 -> Code '[] env 'ColorT
+                 -> Code '[Output '[ '("color", 'ColorT)]] env
                  -> ((Int32 -> Int32 -> Int32 -> Context HaskellTypeOfBinding env -> Ptr Word8 -> IO ())
                       -> IO t)
                  -> IO t

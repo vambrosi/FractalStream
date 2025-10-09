@@ -7,7 +7,7 @@ module Actor.Layout
   , allBindingVars
   , extractAllBindings
   , Dummy(..)
-  , YamlVar(..)
+  , ConfigVar(..)
   , StringOrNumber(..)
   -- *
   , parseLayout
@@ -24,22 +24,18 @@ module Actor.Layout
   , toSomeDynamic
   ) where
 
+import FractalStream.Prelude
+
 import Language.Type
 import Language.Environment
 import Data.Color
-import Data.Map.Strict (Map)
 import Data.DynamicValue
 import Language.Value.Evaluator (HaskellTypeOfBinding, evaluate)
-import qualified Language.Untyped.Value as U
 import Language.Value
 import Language.Value.Parser
 
-import Control.Applicative hiding (Const)
-import Data.String
 import Data.Aeson hiding (Value)
 import qualified Data.Aeson.Types as JSON
-import GHC.TypeLits
-import Control.Monad.Except
 import qualified Data.Map as Map
 import qualified Data.Text as Text
 import Text.Read (readMaybe)
@@ -72,10 +68,10 @@ instance FromJSON Dimensions where
           Nothing  -> fail "could not parse dimension descriptor"
       _ -> fail "expected a dimension descriptor, e.g. 400x200"
 
-data Dummy t = Dummy YamlVar
+data Dummy t = Dummy ConfigVar
   deriving Show
 
-data YamlVar = YamlVar
+data ConfigVar = ConfigVar
   { varValue :: String
   , varType :: SomeType
   , varEnv :: Map String SomeType
@@ -105,7 +101,7 @@ parseLayout o
      varType <- p .: "type"
      varVariable <- p .: "variable"
      varEnv <- p .:? "environment" .!= Map.empty
-     pure (TextBox lab (Dummy YamlVar{..}))
+     pure (TextBox lab (Dummy ConfigVar{..}))
 
    checkBoxLayout p = do
      lab <- p .: "label"
@@ -114,7 +110,7 @@ parseLayout o
          varType = SomeType BooleanType
          varEnv = Map.empty
      varVariable <- p .: "variable"
-     pure (CheckBox lab (Dummy YamlVar{..}))
+     pure (CheckBox lab (Dummy ConfigVar{..}))
 
    colorPickerLayout p = do
      lab <- p .: "label"
@@ -122,12 +118,12 @@ parseLayout o
      varVariable <- p .: "variable"
      let varType = SomeType ColorType
          varEnv = Map.empty
-     pure (ColorPicker lab (Dummy YamlVar{..}))
+     pure (ColorPicker lab (Dummy ConfigVar{..}))
 
 allBindings :: Layout Dummy -> [(String, SomeType)]
-allBindings = map (\YamlVar{..} -> (varVariable, varType)) . allBindingVars
+allBindings = map (\ConfigVar{..} -> (varVariable, varType)) . allBindingVars
 
-allBindingVars :: Layout Dummy -> [YamlVar]
+allBindingVars :: Layout Dummy -> [ConfigVar]
 allBindingVars = go
   where
     go = \case
@@ -153,13 +149,16 @@ extractAllBindings extractor = go
       CheckBox _ x -> [extractor x]
       ColorPicker _ x -> [extractor x]
 
-parseToHaskellValue :: Context HaskellTypeOfBinding env
+parseToHaskellValue :: forall env ty
+                     . Context HaskellTypeOfBinding env
                     -> TypeProxy ty
                     -> String
                     -> Either String (HaskellType ty)
-parseToHaskellValue ctx ty input = do
-  case parseValue (contextToEnv ctx) EmptyContext ty input of
-    Left err -> Left (show err)
+parseToHaskellValue ctx ty input =
+  withKnownType ty $
+  withEnvironment (contextToEnv ctx) $
+  case parseValue @env @ty Map.empty input of
+    Left err -> Left err
     Right v  -> pure (evaluate v ctx)
 
 setTextOnly :: forall ty
@@ -202,12 +201,13 @@ instance Dynamic Expression where
   setDynamic d new = case d of
     BoolExpression _ b -> setDynamic b new
     ColorExpression _ c -> setDynamic c new
-    Expression _ env ty v -> do
-      case parseValue env EmptyContext ty new of
-        Left (_, err) -> pure (Just (show err))
-        Right newV    -> do
-          setDynamic v (new, newV)
-          pure Nothing
+    Expression _ (env :: EnvironmentProxy env) (ty :: TypeProxy ty) v -> do
+      withEnvironment env $ withKnownType ty $
+        case parseValue @env @ty Map.empty new of
+          Left err   -> pure (Just (show err))
+          Right newV -> do
+            setDynamic v (new, newV)
+            pure Nothing
 
   listenWith d action = case d of
     BoolExpression _ b -> listenWith b action
@@ -233,10 +233,11 @@ instance Dynamic ConstantExpression where
   setDynamic d new = case d of
     ConstantBoolExpression _ b -> setDynamic b new
     ConstantColorExpression _ c -> setDynamic c new
-    ConstantExpression _ ty v -> do
-      case parseValue EmptyEnvProxy EmptyContext ty new of
-        Left (_, err) -> pure (Just (show err))
-        Right newV    -> do
+    ConstantExpression _ (ty :: TypeProxy ty) v ->
+      withKnownType ty $
+      case parseValue @'[] @ty Map.empty new of
+        Left err   -> pure (Just err)
+        Right newV -> do
           setDynamic v (new, evaluate newV EmptyContext)
           pure Nothing
 
@@ -260,24 +261,25 @@ allocateUIExpressions = go
 
       Tabbed ps -> Tabbed <$> mapM (\(lab, x) -> (lab,) <$> go x) ps
 
-      TextBox lab (Dummy YamlVar{..}) -> case varType of
-        SomeType ty ->
-          withEnvFromMap varEnv $ \env ->
-            case parseValue env EmptyContext ty varValue of
-              Left (_, err) -> fail (show err)
+      TextBox lab (Dummy ConfigVar{..}) -> case varType of
+        SomeType (ty :: TypeProxy ty) -> withKnownType ty $
+          withEnvFromMap varEnv $ \(env :: EnvironmentProxy env) ->
+            withEnvironment env $
+            case parseValue @env @ty Map.empty varValue of
+              Left err -> fail err
               Right v  ->
                 TextBox lab . Expression varVariable env ty
                 <$> newUIValue (varValue, v)
 
-      CheckBox lab (Dummy YamlVar{..}) ->
-        case parseValue EmptyEnvProxy EmptyContext BooleanType varValue of
-          Left (_, err) -> fail (show err)
+      CheckBox lab (Dummy ConfigVar{..}) ->
+        case parseValue @'[] @'BooleanT Map.empty varValue of
+          Left err -> fail err
           Right v  -> CheckBox lab . BoolExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
-      ColorPicker lab (Dummy YamlVar{..}) ->
-        case parseValue EmptyEnvProxy EmptyContext ColorType varValue of
-          Left (_, err) -> fail (show err)
+      ColorPicker lab (Dummy ConfigVar{..}) ->
+        case parseValue @'[] @'ColorT Map.empty varValue of
+          Left err -> fail err
           Right v  -> ColorPicker lab . ColorExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
@@ -295,30 +297,60 @@ allocateUIConstants = go
 
       Tabbed ps -> Tabbed <$> mapM (\(lab, x) -> (lab,) <$> go x) ps
 
-      TextBox lab (Dummy YamlVar{..}) -> case varType of
-        SomeType ty ->
-          case parseValue EmptyEnvProxy EmptyContext ty varValue of
-            Left (_, err) -> fail (show err)
-            Right v       -> TextBox lab . ConstantExpression varVariable ty
-                             <$> newUIValue (varValue, evaluate v EmptyContext)
+      TextBox lab (Dummy ConfigVar{..}) -> case varType of
+        SomeType (ty :: TypeProxy ty) -> withKnownType ty $
+          case parseValue @'[] @ty Map.empty varValue of
+            Left err -> fail err
+            Right v  -> TextBox lab . ConstantExpression varVariable ty
+                        <$> newUIValue (varValue, evaluate v EmptyContext)
 
-      CheckBox lab (Dummy YamlVar{..}) ->
-        case parseValue EmptyEnvProxy EmptyContext BooleanType varValue of
-          Left (_, err) -> fail (show err)
-          Right v       -> CheckBox lab . ConstantBoolExpression varVariable
-                           <$> newUIValue (evaluate v EmptyContext)
+      CheckBox lab (Dummy ConfigVar{..}) ->
+        case parseValue @'[] @'BooleanT Map.empty varValue of
+          Left err -> fail err
+          Right v  -> CheckBox lab . ConstantBoolExpression varVariable
+                      <$> newUIValue (evaluate v EmptyContext)
 
-      ColorPicker lab (Dummy YamlVar{..}) ->
-        case parseValue EmptyEnvProxy EmptyContext ColorType varValue of
-          Left (_, err) -> fail (show err)
-          Right v       -> ColorPicker lab . ConstantColorExpression varVariable
-                           <$> newUIValue (evaluate v EmptyContext)
+      ColorPicker lab (Dummy ConfigVar{..}) ->
+        case parseValue @'[] @'ColorT Map.empty varValue of
+          Left err -> fail err
+          Right v  -> ColorPicker lab . ConstantColorExpression varVariable
+                      <$> newUIValue (evaluate v EmptyContext)
 
 
 withSplices :: forall t
              . Layout Expression
-            -> (forall splices. Context Splice splices -> IO t)
+            -> (Splices -> IO t) --(forall splices. Context Splice splices -> IO t)
             -> IO t
+withSplices lo action =
+    go [] (extractAllBindings toSomeUIExpr lo)
+  where
+    go :: [(String, TypedValue)] -> [SomeUIExpr] -> IO t
+    go splices = \case
+      [] -> action (Map.fromList splices)
+      (SomeUIExpr name _ty getExpr : etc) -> do
+        e <- getExpr
+        go ((symbolVal name, e) : splices) etc
+
+    unsafeFromRight :: Either a b -> b
+    unsafeFromRight = \case
+      Left{} -> error "Left"
+      Right x -> x
+
+    toSomeUIExpr :: forall a. Expression a -> SomeUIExpr
+    toSomeUIExpr = \case
+      Expression nameStr _ ty v ->
+        case someSymbolVal nameStr of
+          SomeSymbol name ->
+            SomeUIExpr name ty (unsafeFromRight . parseTypedValue Map.empty . fst <$> getDynamic v)
+      BoolExpression nameStr b ->
+        case someSymbolVal nameStr of
+          SomeSymbol name ->
+            SomeUIExpr name BooleanType (unsafeFromRight . parseTypedValue Map.empty . showValue BooleanType <$> getDynamic b)
+      ColorExpression nameStr b ->
+        case someSymbolVal nameStr of
+          SomeSymbol name ->
+            SomeUIExpr name ColorType (unsafeFromRight . parseTypedValue Map.empty . showValue ColorType <$> getDynamic b)
+{-
 withSplices lo action = go EmptyContext (extractAllBindings toSomeUIExpr lo)
   where
     go :: forall splices. Context Splice splices -> [SomeUIExpr] -> IO t
@@ -350,6 +382,7 @@ withSplices lo action = go EmptyContext (extractAllBindings toSomeUIExpr lo)
         case someSymbolVal nameStr of
           SomeSymbol name ->
             SomeUIExpr name ColorType (pValue . showValue ColorType <$> getDynamic b)
+-}
 
 withDynamicBindings :: forall t
                      . Layout ConstantExpression

@@ -2,10 +2,10 @@ module UI.CodeEditor
   ( codeEditor
   ) where
 
+import FractalStream.Prelude hiding (get)
+
 import Graphics.UI.WX hiding (Vertical, Horizontal)
 import Graphics.UI.WXCore.WxcClasses
-
-import Data.Word
 
 codeEditor :: Frame () -> Window a -> String -> IO (StyledTextCtrl ())
 codeEditor ce cep code = do

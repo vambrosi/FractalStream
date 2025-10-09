@@ -13,9 +13,10 @@ module Task.Concurrent
        , synchedWith
        ) where
 
+import FractalStream.Prelude
+
 import           Control.Concurrent
 import           Control.Concurrent.Async
-import           Control.Monad
 import qualified Data.Vector as V
 import qualified Data.Vector.Mutable as VM
 

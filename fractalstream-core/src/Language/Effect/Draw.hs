@@ -1,4 +1,4 @@
-{-# language OverloadedStrings #-}
+{-# language OverloadedStrings, RecursiveDo #-}
 module Language.Effect.Draw
   ( type Draw
   , Draw_(..)
@@ -6,35 +6,33 @@ module Language.Effect.Draw
   , drawEffectParser
   ) where
 
+import FractalStream.Prelude
+
 import Language.Value
 import Language.Parser
 import Language.Value.Parser
 import Language.Effect
 import Data.Indexed.Functor
 
-import Fcf (Exp, Eval)
-import Data.Type.Equality ((:~:)(..))
-import Data.Kind
-
 type Draw = Draw_ Value_
 
-type DrawCommand = Draw_ ConcreteValue NoCode '( '[], 'VoidT )
+type DrawCommand = Draw_ ConcreteValue NoCode '[]
 
 data ConcreteValue :: Environment -> FSType -> Exp Type
 type instance Eval (ConcreteValue env t) = HaskellType t
 
-data NoCode :: (Environment, FSType) -> Exp Type
-type instance Eval (NoCode et) = ()
+data NoCode :: Environment -> Exp Type
+type instance Eval (NoCode env) = ()
 
 data Draw_ (value :: Environment -> FSType -> Exp Type)
-           (code :: (Environment, FSType) -> Exp Type)
-           (et :: (Environment, FSType)) where
+           (code :: Environment -> Exp Type)
+           (env :: Environment) where
 
   -- | draw point at POINT
   DrawPoint :: forall env code value
              . EnvironmentProxy env
             -> Eval (value env  ('Pair 'RealT 'RealT))
-            -> Draw_ value code '(env, 'VoidT)
+            -> Draw_ value code env
 
   -- | draw circle at POINT with radius VALUE
   -- | draw filled circle at POINT with radius VALUE
@@ -43,14 +41,14 @@ data Draw_ (value :: Environment -> FSType -> Exp Type)
              -> Bool
              -> Eval (value env 'RealT)
              -> Eval (value env ('Pair 'RealT 'RealT))
-             -> Draw_ value code '(env, 'VoidT)
+             -> Draw_ value code env
 
   -- | draw line from POINT to POINT
   DrawLine :: forall env code value
             . EnvironmentProxy env
            -> Eval (value env ('Pair 'RealT 'RealT))
            -> Eval (value env ('Pair 'RealT 'RealT))
-           -> Draw_ value code '(env, 'VoidT)
+           -> Draw_ value code env
 
   -- | draw rectangle from POINT to POINT
   -- | draw filled rectangle from POINT to POINT
@@ -59,27 +57,27 @@ data Draw_ (value :: Environment -> FSType -> Exp Type)
            -> Bool
            -> Eval (value env ('Pair 'RealT 'RealT))
            -> Eval (value env ('Pair 'RealT 'RealT))
-           -> Draw_ value code '(env, 'VoidT)
+           -> Draw_ value code env
 
   -- | use COLOR for stroke
   SetStroke :: forall env code value
              . EnvironmentProxy env
             -> Eval (value env 'ColorT)
-            -> Draw_ value code '(env, 'VoidT)
+            -> Draw_ value code env
 
   -- | use COLOR for fill
   SetFill :: forall env code value
              . EnvironmentProxy env
             -> Eval (value env 'ColorT)
-            -> Draw_ value code '(env, 'VoidT)
+            -> Draw_ value code env
 
   -- | erase
   Clear :: forall env code value
          . EnvironmentProxy env
-        -> Draw_ value code '(env, 'VoidT)
+        -> Draw_ value code env
 
 instance IFunctor (Draw_ value) where
-  type IndexProxy (Draw_ value) = EnvTypeProxy
+  type IndexProxy (Draw_ value) = EnvironmentProxy
   imap _ = \case
     DrawPoint e p -> DrawPoint e p
     DrawCircle e f r p -> DrawCircle e f r p
@@ -89,13 +87,13 @@ instance IFunctor (Draw_ value) where
     SetFill e c -> SetFill e c
     Clear e -> Clear e
   toIndex = \case
-    DrawPoint e _ -> envTypeProxy e VoidType
-    DrawCircle e _ _ _ -> envTypeProxy e VoidType
-    DrawLine e _ _ -> envTypeProxy e VoidType
-    DrawRect e _ _ _ -> envTypeProxy e VoidType
-    SetStroke e _ -> envTypeProxy e VoidType
-    SetFill e _ -> envTypeProxy e VoidType
-    Clear e -> envTypeProxy e VoidType
+    DrawPoint e _ -> e
+    DrawCircle e _ _ _ -> e
+    DrawLine e _ _ -> e
+    DrawRect e _ _ _ -> e
+    SetStroke e _ -> e
+    SetFill e _ -> e
+    Clear e -> e
 
 instance ITraversable (Draw_ value) where
   isequence = \case
@@ -107,29 +105,99 @@ instance ITraversable (Draw_ value) where
     SetFill e c -> pure (SetFill e c)
     Clear e -> pure (Clear e)
 
+tok :: String -> Prod r String Token ()
+tok s = tokenMatch $ \case
+  Identifier n | n == s -> Just ()
+  _ -> Nothing
+
+drawEffectParser :: EffectParser Draw
+drawEffectParser = EffectParser Proxy $ \value _code -> mdo
+
+  toplevel <- ruleChoice
+    [ (tok "draw" *> drawCommand <* token Newline)
+    , (tok "use" *> penCommand <* token Newline)
+    , EnvCodeOfEffect (pure . Clear) <$ (tok "erase" *> token Newline)
+    ]
+
+  drawCommand <- ruleChoice
+    [ mkDrawPoint <$> ((tok "point" *> tok "at") *> value)
+    , mkDrawCircle <$> (isJust <$> optional (tok "filled"))
+                   <*> ((tok "circle" *> tok "at") *> value)
+                   <*> ((tok "with" *> tok "radius") *> value)
+    , mkDrawRect <$> (isJust <$> optional (tok "filled"))
+                 <*> ((tok "rectangle" *> tok "from") *> value)
+                 <*> (tok "to" *> value)
+    , mkDrawLine <$> ((tok "line" *> tok "from") *> value)
+                 <*> (tok "to" *> value)
+    ]
+
+  strokeOrLine <- ruleChoice
+    [ tok "stroke", tok "line" ]
+
+  penCommand <- ruleChoice
+    [ mkSetFill   <$> (value <* (tok "for" *> tok "fill"))
+    , mkSetStroke <$> (value <* (tok "for" *> strokeOrLine))
+    ]
+
+  pure toplevel
+
+mkDrawPoint :: TypedValue -> EnvCodeOfEffect Draw code
+mkDrawPoint v = EnvCodeOfEffect $ \env -> withEnvironment env $
+  (DrawPoint env <$> atType v (PairType RealType RealType)) <|>
+  (DrawPoint env . C2R2 <$> atType v ComplexType)
+
+mkDrawCircle :: Bool -> TypedValue -> TypedValue -> EnvCodeOfEffect Draw code
+mkDrawCircle isFilled center radius = EnvCodeOfEffect $ \env -> withEnvironment env $
+  DrawCircle env isFilled
+    <$> atType radius RealType
+    <*> (atType center (PairType RealType RealType) <|>
+         (C2R2 <$> atType center ComplexType))
+
+mkDrawRect :: Bool -> TypedValue -> TypedValue -> EnvCodeOfEffect Draw code
+mkDrawRect isFilled ul lr = EnvCodeOfEffect $ \env -> withEnvironment env $
+  DrawRect env isFilled
+    <$> (atType ul (PairType RealType RealType) <|>
+         (C2R2 <$> atType ul ComplexType))
+    <*> (atType lr (PairType RealType RealType) <|>
+         (C2R2 <$> atType lr ComplexType))
+
+mkDrawLine :: TypedValue -> TypedValue -> EnvCodeOfEffect Draw code
+mkDrawLine ul lr = EnvCodeOfEffect $ \env -> withEnvironment env $
+  DrawLine env
+    <$> (atType ul (PairType RealType RealType) <|>
+         (C2R2 <$> atType ul ComplexType))
+    <*> (atType lr (PairType RealType RealType) <|>
+         (C2R2 <$> atType lr ComplexType))
+
+mkSetStroke :: TypedValue -> EnvCodeOfEffect Draw code
+mkSetStroke c = EnvCodeOfEffect $ \env -> withEnvironment env $
+  SetStroke env <$> atType c ColorType
+
+mkSetFill :: TypedValue -> EnvCodeOfEffect Draw code
+mkSetFill c = EnvCodeOfEffect $ \env -> withEnvironment env $
+  SetFill env <$> atType c ColorType
+
+{-
 drawEffectParser :: EffectParser Draw
 drawEffectParser = EffectParser Proxy $
-  \(et :: EnvTypeProxy et) _code -> case lemmaEnvTy @et of
-    Refl -> withEnvType et pDrawEffect
+  \(env :: EnvironmentProxy env) _code -> pDrawEffect env
 
 pDrawEffect
   :: EnvironmentProxy env
-  -> TypeProxy t
-  -> Parser (Draw code '(env, t))
-pDrawEffect env = \case
-  VoidType -> ((pErase env
-           <|> pDrawCommand env
-           <|> pUseCommand env) <* eol)
-           <?> "draw command"
-  _ -> mzero
+  -> Parser (Draw code env)
+pDrawEffect env =
+  ((pErase env
+     <|> pDrawCommand env
+     <|> pUseCommand env) <* eol)
+  <?> "draw command"
 
-pErase :: EnvironmentProxy env -> Parser (Draw code '(env, 'VoidT))
+pErase :: EnvironmentProxy env -> Parser (Draw code env)
 pErase env = do
   tok_ "erase"
   pure (Clear env)
 
 pUseCommand :: EnvironmentProxy env
-            -> Parser (Draw code '(env, 'VoidT))
+            -> Parser (Draw code env)
 pUseCommand env = do
   tok_ "use"
   valueTokens <- manyTill anyToken (tok_ "for")
@@ -140,7 +208,7 @@ pUseCommand env = do
    <?> "color target")
 
 pDrawCommand :: EnvironmentProxy env
-             -> Parser (Draw code '(env, 'VoidT))
+             -> Parser (Draw code env)
 pDrawCommand env = do
   tok_ "draw"
   pDrawPoint
@@ -181,3 +249,4 @@ pDrawCommand env = do
     pDrawFilled = do
       tok_ "filled"
       pDrawCircle True <|> pDrawRect True
+-}

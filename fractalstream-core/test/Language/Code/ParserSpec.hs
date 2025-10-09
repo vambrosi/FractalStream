@@ -2,47 +2,57 @@
 module Language.Code.ParserSpec (spec) where
 
 import Test.Hspec
+
+import FractalStream.Prelude
+
 import Language.Type
 import Language.Value
-import Language.Value.Parser
 import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Effect
 import Data.Color
 
-import Control.Monad.State
+import qualified Data.Map as Map
 import Text.RawString.QQ
 
-runEmpty :: TypeProxy t
+runWithX :: forall xt
+          . Scalar xt
          -> String
-         -> Either (Int, BadParse) (HaskellType t)
-runEmpty t input
-  = fmap ((`evalState` (EmptyContext, ()) ) . simulate NoHandler)
-    $ parseCode (EP NoEffs) EmptyEnvProxy EmptyContext t input
-
-runWithX :: forall t xt
-          . TypeProxy t
-         -> Scalar xt
-         -> String
-         -> Either (Int, BadParse) (HaskellType t)
-runWithX t (Scalar xt x) input = withKnownType xt $
+         -> Either String (HaskellType xt)
+runWithX (Scalar xt x) input = withKnownType xt $
   let env = BindingProxy (Proxy @"x") xt EmptyEnvProxy
       ctx = Bind (Proxy @"x") xt x EmptyContext
-  in fmap ((`evalState` (ctx, ())) . simulate NoHandler)
-   $ parseCode (EP NoEffs) env EmptyContext t input
+  in fmap ((`evalState` (ctx, ()))
+           . (\c -> simulate NoHandler c >> eval (Var (Proxy @"x") xt bindingEvidence)))
+   $ parseCode (EP NoEffs) env Map.empty input
 
-runWithXY :: forall t xt yt
-           . TypeProxy t
-          -> Scalar xt
+runWithXY :: forall xt yt
+           . Scalar xt
           -> Scalar yt
           -> String
-          -> Either (Int, BadParse) (HaskellType t)
-runWithXY t (Scalar xt x) (Scalar yt y) input = withKnownType xt $ withKnownType yt $
+          -> Either String (HaskellType xt)
+runWithXY (Scalar xt x) (Scalar yt y) input = withKnownType xt $ withKnownType yt $
   let ctx = Bind (Proxy @"x") xt x
           $ Bind (Proxy @"y") yt y
           $ EmptyContext
-  in fmap ((`evalState` (ctx, ())) . simulate NoHandler)
-   $ parseCode (EP NoEffs) (envProxy Proxy) EmptyContext t input
+  in fmap ((`evalState` (ctx, ()))
+           . (\c -> simulate NoHandler c >> eval (Var (Proxy @"x") xt bindingEvidence)))
+   $ parseCode (EP NoEffs) (envProxy Proxy) Map.empty input
+
+runWithXYC :: forall xt yt
+           . Scalar xt
+          -> Scalar yt
+          -> String
+          -> Either String Color
+runWithXYC (Scalar xt x) (Scalar yt y) input =
+  withKnownType xt $ withKnownType yt $
+  let ctx = Bind (Proxy @"x") xt x
+          $ Bind (Proxy @"y") yt y
+          $ Bind (Proxy @"color") ColorType grey
+          $ EmptyContext
+  in fmap ((`evalState` (ctx, ()))
+           . (\c -> simulate NoHandler c >> eval (Var (Proxy @"color") ColorType bindingEvidence)))
+   $ parseCode (EP NoEffs) (envProxy Proxy) Map.empty input
 
 spec :: Spec
 spec = do
@@ -51,73 +61,70 @@ spec = do
 
     it "can parse if/then/else blocks" $ do
 
-      let p1 = "if true then\n  pass\n  1 + 2\nelse\n  3 + 4"
-          p2 = "set x to 1 + 3\nx"
-          p3 = "if y then\n  set x to 1 + 3\n  pass\nelse\n  pass\nx"
-      runEmpty  IntegerType p1 `shouldBe` Right 3
-      runWithX  IntegerType (Scalar IntegerType 7) p2 `shouldBe` Right 4
-      runWithXY IntegerType (Scalar IntegerType 7) (Scalar BooleanType True)  p3 `shouldBe` Right 4
-      runWithXY IntegerType (Scalar IntegerType 7) (Scalar BooleanType False) p3 `shouldBe` Right 7
+      let p1 = [r|
+if true then
+  pass
+  x <- 1 + 2
+else
+  x <- 3 + 4
+|]
+          p2 = "x <- 1 + 3"
+          p3 = [r|
+if y then
+  x <- 1 + 3
+  pass
+else
+  pass
+|]
+      runWithX  (Scalar IntegerType 7) p1 `shouldBe` Right 3
+      runWithX  (Scalar IntegerType 7) p2 `shouldBe` Right 4
+      runWithXY (Scalar IntegerType 7) (Scalar BooleanType True)  p3 `shouldBe` Right 4
+      runWithXY (Scalar IntegerType 7) (Scalar BooleanType False) p3 `shouldBe` Right 7
 
     it "can bind new variables" $ do
 
        let p1 = [r|
-set x to 5
-init y : Z to x - 2
+x <- 5
+y : Z <- x - 2
 if true then
-  set x to 2 * y
+  x <- 2 * y
 else
   pass
-x|]
+|]
            p2 = [r|
-set x to 5
-init y : Z to x - 2
+x <- 5
+y : Z <- x - 2
 if true then
-  set x to 2 * y
-x|]
+  x <- 2 * y
+|]
 
-       runWithX IntegerType (Scalar IntegerType 0) p1 `shouldBe` Right 6
-       runWithX IntegerType (Scalar IntegerType 0) p2 `shouldBe` Right 6
+       runWithX (Scalar IntegerType 0) p1 `shouldBe` Right 6
+       runWithX (Scalar IntegerType 0) p2 `shouldBe` Right 6
 
     it "can coerce variable types" $ do
         let p1 = [r|
-init k : Z to 1
-set x to k|]
-        runWithX VoidType (Scalar RealType 0) p1 `shouldBe` Right ()
+k : Z <- 1
+x <- k|]
+        runWithX (Scalar RealType 0) p1 `shouldBe` Right 1.0
 
   describe "when parsing more complex code" $ do
 
     it "can parse a checkered Mandelbrot program" $ do
-      let _mandel = [r|
-init C : C to x + y i
-init z : C to 0
-init count : Z to 0
-loop
-  set z to z z + C
-  set count to count + 1
-  |z| < 10 and count < 100
-if count = 100 then
-  black
-else if im z > 0 then
-  red
-else
-  yellow|]
       let mandel = [r|
-init C : C to x + y i
-init z : C to 0
-init count : Z to 0
-loop
-  set z to z z + C
-  set count to count + 1
-  |z| < 100 and count < 100
+C : C <- x + y i
+z : C <- 0
+count : Z <- 0
+while |z| < 100 and count < 100
+  z <- z^2 + C
+  count <- count + 1
 if count = 100 then
-  black
+  color <- black
 else if im z > 0 then
-  red
+  color <- red
 else
-  yellow|]
+  color <- yellow|]
 
-          runMandel (x :+ y) = runWithXY ColorType (Scalar RealType x) (Scalar RealType y) mandel
+          runMandel (x :+ y) = runWithXYC (Scalar RealType x) (Scalar RealType y) mandel
       runMandel 0 `shouldBe` Right black
       runMandel (1 :+ 1) `shouldBe` Right yellow
       runMandel (1 :+ (-1)) `shouldBe` Right red

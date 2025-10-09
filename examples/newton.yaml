@@ -7,21 +7,20 @@ viewer:
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-        init k : Z to 0
-        init lastZ : C to 0
-        loop
-          set lastZ to z
-          set z to z - f / df
-          set k to k + 1
-          k < maxIters and |z - lastZ| > tol
+        k : Z <- 0
+        lastZ : C <- 0
+
+        while k < maxIters and |z - lastZ| > tol
+          lastZ <- z
+          z <- z - f / df
+          k <- k + 1
+
         if k = maxIters then
-          black
+          output black to color
         else
-          init c : Color to if re(z) > 0 then red else if im(z) > 0 then yellow else blue
-          init s : R to k
-          set s to cos (s pi / 10)
-          set s to s s
-          blend (s, dark c, light c)
+          c : Color <- if re(z) > 0 then red else if im(z) > 0 then yellow else blue
+          s : R <- (cos (k pi / 10))^2
+          output blend (s, dark c, light c) to color
 
   tools:
     - name: Trace
@@ -31,16 +30,15 @@ viewer:
           code: erase
         - event: click-or-drag
           code: |
-            init k : Z to 0
-            init lastZ : C to 0
+            k : Z <- 0
+            lastZ : C <- 0
             erase
-            loop
-              set lastZ to z
-              set z to z - f / df
+            while k < maxIters and |z - lastZ| > tol
+              lastZ <- z
+              z <- z - f / df
               draw point at lastZ
               draw line from lastZ to z
-              set k to k + 1
-              k < maxIters and |z - lastZ| > tol
+              k <- k + 1
             draw point at z
 
 setup:

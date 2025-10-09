@@ -19,15 +19,12 @@ module Language.Type
   , showValue
   , KnownType(..)
   , withKnownType
+  , withType
   ) where
 
-import Data.Int
-import GHC.TypeLits
-import Data.Type.Equality ((:~:)(..))
+import FractalStream.Prelude
+
 import Data.Color (Color, colorToRGB)
-import Data.Complex
-import Data.List (intercalate)
-import Data.Kind
 
 import Data.Aeson (FromJSON(..), withText)
 
@@ -182,6 +179,20 @@ withKnownType ty k = case ty of
   ImageType    -> k
   PairType {}  -> k
   ListType {}  -> k
+
+withType :: forall a. FSType -> (forall ty. KnownType ty => TypeProxy ty -> a) -> a
+withType t k = case t of
+  VoidT    -> k VoidType
+  BooleanT -> k BooleanType
+  IntegerT -> k IntegerType
+  RealT    -> k RealType
+  ComplexT -> k ComplexType
+  ColorT   -> k ColorType
+  ImageT   -> k ImageType
+  ListT lt -> withType lt $ \ty -> k (ListType ty)
+  RationalT  -> k RationalType
+  Pair t1 t2 -> withType t1 $ \ty1 -> withType t2 $ \ty2 -> k (PairType ty1 ty2)
+
 
 pattern Boolean_ :: forall (t :: FSType). () => (t ~ 'BooleanT) => HaskellType t -> Scalar t
 pattern Boolean_ x = Scalar BooleanType x

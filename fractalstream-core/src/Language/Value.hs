@@ -10,22 +10,17 @@ module Language.Value
   , SomeValue(..)
   , SomeConstantValue(..)
   , typeOfValue
-  , get
+  , getValue
   , pprint
   ) where
 
-import Data.Proxy (Proxy(..))
-import Fcf
-import GHC.TypeLits hiding (LTI, GTI)
+import FractalStream.Prelude
+
 import Data.Ratio
 
 import Data.Indexed.Functor
 import Language.Type
 import Language.Environment
-
-import Data.Type.Equality ((:~:)(..))
-import Data.List (intercalate)
-import Data.Kind
 
 ---------------------------------------------------------------------------------
 -- Value
@@ -705,9 +700,9 @@ pprint = indexedFold @PrecString @ValueF go
 --
 --     Get (Proxy :: Proxy "foo") IntegerType
 --
-get :: forall name env ty
-     . ( Required name env ~ ty, NotPresent name (env `Without` name)
-       , KnownSymbol name, KnownEnvironment env)
-    => TypeProxy ty
-    -> Value '(env, ty)
-get ty = Var (Proxy @name) ty bindingEvidence
+getValue :: forall name env ty
+          . ( Required name env ~ ty, NotPresent name (env `Without` name)
+          , KnownSymbol name, KnownEnvironment env)
+         => TypeProxy ty
+         -> Value '(env, ty)
+getValue ty = Var (Proxy @name) ty bindingEvidence

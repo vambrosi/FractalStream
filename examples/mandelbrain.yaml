@@ -7,30 +7,31 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        init r1 : C to 1
-        init r2 : C to -0.5 + a
-        init r3 : C to -0.5 - a
-        init z : C to 0
-        init k : Z to 0
-        init lastZ : C to 0
-        loop
-          set lastZ to z
-          init f : C to (z - r1) (z - r2) (z - r3)
-          init df : C to (z - r2) (z - r3) + (z - r1) (z - r3) + (z - r1) (z - r2)
-          set z to z - f / df
-          set k to k + 1
-          k < maxIters and |z - lastZ| > tol
-        init c : Color to grey
+        r1 : C <- 1
+        r2 : C <- -0.5 + a
+        r3 : C <- -0.5 - a
+        z : C <- 0
+        k : Z <- 0
+        lastZ : C <- 0
+
+        repeat
+          lastZ <- z
+          f : C <- (z - r1) (z - r2) (z - r3)
+          df : C <- (z - r2) (z - r3) + (z - r1) (z - r3) + (z - r1) (z - r2)
+          z <- z - f / df
+          k <- k + 1
+        while k < maxIters and |z - lastZ| > tol
+
+        c : Color <- grey
         if |z - r1| < tol then
-          set c to red
+          c <- red
         else if |z - r2| < tol then
-          set c to green
+          c <- green
         else if |z - r3| < tol then
-          set c to blue
-        init s : R to k
-        set s to cos (s pi / 10)
-        set s to s s
-        if k = maxIters then black else blend (s, dark c, light c)
+          c <- blue
+        s : R <- k
+        s <- (cos (s pi / 10))^2
+        output (if k = maxIters then black else blend (s, dark c, light c)) to color
 
     tools:
       - name: "Select parameter"
@@ -47,29 +48,30 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        init k : Z to 0
-        init lastZ : C to 0
-        init r1 : C to 1
-        init r2 : C to -0.5 + selectedA
-        init r3 : C to -0.5 - selectedA
-        loop
-          set lastZ to z
-          init f : C to (z - r1) (z - r2) (z - r3)
-          init df : C to (z - r2) (z - r3) + (z - r1) (z - r3) + (z - r1) (z - r2)
-          set z to z - f / df
-          set k to k + 1
-          k < maxIters and |z - lastZ| > tol
-        init c : Color to grey
+        k : Z <- 0
+        lastZ : C <- 0
+        r1 : C <- 1
+        r2 : C <- -0.5 + selectedA
+        r3 : C <- -0.5 - selectedA
+
+        repeat
+          lastZ <- z
+          f : C <- (z - r1) (z - r2) (z - r3)
+          df : C <- (z - r2) (z - r3) + (z - r1) (z - r3) + (z - r1) (z - r2)
+          z <- z - f / df
+          k <- k + 1
+        while k < maxIters and |z - lastZ| > tol
+
+        c : Color <- grey
         if |z - r1| < tol then
-          set c to red
+          c <- red
         else if |z - r2| < tol then
-          set c to green
+          c <- green
         else if |z - r3| < tol then
-          set c to blue
-        init s : R to k
-        set s to cos (s pi / 10)
-        set s to s s
-        if k = maxIters then black else blend (s, dark c, light c)
+          c <- blue
+        s : R <- k
+        s <- (cos (s pi / 10))^2
+        output (if k = maxIters then black else blend (s, dark c, light c)) to color
 
     tools:
       - name: Trace
@@ -79,21 +81,20 @@ viewers:
             code: erase
           - event: click-or-drag
             code: |
-              init k : Z to 0
-              init lastZ : C to 0
-              init r1 : C to 1
-              init r2 : C to -0.5 + selectedA
-              init r3 : C to -0.5 - selectedA
+              k : Z <- 0
+              lastZ : C <- 0
+              r1 : C <- 1
+              r2 : C <- -0.5 + selectedA
+              r3 : C <- -0.5 - selectedA
               erase
-              loop
-                set lastZ to z
-                init f : C to (z - r1) (z - r2) (z - r3)
-                init df : C to (z - r2) (z - r3) + (z - r1) (z - r3) + (z - r1) (z - r2)
-                set z to z - f / df
+              while k < maxIters and |z - lastZ| > tol
+                lastZ <- z
+                f : C <- (z - r1) (z - r2) (z - r3)
+                df : C <- (z - r2) (z - r3) + (z - r1) (z - r3) + (z - r1) (z - r2)
+                z <- z - f / df
                 draw point at lastZ
                 draw line from lastZ to z
-                set k to k + 1
-                k < maxIters and |z - lastZ| > tol
+                k <- k + 1
               draw point at z
 
 configuration:

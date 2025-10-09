@@ -64,17 +64,12 @@ module Language.Environment
   , sameEnvType
   ) where
 
+import FractalStream.Prelude
+
 import Language.Type
 
-import GHC.TypeLits
-import Fcf (Exp, Eval)
-import Data.Type.Equality ((:~:)(..))
-import Data.Proxy
-import Data.Coerce
 import Unsafe.Coerce
 import Data.Constraint
-import Data.Kind
-import Data.Map (Map)
 import qualified Data.Map as Map
 
 ---------------------------------------------------------------------------------

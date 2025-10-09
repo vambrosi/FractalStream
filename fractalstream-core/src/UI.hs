@@ -6,12 +6,11 @@ module UI
   , UIActor(..)
   ) where
 
+import FractalStream.Prelude
+
 import Event
 import Language.Environment
 import Language.Value.Evaluator
-
-import Control.Applicative ((<|>))
-import Data.Kind
 
 -- | 'UI' is meant to be used as an open kind, so that
 -- type-level tags for UIs are given by types of kind 'UI'.

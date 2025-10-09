@@ -5,11 +5,13 @@ module UI.ProjectViewer
   ( viewProject
   ) where
 
+import FractalStream.Prelude hiding (get)
+
 import Language.Environment
 import Language.Type
 import Data.Color (Color, colorToRGB)
 import Control.Concurrent.MVar
-import Control.Monad.State hiding (get)
+import Data.Indexed.Functor
 
 import Graphics.UI.WX hiding (pt, glue, when, tool, Object, Dimensions, Horizontal, Vertical, Layout, Color)
 import qualified Graphics.UI.WXCore.Events as WX
@@ -26,7 +28,6 @@ import UI.Tile
 import UI.Layout
 
 import Data.IORef
-import Data.Word
 
 import Actor.UI
 import Actor.Tool
@@ -39,13 +40,7 @@ import Language.Value (Value, ValueF(..))
 import Language.Code (CodeF(..))
 import Task.Block (BlockComputeAction)
 
-import Control.Monad
-import Data.Set (Set)
 import qualified Data.Set as Set
-import GHC.TypeLits
-import Data.Kind
-import Data.Indexed.Functor
-import Fcf (Exp, Eval)
 
 viewProject :: (forall a. Frame a -> [Menu ()] -> IO ())
             -> UI
@@ -463,23 +458,23 @@ makeWxComplexViewer
     -- that variable changes.
     let usedVars = execState (indexedFoldM gatherUsedVarsInCode cvCode') Set.empty
 
-        gatherUsedVarsInCode :: CodeF '[] Unit et
+        gatherUsedVarsInCode :: CodeF effs Unit env
                              -> State (Set String) ()
         gatherUsedVarsInCode = \case
-          Let _ name _ _ _ _ -> modify' (Set.delete (symbolVal name))
-          Set{} -> pure ()
-          Call{} -> pure ()
+          Let _ name v _ -> do
+            gatherUsedVars v
+            modify' (Set.delete (symbolVal name))
+          Set _ _ v -> gatherUsedVars v
           Block{} -> pure ()
-          Pure _ v -> gatherUsedVars v
           NoOp{} -> pure ()
-          DoWhile{} -> pure ()
-          IfThenElse _ tf _ _ -> gatherUsedVars tf
+          DoWhile c _ -> gatherUsedVars c
+          IfThenElse tf _ _ -> gatherUsedVars tf
           Effect{} -> pure () -- FIXME, should also inspect the effects
 
         gatherUsedVars :: Value et -> State (Set String) ()
-        gatherUsedVars = indexedFoldM @Unit gatherUsedVarsInValue
+        gatherUsedVars = indexedFoldM @UnitET gatherUsedVarsInValue
 
-        gatherUsedVarsInValue :: ValueF Unit et -> State (Set String) ()
+        gatherUsedVarsInValue :: ValueF UnitET et -> State (Set String) ()
         gatherUsedVarsInValue = \case
           Var name _ _ -> modify' (Set.insert (symbolVal name))
           LocalLet name _ _ _ _ _ -> modify' (Set.delete (symbolVal name))
@@ -712,5 +707,8 @@ fsColorToWxColor :: Color -> WX.Color
 fsColorToWxColor c =
   let (r,g,b) = colorToRGB c in rgba r g b 255
 
-data Unit :: (Environment, FSType) -> Exp Type
-type instance Eval (Unit et) = ()
+data Unit :: Environment -> Exp Type
+type instance Eval (Unit _) = ()
+
+data UnitET :: (Environment, FSType) -> Exp Type
+type instance Eval (UnitET _) = ()

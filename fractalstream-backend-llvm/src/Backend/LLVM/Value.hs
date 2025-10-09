@@ -5,6 +5,8 @@ module Backend.LLVM.Value
   , getGetExtern
   ) where
 
+import FractalStream.Prelude
+
 import Backend.LLVM.Operand
 
 import Language.Value
@@ -19,11 +21,6 @@ import qualified LLVM.AST.IntegerPredicate as P
 import qualified LLVM.AST.FloatingPointPredicate as P
 import qualified LLVM.IRBuilder.Instruction as I
 import qualified LLVM.AST.Type as AST
-
-import Data.Functor
-import Control.Monad.Reader
-import Control.Monad.Except
-import Fcf (Exp, Eval)
 
 import qualified Data.Map as Map
 

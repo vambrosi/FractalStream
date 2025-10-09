@@ -2,12 +2,12 @@ module UI.Menu
   ( makeMenuBar
   ) where
 
+import FractalStream.Prelude
 import FractalStream.Metadata
 
 import UI.ProjectActions
 
 import qualified System.Info as Info
-import Control.Monad
 
 import Graphics.UI.WX hiding (when)
 
@@ -47,5 +47,5 @@ makeMenuBar ProjectActions{..} f addlMenus = do
         , on (menu about) :=
             infoDialog f "About FractalStream" $ unlines
               ("Contributors:" : contributors ++
-               ["", "Build info:", gitBranch ++ "@" ++ take 8 gitHash ++ if gitDirty then "*" else ""])
+               ["", "Build info:", gitBranch ++ "@" ++ take 8 gitHash])
         ]

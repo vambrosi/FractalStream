@@ -8,23 +8,21 @@ viewer:
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-      init x : R to im(z)
-      init x0 : R to x
-      init r : R to re(z)
-      init k : Z to 0
-      init best : R to outer
-      loop
-        set x to r x (1 - x)
-        set k to k + 1
-        k < warmup
-      set k to 0
-      loop
-        set x to r x (1 - x)
-        set k to k + 1
+      x : R <- im(z)
+      x0 : R <- x
+      r : R <- re(z)
+      k : Z <- 0
+      best : R <- outer
+      while k < warmup
+        x <- r x (1 - x)
+        k <- k + 1
+      k <- 0
+      while k < max_iters and |x - x0| > tol
+        x <- r x (1 - x)
+        k <- k + 1
         if |x - x0| < best then
-          set best to |x - x0|
-        k < max_iters and |x - x0| > tol
-      blend(best / outer, white, black)
+          best <- |x - x0|
+      output blend(best / outer, white, black) to color
 
 configuration:
   title: Configuration

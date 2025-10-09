@@ -1,22 +1,20 @@
 module Language.Code.Simulator
   ( simulate
+  , eval
   , HaskellTypeM
   ) where
 
-import Language.Value hiding (get)
-import Language.Code  hiding (get, set)
+import FractalStream.Prelude
+
+import Language.Value
+import Language.Code
 import Language.Value.Evaluator
 
 import Data.Indexed.Functor
 
-import Control.Monad.State
-import GHC.TypeLits
-import Fcf (Exp, Eval)
-import Data.Kind
-
-data HaskellTypeM :: Type -> (Environment, FSType) -> Exp Type
-type instance Eval (HaskellTypeM s '(env, t)) =
-  State (Context HaskellTypeOfBinding env, s) (HaskellType t)
+data HaskellTypeM :: Type -> Environment -> Exp Type
+type instance Eval (HaskellTypeM s env) =
+  State (Context HaskellTypeOfBinding env, s) ()
 
 -- | Update a variable in the current environment
 update :: forall name t env s
@@ -39,45 +37,38 @@ eval v = do
 -- | Run some 'Code' by interpreting it into a state monad.
 -- The 's' parameter allows for extra state that may be used
 -- by the effects handlers.
-simulate :: forall effs env t s
+simulate :: forall effs env s
           . Handlers effs (HaskellTypeM s)
-         -> Code effs env t
-         -> State (Context HaskellTypeOfBinding env, s) (HaskellType t)
+         -> Code effs env
+         -> State (Context HaskellTypeOfBinding env, s) ()
 simulate handlers = indexedFold @(HaskellTypeM s) $ \case
 
-  Let pf name tv vc _tr body -> recallIsAbsent (absentInTail pf) $ do
+  Let pf name vc body -> recallIsAbsent (absentInTail pf) $ do
     (ctx, s) <- get
-    value <- vc
-    let ctx' = Bind name tv value ctx
+    value <- eval vc
+    let ctx' = Bind name (typeOfValue vc) value ctx
         (result, (Bind _ _ _ ctx'', s'')) = runState body (ctx', s)
     put (ctx'', s'')
     pure result
 
-  Set pf name tv vc -> do
-    result <- vc
-    update pf name tv result
+  Set pf name vc -> do
+    result <- eval vc
+    update pf name (typeOfValue vc) result
 
-  Call _ code -> do
-    st <- get
-    pure (evalState code st)
-
-  Block _ stmts stmt -> do
-    sequence_ stmts
-    stmt
-
-  Pure _ v -> eval v
+  Block stmts -> sequence_ stmts
 
   NoOp -> pure ()
 
-  DoWhile body -> loop
+  DoWhile cond body -> loop
     where loop = do
-            continue <- body
-            if continue then loop else pure ()
+            body
+            tf <- eval cond
+            if tf then loop else pure ()
 
-  IfThenElse _ test t f -> do
+  IfThenElse test t f -> do
     tf <- eval test
     if tf then t else f
 
-  Effect effectType env ty eff ->
+  Effect effectType env eff ->
     case getHandler effectType handlers of
-      Handle _ handle -> handle (envProxy env) ty eff
+      Handle _ handle -> handle (envProxy env) eff

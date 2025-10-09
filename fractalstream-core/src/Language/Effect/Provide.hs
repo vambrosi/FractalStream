@@ -2,10 +2,10 @@ module Language.Effect.Provide
   ( Provide(..)
   ) where
 
+import FractalStream.Prelude
+
 import Language.Value
 import Data.Indexed.Functor
-import Fcf (Exp, Eval)
-import Data.Kind
 
 data Provide (env :: Environment)
              (code :: (Environment, FSType) -> Exp Type)

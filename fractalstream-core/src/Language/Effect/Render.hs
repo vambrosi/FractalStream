@@ -1,5 +1,8 @@
 {-# language OverloadedStrings #-}
 module Language.Effect.Render
+  () where
+
+{-
   ( Render(..)
   , renderEffectParser
   ) where
@@ -14,7 +17,7 @@ import Data.Type.Equality ((:~:)(..))
 import GHC.TypeLits
 import Data.Kind
 
-data Render (code :: (Environment, FSType) -> Exp Type) (et :: (Environment, FSType)) where
+data Render (code :: Environment -> Exp Type) (env :: Environment) where
   Render :: forall env code inputX inputY
         . ( KnownSymbol inputX, KnownSymbol inputY )
        => EnvironmentProxy env
@@ -25,7 +28,8 @@ data Render (code :: (Environment, FSType) -> Exp Type) (et :: (Environment, FST
        -> Value '(env, 'Pair 'IntegerT 'IntegerT) -- Width and height of the image
        -> Value '(env, 'Pair 'RealT 'RealT) -- Upper-left X, Y coordinates
        -> Value '(env, 'Pair 'RealT 'RealT) -- dx, dy
-       -> Code '[] ( '(inputX, 'RealT) ': '(inputY, 'RealT) ': env) 'ColorT
+       -> Code '[Output '[ '("color", 'ColorT)]]
+               ( '(inputX, 'RealT) ': '(inputY, 'RealT) ': env)
           -- ^ NOTE: this does *not* use the recursive 'code' type! The
           -- rendering effect specifically requires effect-free code. Any
           -- handler for a Render effect will have to be able to handle
@@ -150,4 +154,5 @@ on refresh
   else
     blit bitmap at (0,0) with scale=100% opacity=100%
 
+-}
 -}

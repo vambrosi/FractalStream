@@ -11,16 +11,14 @@ module Language.Value.Evaluator
   , type ScalarFromContext
   ) where
 
+import FractalStream.Prelude
+
 import Language.Value
 import Data.Indexed.Functor
 import Data.Color
 
-import Data.Type.Equality ((:~:)(..))
-import GHC.TypeLits hiding (LTI, GTI)
-import Fcf (Exp, Eval, Pure1)
 import Unsafe.Coerce
 import Numeric.Extras
-import Data.Kind
 
 -- | First-class family corresponding to 'HaskellType', suitable to use in a 'Context'
 data HaskellTypeOfBinding :: Symbol -> FSType -> Exp Type
@@ -221,7 +219,11 @@ evaluator v0 ctx = case v0 of
     MulI x y -> x ctx * y ctx
     DivI x y -> x ctx `div` y ctx
     ModI x y -> x ctx `mod` y ctx
-    PowI x n -> x ctx ^ n ctx
+    PowI x y -> case (x ctx, y ctx) of
+      (_, 0) -> 1
+      (1, _) -> 1
+      (n, p) | p < 0     -> 0
+             | otherwise -> n ^ p
     AbsI x   -> abs (x ctx)
     NegI x   -> negate (x ctx)
 

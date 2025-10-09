@@ -13,6 +13,8 @@ module Actor.Event
   , toEventHandlers
   ) where
 
+import FractalStream.Prelude
+
 import Language.Effect
 import Language.Effect.Output
 import Language.Effect.Draw
@@ -28,14 +30,9 @@ import Language.Code.InterpretIO
 import Data.DynamicValue
 
 import Data.IORef
-import Control.Monad
-import Control.Monad.State
-import Data.Map (Map)
 import qualified Data.Map as Map
 
-import GHC.TypeLits
 import Data.Aeson
-import Data.Maybe (fromMaybe)
 
 type Point = (Double, Double)
 
@@ -51,7 +48,7 @@ data Event
   deriving Show
 
 type HandlerEffects env = '[Output env, Draw]
-type HandlerCode out env = Code (HandlerEffects out) env 'VoidT
+type HandlerCode out env = Code (HandlerEffects out) env
 
 data EventHandlers env = EventHandlers
   { ehOnClick       :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT ])
@@ -88,15 +85,14 @@ data ComplexParsedEventHandlers = ComplexParsedEventHandlers
   }
   deriving Show
 
-toEventHandlers :: forall env splices
+toEventHandlers :: forall env
                  . EnvironmentProxy env
-                -> Context Splice splices
+                -> Splices
                 -> ParsedEventHandlers
                 -> Either String (EventHandlers env)
 toEventHandlers env splices ParsedEventHandlers{..} = do
   let parse :: EnvironmentProxy e -> String -> Either String (HandlerCode env e)
-      parse e = either (Left . show . snd) Right
-              . parseCode (effs env) e splices VoidType
+      parse e = parseCode (effs env) e splices
 
       effs e = EP $ ParseEff (outputEffectParser e)
                   $ ParseEff drawEffectParser
@@ -171,8 +167,8 @@ convertComplexToRealEventHandlers ComplexParsedEventHandlers{..}
   where
     initOrSet :: Either String String -> String -> String -> String
     initOrSet lr x y = concat $ case lr of
-      Left  v -> ["set ", v, " to ", x, " + i ", y, "\n"]
-      Right v -> ["init ", v, " : C to ", x, " + i ", y, "\n"]
+      Left  v -> [v, " <- ", x, " + i ", y, "\n"]
+      Right v -> [v, " : C <- ", x, " + i ", y, "\n"]
     cplx :: (Either String String, String)
          -> (String, String, String)
     cplx (z, code) =
@@ -439,12 +435,11 @@ runEventHandler ctx draw evth args = do
 
   -- Build a handler for the Output effect that outputs values
   -- into the corresponding IORef in `iorefs`.
-  let handleOutput :: forall e t
-                . EnvironmentProxy e
-             -> TypeProxy t
-             -> Output env ScalarIORefM '(e,t)
-             -> StateT (Context IORefTypeOfBinding e) IO (HaskellType t)
-      handleOutput _ _ (Output _ pf _ v) = do
+  let handleOutput :: forall e
+        . EnvironmentProxy e
+        -> Output env ScalarIORefM e
+        -> StateT (Context IORefTypeOfBinding e) IO ()
+      handleOutput _ (Output _ pf _ v) = do
         x <- eval' v
         let ioref = getBinding iorefs pf
         liftIO (writeIORef ioref x)

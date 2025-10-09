@@ -8,6 +8,8 @@ module Actor.Viewer.Complex
   , cloneComplexViewer
   ) where
 
+import FractalStream.Prelude
+
 import Actor.Layout
 import Actor.Tool
 import Actor.Event
@@ -17,6 +19,7 @@ import Language.Code
 import Data.DynamicValue
 
 import Language.Effect.Draw
+import Language.Effect.Output
 import Language.Code.InterpretIO (ScalarIORefM, IORefTypeOfBinding, eval')
 
 import Language.Value.Parser
@@ -24,18 +27,9 @@ import Language.Code.Parser
 
 import Language.Value.Evaluator
 
-import Data.Word
-import Data.Int
-import Data.String
-import Data.Maybe (fromMaybe)
 import Foreign (Ptr)
-import GHC.TypeLits
-import Control.Monad
-import Control.Monad.State
-import Fcf (Eval)
 import Data.Aeson
 import qualified Data.Text as Text
-import Data.Map (Map)
 import qualified Data.Map as Map
 import Control.Concurrent.MVar
 
@@ -81,13 +75,13 @@ data ComplexViewer' where
     , cvConfig' :: Context DynamicValue env
     , cvCoord' :: Proxy z
     , cvPixel' :: Proxy px
-    , cvCode' :: Code '[] ( '(px, 'RealT)
-                         ': '(z, 'ComplexT)
-                         ': '("[internal] x", 'RealT)
-                         ': '("[internal] y", 'RealT)
-                         ': '("[internal] px", 'RealT)
-                         ': env
-                          ) 'ColorT
+    , cvCode' :: Code '[Output '[ '("color", 'ColorT)]]
+                   ( '(px, 'RealT)
+                  ': '(z, 'ComplexT)
+                  ': '("[internal] x", 'RealT)
+                  ': '("[internal] y", 'RealT)
+                  ': '("[internal] px", 'RealT)
+                  ': env)
     , cvTools' :: [Tool]
     , cvGetDrawCommands :: IO [[DrawCommand]]
     , cvDrawCommandsChanged :: IO Bool
@@ -110,7 +104,7 @@ instance KnownType t => Show (StringOf t) where
 
 instance KnownType t => IsString (StringOf t) where
   fromString s =
-    case parseValue EmptyEnvProxy EmptyContext (typeProxy @t) s of
+    case parseValue @_ @t Map.empty s of
       Left err -> error (show err)
       Right v  -> StringOf (evaluate v EmptyContext)
 
@@ -134,7 +128,7 @@ withComplexViewer' :: ( NotPresent "[internal argument] #blockWidth" env
                       , NotPresent "[internal argument] #subsamples" env )
                    => ComplexViewerCompiler
                    -> Context DynamicValue env
-                   -> Context Splice splices
+                   -> Splices
                    -> ComplexViewer
                    -> (  ViewerUIProperties
                       -> ComplexViewer'
@@ -171,9 +165,12 @@ withComplexViewer' jit cvConfig' splices ComplexViewer{..} action = withEnvironm
                               vpSize  = cvSize
                               vpCanResize = cvCanResize
 
-                          let effectParser = EP NoEffs
+                          let outputs = declare @"color" ColorType EmptyEnvProxy
+                              effectParser = EP
+                               $ ParseEff (outputEffectParser outputs)
+                               $ NoEffs
 
-                          case parseCode effectParser env splices ColorType cvCode of
+                          case parseCode effectParser env splices cvCode of
                             Left err -> error ("bad parse: " ++ show err)
                             Right cvCode' -> do
                               Found pfX <- pure (lookupEnv argX RealType env3)
@@ -222,13 +219,12 @@ withComplexViewer' jit cvConfig' splices ComplexViewer{..} action = withEnvironm
                                     drawTo :: Int -> EffectHandler Draw ScalarIORefM
                                     drawTo n = Handle Proxy (inner n)
 
-                                    inner :: forall e t
+                                    inner :: forall e
                                            . Int
                                           -> EnvironmentProxy e
-                                          -> TypeProxy t
-                                          -> Draw ScalarIORefM '(e,t)
-                                          -> StateT (Context IORefTypeOfBinding e) IO (HaskellType t)
-                                    inner n _ _ cmd = do
+                                          -> Draw ScalarIORefM e
+                                          -> StateT (Context IORefTypeOfBinding e) IO ()
+                                    inner n _ cmd = do
                                       let emit :: DrawCommand -> StateT (Context IORefTypeOfBinding e) IO ()
                                           emit cmd' = liftIO $ do
                                             modifyMVar_ dcChanged (pure . const True)
@@ -306,26 +302,26 @@ newtype ComplexViewerCompiler = ComplexViewerCompiler
     -> Proxy y
     -> Proxy dx
     -> Proxy dy
-    -> Code '[] env 'ColorT
+    -> Code '[Output '[ '("color", 'ColorT)]] env
     -> ((Int32 -> Int32 -> Int32 -> Context HaskellTypeOfBinding env -> Ptr Word8 -> IO ())
          -> IO t)
     -> IO t
   }
 
 
-complexToReal :: ( KnownType rt, KnownEnvironment env
+complexToReal :: ( KnownEnvironment env
                  , KnownSymbol reZ, KnownSymbol imZ, KnownSymbol vpx
                  , KnownSymbol z, KnownSymbol px
                  , NotPresent z env, NotPresent px ( '(z, 'ComplexT) ': env ) )
               => NameIsPresent reZ 'RealT env
               -> NameIsPresent imZ 'RealT env
               -> NameIsPresent vpx 'RealT ( '(z, 'ComplexT) ': env )
-              -> Code eff ( '(px, 'RealT) ': '(z, 'ComplexT) ': env ) rt
-              -> Code eff env rt
+              -> Code eff ( '(px, 'RealT) ': '(z, 'ComplexT) ': env )
+              -> Code eff env
 complexToReal reZ imZ vpx =
   let z = AddC (R2C (Var Proxy RealType reZ))
                (MulC (Const (Scalar ComplexType (0 :+ 1)))
                      (R2C (Var Proxy RealType imZ)))
       px = Var Proxy RealType vpx
-  in  let_ z  typeProxy
-    . let_ px typeProxy
+  in  let_ z
+    . let_ px

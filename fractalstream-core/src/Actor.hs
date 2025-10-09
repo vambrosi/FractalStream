@@ -3,10 +3,10 @@ module Actor
   ( type ToFun(..)
   ) where
 
+import FractalStream.Prelude
+
 import Language.Code
 import Language.Value.Evaluator (HaskellTypeOfBinding)
-import GHC.TypeLits
-import Data.Kind
 
 
 class ToFun (env :: Environment) (result :: Type) where

@@ -13,9 +13,7 @@ module Data.Indexed.Functor
   , indexedUnfoldM
   ) where
 
-import Control.Monad
-import Fcf
-import Data.Kind
+import FractalStream.Prelude
 
 {-| Functors over indexed datatypes.
 

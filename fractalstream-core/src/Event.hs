@@ -12,9 +12,10 @@ module Event
   , buttonEnv
   ) where
 
+import FractalStream.Prelude
+
 import Language.Environment
 import Language.Type
-import Data.Proxy
 
 data Event (args :: Environment) where
   Refresh   :: Event '[]

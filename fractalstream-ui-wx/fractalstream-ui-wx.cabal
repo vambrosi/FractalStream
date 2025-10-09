@@ -78,7 +78,6 @@ executable FractalStream
   build-depends:       base >=4.8 && <5
                      , fractalstream-core
                      , fractalstream-backend-llvm
-                     , fractalstream-metadata
                      , random
                      , array
                      , wxcore

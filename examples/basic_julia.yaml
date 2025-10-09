@@ -7,17 +7,14 @@ viewer:
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-      init k : Z to 0
-      loop
-        set z to z^2 + C
-        set k to k + 1
-        k < max_iters and |z| < escape_radius
+      k : Z <- 0
+      while k < max_iters and |z| < escape_radius
+        z <- z^2 + C
+        k <- k + 1
       if k = max_iters then
-        black
+        output black to color
       else
-        init t : R to k
-        init m : R to max_iters
-        blend ((t / m)^p, dark blue, white)
+        output blend ((k / max_iters)^p, dark blue, white) to color
 
   tools:
     - name: Trace
@@ -25,16 +22,15 @@ viewer:
       actions:
         - event: click-or-drag
           code: |
-            init prevZ : C to z
-            init k : Z to 0
+            prevZ : C <- z
+            k : Z <- 0
             erase
-            loop
-              set prevZ to z
+            while k < 100 and |z| < 10 escape_radius
+              prevZ <- z
               draw point at z
-              set z to z^2 + C
+              z <- z^2 + C
               draw line from z to prevZ
-              set k to k + 1
-              k < 100 and |z| < 10 escape_radius
+              k <- k + 1
 
 configuration:
   title: Configuration

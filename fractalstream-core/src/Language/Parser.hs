@@ -1,132 +1,54 @@
 {-# language OverloadedStrings #-}
 {-# options_ghc -Wno-x-partial #-}
 module Language.Parser
-  ( type Parser
-  , parse
-  , BadParse(..)
-  , bad
-  , tok_
-  , tokenize
+  (
+   tokenize
   , tokenizeWithIndentation
   , Token(..)
-  , nest
-  , anyToken
-  , eol
-  -- * Precedence-based parsers
-  , ParserStep(..)
-  , PriorityParser(..)
-  , parsePrio
-  , leveledParser
-  , infixR
-  , infixL
-  , prefixOp
-  -- * Re-exports from megaparsec
-  , dbg
+  , Errs(..)
+  , optional
+  , void
   , (<|>)
-  , (<?>)
-  , (<$)
-  , ($>)
-  , (<*)
-  , (*>)
-  , (<&>)
-  , sepBy1
-  , satisfy
-  , try
-  , manyTill
-  , manyTill_
-  , lookAhead
+  , empty
   , many
   , some
-  , eof
-  , mzero
-  , choice
-  , notFollowedBy
-  , void
-  , parseError
-  , ErrorFancy(..)
-  , ErrorItem(..)
-  , ParseError(..)
+  , (<&>)
+  , ($>)
+  , (<$)
+
+   -- * Re-exports from Text.Earley
+  , Grammar
+  , Prod
+  , rule
+  , token
+  , satisfy
+  , (<?>)
+  , fullParses
+  , parser
+
   ) where
 
-import Text.Megaparsec hiding (Token, parse)
-import qualified Data.List.NonEmpty as NE
-import Data.String
-import Data.Functor ((<&>), ($>))
-import Data.Function ((&))
-import Data.Map (Map)
+import FractalStream.Prelude
+
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import Data.Char
-import Control.Monad
 import Data.List (isPrefixOf, sortOn)
-import Data.Maybe (listToMaybe)
 import Data.Ord
-
--- | Swap this out for @Text.Megaparsec.Debug@'s
--- 'dbg'' to debug the parsers.
-import Text.Megaparsec.Debug (dbg')
-dbg :: String -> Parser t -> Parser t
-dbg = if False then dbg' else const id
---dbg _ = id
-
-data BadParse
-  = AmbiguousParse
-  | UnboundVariable String
-  | MismatchedType String
-  | Unexpected (Maybe [Token]) [[Token]]
-  | Other String
-  | Internal
-  deriving (Eq, Ord, Show)
-
-instance ShowErrorComponent BadParse where showErrorComponent = show
-instance VisualStream [Token] where showTokens _ (t NE.:| ts) = show (t : ts)
-
--- | Fail with a custom parse error
-bad :: forall t. BadParse -> Parser t
-bad = fancyFailure . Set.singleton . ErrorCustom
-
-type Parser t = Parsec BadParse [Token] t
-
-parse :: Parser t -> [Token] -> Either (Int, BadParse) t
-parse p toks = runParser (p <* eof) "" toks & \case
-  Left errs -> case NE.head (bundleErrors errs) of
-    FancyError n (Set.toList -> (e:_)) -> Left . (n,) $ case e of
-      ErrorFail s -> Other s
-      ErrorIndentation{} -> Other "indentation error"
-      ErrorCustom e' -> e'
-    FancyError n _ -> Left (n, Internal)
-    TrivialError n ue es -> Left (n, Unexpected (getTokens <$> ue) (map getTokens (Set.toList es)))
-  Right v   -> Right v
-
-getTokens :: ErrorItem Token -> [Token]
-getTokens = \case
-  Tokens (t NE.:| ts) -> t : ts
-  Label  (c NE.:| cs) -> [Identifier (c:cs)]
-  EndOfInput          -> [Newline]
-
-nest :: Either (Int, BadParse) t -> Parser t
-nest =  \case
-  Right t     -> pure t
-  Left (_, e) -> bad e
-
-anyToken :: Parser Token
-anyToken = satisfy (const True)
-
--- | Parse a single token and discard it
-tok_ :: Token -> Parser ()
-tok_ = void . single
+import Text.Earley
 
 ident :: Char -> Bool
 ident c = isAlphaNum c || c == '_'
 
 opTokens :: [(String, Token)]
 opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
-  [ ("+", Plus), ("-", Minus), ("*", Times), ("/", Divide)
+  [ ("+", Plus), ("-", Minus), ("*", Times)
+  , ("//", IntegerDivide), ("/", Divide)
   , ("^", Caret), ("|", Bar), ("(", OpenParen), (")", CloseParen)
   , ("[", OpenBracket), ("]", CloseBracket)
   , ("{", OpenBrace), ("}", CloseBrace)
   , (",", Comma), (":", Colon), (";", Semicolon)
-  , (">", GreaterThan), ("<", LessThan), ("=", Equal)
+  , (">", GreaterThan), ("<", LessThan)
+  , ("==", Equal), ("=", Equal)
   , (">=", GreaterThanOrEqual), ("<=", LessThanOrEqual)
   , ("≥", GreaterThanOrEqual), ("≤", LessThanOrEqual)
   , ("!=", NotEqual), ("=/=", NotEqual), ("≠", NotEqual)
@@ -143,7 +65,9 @@ longestMatchingOperator cs =
 wordlikeTokens :: Map String Token
 wordlikeTokens = Map.fromList
   [ ("if", If), ("then", Then), ("else", Else)
-  , ("e", Euler), ("pi", Pi), ("i", I)
+  , ("e", Euler), ("𝑒", Euler)
+  , ("pi", Pi), ("π", Pi)
+  , ("i", I), ("𝑖", I)
   , ("true", True_), ("false", False_)
   , ("or", Or_), ("and", And_), ("not", Not_)
   ]
@@ -156,10 +80,6 @@ toTok :: TokenGroup -> [Token]
 toTok (Single s) = s ++ [Newline]
 toTok (Group s xs) = [Indent] ++ s ++ [Newline] ++ concatMap toTok xs ++ [Dedent]
 
--- | End of line (including end of input)
-eol :: Parser ()
-eol = eof <|> tok_ Newline
-
 tokenize :: String -> [Token]
 tokenize = \case
   -- Done!
@@ -167,6 +87,9 @@ tokenize = \case
 
   -- Skip whitespace
   (c:cs) | isSpace c -> tokenize cs
+
+  -- Skip comments
+  ('#':_) -> []
 
   -- Tokenize negative numbers
   ('-':cs@(d:_))
@@ -190,6 +113,18 @@ tokenize = \case
                     in NumberF (read ds') : tokenize (dropWhile isDigit cs')
           cs' -> NumberI (read ds) : tokenize cs'
 
+  -- Tokenize the ⁻, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹ superscripts
+  ('⁻':cs@(d:_))
+    | d `elem` superscripts ->
+        let ds  = takeWhile (`elem` superscripts) cs
+            cs' = dropWhile (`elem` superscripts) cs
+         in Caret : NumberI (negate $ superscriptNumber ds) : tokenize cs'
+  cs@(d:_)
+    | d `elem` superscripts ->
+        let ds  = takeWhile (`elem` superscripts) cs
+            cs' = dropWhile (`elem` superscripts) cs
+         in Caret : NumberI (superscriptNumber ds) : tokenize cs'
+
   -- Tokenize special operators
   cs | Just (tok, cs') <- longestMatchingOperator cs
        -> tok : tokenize cs'
@@ -206,6 +141,27 @@ tokenize = \case
   -- Otherwise, grab a junk character
   (c:cs) -> Junk c : tokenize cs
 
+superscripts :: String
+superscripts = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+
+superscriptNumber :: String -> Integer
+superscriptNumber = go 0
+  where
+    go acc = let next i = go (10 * acc + i)
+             in \case
+      [] -> acc
+      ('⁰':xs) -> next 0 xs
+      ('¹':xs) -> next 1 xs
+      ('²':xs) -> next 2 xs
+      ('³':xs) -> next 3 xs
+      ('⁴':xs) -> next 4 xs
+      ('⁵':xs) -> next 5 xs
+      ('⁶':xs) -> next 6 xs
+      ('⁷':xs) -> next 7 xs
+      ('⁸':xs) -> next 8 xs
+      ('⁹':xs) -> next 9 xs
+      _ -> error "should be impossible"
+
 tokenizeWithIndentation :: String -> [Token]
 tokenizeWithIndentation
          = ([Indent] ++) . (++ [Dedent])
@@ -213,8 +169,15 @@ tokenizeWithIndentation
          . block
          . map observeSpaces
          . filter (not . all isSpace)
+         . map dropComments
          . lines
   where
+    dropComments :: String -> String
+    dropComments = \case
+      []      -> []
+      ('#':_) -> []
+      (c:cs)  -> c : dropComments cs
+
     observeSpaces :: String -> (Int, String)
     observeSpaces s = (length (takeWhile isSpace s), dropWhile isSpace s)
 
@@ -242,6 +205,7 @@ data Token
   | Minus
   | Times
   | Divide
+  | IntegerDivide
   | Caret
   | Bar
   | Identifier String
@@ -281,87 +245,12 @@ data Token
 
 instance IsString Token where fromString = Identifier
 
----------------------------------------------------------------------------------
--- Precedence-based parsers
----------------------------------------------------------------------------------
+newtype Errs a = Errs (Either [String] a)
+  deriving (Show, Functor, Applicative, Monad)
 
-data ParserStep t = ParserStep
-  { pFull :: Parser t
-  , pSame :: Parser t
-  , pNext :: Parser t
-  }
-
-newtype PriorityParser t = PriorityParser
-  { parseAtPriority ::
-      Map (Down Integer) (ParserStep t -> Parser t)
-  }
-
-instance Semigroup (PriorityParser t) where
-  PriorityParser m1 <> PriorityParser m2 =
-    PriorityParser (Map.unionWith (\f g s -> f s <|> g s) m1 m2)
-
-instance Monoid (PriorityParser t) where
-  mempty = PriorityParser Map.empty
-
-parsePrio :: forall a. PriorityParser a -> Parser a
-parsePrio (PriorityParser m) = head parserList
-  where
-    pstep0 = ParserStep
-      { pFull = head parserList
-      , pSame = head parserList
-      , pNext = head (tail parserList) -- (*), see below
-      }
-    parserList :: [Parser a]
-    parserList = go pstep0 (Map.elems m)
-    go :: ParserStep a
-       -> [(ParserStep a -> Parser a)]
-       -> [Parser a]
-    go _ [] = [mzero, mzero] -- ensure at least 2 entries for (*)
-    go pstep (p:ps) = p pstep
-                    : let nexts = go (pstep { pSame = pNext pstep
-                                            , pNext = head (tail nexts) }) ps
-                      in nexts
-
-leveledParser :: forall a
-               . Integer
-              -> (ParserStep a -> Parser a)
-              -> PriorityParser a
-leveledParser level =
-  PriorityParser . Map.singleton (Down level)
-
-infixR :: forall a
-          . Token
-         -> Integer
-         -> String
-         -> (a -> a -> a)
-         -> PriorityParser a
-infixR tk level name ctor =
-  leveledParser level $ \ParserStep{..} ->
-       dbg name $ do
-         lhs <- pNext
-         ((ctor lhs <$> (tok_ tk *> pSame))
-          <|> pure lhs
-          <?> name)
-
-infixL :: forall a
-          . Token
-         -> Integer
-         -> String
-         -> (a -> a -> a)
-         -> PriorityParser a
-infixL tk level name ctor =
-  leveledParser level $ \ParserStep{..} ->
-       dbg name $ (foldl1 ctor <$>
-                   (pNext `sepBy1` tok_ tk) <?> name)
-
-prefixOp :: forall a
-          . Token
-         -> Integer
-         -> String
-         -> (a -> a)
-         -> PriorityParser a
-prefixOp tk level name ctor =
-  leveledParser level $ \ParserStep{..} ->
-    dbg name (ctor <$> (tok_ tk *> pSame)
-               <|> pNext
-               <?> name)
+instance Alternative Errs where
+  Errs xs <|> Errs ys = Errs $ case (xs, ys) of
+    (Right v, _) -> Right v
+    (_, Right v) -> Right v
+    (Left xer, Left yer) -> Left (xer ++ yer)
+  empty = Errs (Left [])

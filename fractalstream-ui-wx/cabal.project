@@ -1,4 +1,4 @@
-packages: . ../fractalstream-backend-llvm ../fractalstream-core ../fractalstream-metadata
+packages: . ../fractalstream-backend-llvm ../fractalstream-core
 
 constraints: llvm-hs -shared-llvm
 

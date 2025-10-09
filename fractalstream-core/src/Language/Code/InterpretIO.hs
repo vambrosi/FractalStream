@@ -11,25 +11,23 @@ module Language.Code.InterpretIO
   , ScalarIORefMWith
   ) where
 
-import Language.Value hiding (get)
-import Language.Code  hiding (get, set)
+import FractalStream.Prelude
+
+import Language.Value
+import Language.Code
 import Language.Value.Evaluator
 
 import Data.Indexed.Functor
 
 import Data.IORef
-import Control.Monad.State
-import GHC.TypeLits
-import Fcf (Exp, Eval)
-import Data.Kind
 
-data ScalarIORefM :: (Environment, FSType) -> Exp Type
-type instance Eval (ScalarIORefM '(env, t)) =
-  StateT (Context IORefTypeOfBinding env) IO (HaskellType t)
+data ScalarIORefM :: Environment -> Exp Type
+type instance Eval (ScalarIORefM env) =
+  StateT (Context IORefTypeOfBinding env) IO ()
 
-data ScalarIORefMWith :: Type -> (Environment, FSType) -> Exp Type
-type instance Eval (ScalarIORefMWith s '(env, t)) =
-  StateT (Context IORefTypeOfBinding env, s) IO (HaskellType t)
+data ScalarIORefMWith :: Type -> Environment -> Exp Type
+type instance Eval (ScalarIORefMWith s env) =
+  StateT (Context IORefTypeOfBinding env, s) IO ()
 
 data IORefTypeOfBinding :: Symbol -> FSType -> Exp Type
 type instance Eval (IORefTypeOfBinding name t) = IORef (HaskellType t)
@@ -60,7 +58,7 @@ update :: forall name t env s
        -> TypeProxy t
        -> HaskellType t
        -> StateT (Context IORefTypeOfBinding env, s) IO ()
-update pf _name t v = withKnownType t $ do
+update pf _name ty v = withKnownType ty $ do
   ctx <- fst <$> get
   let valueRef = getBinding ctx pf
   lift (writeIORef valueRef v)
@@ -73,82 +71,71 @@ update' :: forall name t env
        -> TypeProxy t
        -> HaskellType t
        -> StateT (Context IORefTypeOfBinding env) IO ()
-update' pf _name t v = withKnownType t $ do
+update' pf _name ty v = withKnownType ty $ do
   ctx <- get
   let valueRef = getBinding ctx pf
   lift (writeIORef valueRef v)
 
-interpretToIO :: forall effs env0 t0
+interpretToIO :: forall effs env0
                . Handlers effs ScalarIORefM
-              -> Code effs env0 t0
-              -> StateT (Context IORefTypeOfBinding env0) IO (HaskellType t0)
-interpretToIO handlers = fro (Proxy @env0) (Proxy @t0)
-                       . interpretToIO_ @_ @_ @_ @() (mapHandlers to fro handlers)
+              -> Code effs env0
+              -> StateT (Context IORefTypeOfBinding env0) IO ()
+interpretToIO handlers = fro (Proxy @env0)
+                       . interpretToIO_ (mapHandlers to fro handlers)
   where
-    to  :: forall env t pxy1 pxy2
-         . pxy1 env
-        -> pxy2 t
-        -> StateT (Context IORefTypeOfBinding env) IO (HaskellType t)
-        -> StateT (Context IORefTypeOfBinding env, ()) IO (HaskellType t)
-    to _ _ s = do
+    to  :: forall env pxy
+         . pxy env
+        -> StateT (Context IORefTypeOfBinding env) IO ()
+        -> StateT (Context IORefTypeOfBinding env, ()) IO ()
+    to _ s = do
       (ctx, _) <- get
       (result, ctx') <- lift (runStateT s ctx)
       put (ctx', ())
       pure result
 
-    fro :: forall env t pxy1 pxy2
-         . pxy1 env
-        -> pxy2 t
-        -> StateT (Context IORefTypeOfBinding env, ()) IO (HaskellType t)
-        -> StateT (Context IORefTypeOfBinding env) IO (HaskellType t)
-    fro _ _ s = do
+    fro :: forall env pxy
+         . pxy env
+        -> StateT (Context IORefTypeOfBinding env, ()) IO ()
+        -> StateT (Context IORefTypeOfBinding env) IO ()
+    fro _ s = do
       ctx <- get
       (result, (ctx', _)) <- lift (runStateT s (ctx, ()))
       put ctx'
       pure result
 
-interpretToIO_ :: forall effs env t s
+interpretToIO_ :: forall effs env s
                 . Handlers effs (ScalarIORefMWith s)
-               -> Code effs env t
-               -> StateT (Context IORefTypeOfBinding env, s) IO (HaskellType t)
+               -> Code effs env
+               -> StateT (Context IORefTypeOfBinding env, s) IO ()
 interpretToIO_ handlers =
   indexedFold @(ScalarIORefMWith s) $ \case
 
-    Let pf name tv vc _ body -> recallIsAbsent (absentInTail pf) $ do
+    Let pf name ve body -> recallIsAbsent (absentInTail pf) $ do
       (ctxRef, _) <- get
-      value <- vc
+      value <- eval ve
       valueRef <- lift (newIORef value)
-      let ctxRef' = Bind name tv valueRef ctxRef
+      let ctxRef' = Bind name (typeOfValue ve) valueRef ctxRef
       s <- snd <$> get
       lift (evalStateT body (ctxRef', s))
 
-    Set pf name tv vc -> do
-      value <- vc
-      update pf name tv value
+    Set pf name ve -> do
+      value <- eval ve
+      update pf name (typeOfValue ve) value
 
-    Call _ code -> do
-      (ctx, s) <- get
-      lift $ do
-        ctxCopy <- forContextM ctx (\_ _ ref -> readIORef ref >>= newIORef)
-        evalStateT code (ctxCopy, s)
-
-    Block _ stmts stmt -> do
-      sequence_ stmts
-      stmt
-
-    Pure _ v -> eval v
+    Block stmts -> sequence_ stmts
 
     NoOp -> pure ()
 
-    DoWhile body -> loop
+    DoWhile cond body -> loop
       where loop = do
-              continue <- body
-              if continue then loop else pure ()
+              body
+              tf <- eval cond
+              if tf then loop else pure ()
 
-    IfThenElse _ test yes no -> do
+    IfThenElse test yes no -> do
       tf <- eval test
       if tf then yes else no
 
-    Effect effectType env ty eff ->
+    Effect effectType env eff ->
       case getHandler effectType handlers of
-        Handle _ handle -> handle (envProxy env) ty eff
+        Handle _ handle -> handle (envProxy env) eff

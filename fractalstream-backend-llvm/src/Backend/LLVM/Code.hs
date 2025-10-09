@@ -6,6 +6,8 @@ module Backend.LLVM.Code
   , compileRenderer'
   ) where
 
+import FractalStream.Prelude
+
 import Backend.LLVM.Operand
 import Backend.LLVM.Value
 
@@ -17,17 +19,12 @@ import LLVM.IRBuilder.Monad
 import qualified LLVM.IRBuilder.Constant as C
 import qualified LLVM.AST.IntegerPredicate as P
 
-import Control.Monad
-import Control.Monad.Except
-import Control.Monad.Reader
 import Control.Monad.Fix
 
 import Language.Type
 import Language.Code
+import Language.Effect.Output
 import Data.Indexed.Functor
-import Fcf (Exp, Eval)
-import GHC.TypeLits
-import Data.String
 
 import Debug.Trace
 
@@ -37,9 +34,9 @@ toParameterList = \case
   BindingProxy name t env ->
     (toLLVMType t, ParameterName (fromString (symbolVal name))) : toParameterList env
 
-compile :: forall env t
+compile :: forall env output t
          . (KnownEnvironment env, KnownType t)
-        => Code '[] env t
+        => Code '[Output '[ '(output, t)]] env
         -> Either String AST.Module
 compile code = runExcept $
   buildModuleT "compiled code" $ do
@@ -52,8 +49,7 @@ compile code = runExcept $
       retPtr <- typedOperandPtr (typeProxy @t) retArg
       traceM ("ok, continuing... retPtr = " ++ show retPtr)
       args <- allocaArgs (envProxy (Proxy @env)) rawArgs
-      rv <- runReaderT (compileCode getExtern code) args
-      storeOperand rv retPtr
+      runReaderT (compileCode getExtern retPtr code) args
       retVoid
 
 type RenderEnv env =
@@ -70,7 +66,7 @@ compileRenderer :: forall env
                    , Required "y" env ~ 'RealT
                    , NotPresent "y" (env `Without` "y")
                    )
-                => Code '[] env 'ColorT
+                => Code '[Output '[ '("color", 'ColorT)]] env
                 -> Either String AST.Module
 compileRenderer code = runExcept $
   buildModuleT "compiled rendering kernel" $ do
@@ -107,6 +103,12 @@ compileRenderer code = runExcept $
         kPtr <- alloca AST.i32 Nothing 0
         xPtr <- alloca AST.double Nothing 0
         yPtr <- alloca AST.double Nothing 0
+
+        outputPtr <- alloca (AST.ArrayType 3 AST.i8) Nothing 0
+        outputOp <- PtrOp <$>
+                    (ColorOp <$> gep outputPtr [C.int32 0, C.int32 0]
+                             <*> gep outputPtr [C.int32 0, C.int32 1]
+                             <*> gep outputPtr [C.int32 0, C.int32 2])
 
         -- index = 0;
         -- y = 0;
@@ -146,8 +148,17 @@ compileRenderer code = runExcept $
           -- FIXME: add in subdivided dx and dy for subsamples
           storeOperand (RealOp xVal) (getBinding args pfX)
           storeOperand (RealOp yVal) (getBinding args pfY)
-          (cr0, cg0, cb0) <- runReaderT (compileCode getExtern code) args >>= \case
-            ColorOp vr vg vb -> pure (vr, vg, vb)
+
+          -- Allocate a color pointer, pass in to compileCode,
+          -- read components out into cr0, cg0, cb0
+          --(cr0, cg0, cb0) <- runReaderT (compileCode getExtern _ code) args >>= \case
+          --  ColorOp vr vg vb -> pure (vr, vg, vb)
+
+          runReaderT (compileCode getExtern outputOp code) args
+          cr0 <- gep outputPtr [C.int32 0, C.int32 0] >>= (`load` 0)
+          cg0 <- gep outputPtr [C.int32 0, C.int32 1] >>= (`load` 0)
+          cb0 <- gep outputPtr [C.int32 0, C.int32 2] >>= (`load` 0)
+
           cr <- zext cr0 AST.i32
           cg <- zext cg0 AST.i32
           cb <- zext cb0 AST.i32
@@ -256,7 +267,7 @@ compileRenderer' :: forall x y dx dy env
                 -> Proxy y
                 -> Proxy dx
                 -> Proxy dy
-                -> Code '[] env 'ColorT
+                -> Code '[Output '[ '("color", 'ColorT)]] env
                 -> Either String AST.Module
 compileRenderer' name _ _ _ _ code = runExcept $
   buildModuleT "compiled rendering kernel" $ do
@@ -322,6 +333,13 @@ compileRenderer' name _ _ _ _ code = runExcept $
         store accG 0 (C.int32 0)
         store accB 0 (C.int32 0)
         store kPtr 0 (C.int32 0)
+
+        outputPtr <- alloca (AST.ArrayType 3 AST.i8) Nothing 0
+        outputOp <- PtrOp <$>
+                    (ColorOp <$> gep outputPtr [C.int32 0, C.int32 0]
+                             <*> gep outputPtr [C.int32 0, C.int32 1]
+                             <*> gep outputPtr [C.int32 0, C.int32 2])
+
         br subsampleLoop
 
         --       for (k = 0; k < subsamples; ++k) {
@@ -334,8 +352,18 @@ compileRenderer' name _ _ _ _ code = runExcept $
           -- FIXME: add in subdivided dx and dy for subsamples
           storeOperand (RealOp xVal) (getBinding args pfX)
           storeOperand (RealOp yVal) (getBinding args pfY)
-          (cr0, cg0, cb0) <- runReaderT (compileCode getExtern code) args >>= \case
-            ColorOp vr vg vb -> pure (vr, vg, vb)
+
+          -- Allocate a color pointer, pass in to compileCode,
+          -- read components out into cr0, cg0, cb0
+          --(cr0, cg0, cb0) <- runReaderT (compileCode getExtern _ code) args >>= \case
+          --  ColorOp vr vg vb -> pure (vr, vg, vb)
+
+          runReaderT (compileCode getExtern outputOp code) args
+
+          cr0 <- gep outputPtr [C.int32 0, C.int32 0] >>= (`load` 0)
+          cg0 <- gep outputPtr [C.int32 0, C.int32 1] >>= (`load` 0)
+          cb0 <- gep outputPtr [C.int32 0, C.int32 2] >>= (`load` 0)
+
           cr <- zext cr0 AST.i32
           cg <- zext cg0 AST.i32
           cb <- zext cb0 AST.i32
@@ -417,34 +445,34 @@ compileRenderer' name _ _ _ _ code = runExcept $
         retVoid
 
 
-compileCode :: forall m env t
-             . (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
+compileCode :: forall m env output t
+             . (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m, KnownType t)
             => (String -> Operand)
-            -> Code '[] env t
-            -> ReaderT (Context OperandPtr env) m (Op t)
-compileCode getExtern = indexedFold @(CtxOp m) @(CodeF '[]) $ \case
+            -> PtrOp t
+            -> Code '[Output '[ '(output, t) ]] env
+            -> ReaderT (Context OperandPtr env) m ()
+compileCode getExtern retPtr = indexedFold @(OperandPtrContext m) $ \case
 
-  Block _ body end -> sequence_ body >> end
+  Block body -> sequence_ body
 
-  Pure _ v -> value_ getExtern v
+  NoOp -> pure ()
 
-  NoOp -> pure VoidOp
-
-  Set pf _ t body -> do
-    x <- body
+  Set pf _ e -> do
+    x <- value_ getExtern e
     ctx <- ask
-    storeOperand x (withKnownType t (getBinding ctx pf))
-    pure VoidOp
+    storeOperand x (withKnownType (typeOfValue e) (getBinding ctx pf))
+    pure ()
 
-  Let pf name t val _ body -> do
-    x <- val
+  Let pf name val body -> do
+    x <- value_ getExtern val
+    let t = typeOfValue val
     ptr <- allocaOp t
     storeOperand x ptr
     recallIsAbsent (absentInTail pf) $ do
       ctx <- Bind name t ptr <$> ask
       lift (runReaderT body ctx)
 
-  IfThenElse VoidType cond yes no -> mdo
+  IfThenElse cond yes no -> mdo
     c <- value_ getExtern cond >>= detypeOperand BooleanType
     condBr c yesLabel noLabel
 
@@ -457,41 +485,49 @@ compileCode getExtern = indexedFold @(CtxOp m) @(CodeF '[]) $ \case
     br nextLabel
 
     nextLabel <- block
-    pure VoidOp
+    pure ()
 
-  IfThenElse t cond yes no -> mdo
-    ptr <- allocaOp t
-    c <- value_ getExtern cond >>= detypeOperand BooleanType
-    condBr c yesLabel noLabel
+  DoWhile cond body -> mdo
+    br loop
 
-    yesLabel <- block
-    yesResult <- yes
-    storeOperand yesResult ptr
-    br nextLabel
-
-    noLabel <- block
-    noResult <- no
-    storeOperand noResult ptr
-    br nextLabel
-
-    nextLabel <- block
-    derefOperand ptr
-
-  DoWhile body -> mdo
-    br entry
-
-    entry <- block
-    test <- body >>= detypeOperand BooleanType
-    condBr test entry exit
+    loop <- block
+    void body
+    test <- value_ getExtern cond >>= detypeOperand BooleanType
+    condBr test loop exit
 
     exit <- block
-    pure VoidOp
+    pure ()
 
-  _ -> error "TODO: unhandled Code constructor"
+  Effect effectType env eff ->
+    case getHandler effectType (llvmHandlers @output getExtern retPtr) of
+      Handle _ handle -> handle (envProxy env) eff
 
-data CtxOp :: (* -> *) -> (Environment, FSType) -> Exp *
-type instance Eval (CtxOp m et) =
-  ReaderT (Context OperandPtr (Env et)) m (Op (Ty et))
+llvmHandlers :: forall output t m
+              . (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m, KnownType t)
+             => (String -> Operand)
+             -> PtrOp t
+             -> Handlers '[Output '[ '(output, t)]] (OperandPtrContext m)
+llvmHandlers getExtern retPtr = Handler outputHandler NoHandler
+  where
+    outputHandler :: EffectHandler (Output '[ '(output, t)]) (OperandPtrContext m)
+    outputHandler = Handle Proxy $ \_env -> \case
+      Output _ _ _ v ->
+        case sameHaskellType (typeOfValue v) (typeProxy @t) of
+          Just Refl -> mdo
+            x <- value_ getExtern v
+            storeOperand x retPtr
+          Nothing -> pure () -- should be impossible
+{-
+    Output _ _ _ v -> case sameHaskellType (typeOfValue v) (typeProxy @t) of
+      Just Refl -> mdo
+        x <- value_ getExtern v
+        storeOperand x retPtr
+      Nothing   -> pure () -- shouldn't be possible
+-}
+
+data OperandPtrContext :: (* -> *) -> Environment -> Exp *
+type instance Eval (OperandPtrContext m env) =
+  ReaderT (Context OperandPtr env) m ()
 
 allocaArgs :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m)
                => EnvironmentProxy env

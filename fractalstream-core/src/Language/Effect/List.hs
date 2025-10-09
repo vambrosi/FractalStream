@@ -1,74 +1,52 @@
-{-# language OverloadedStrings #-}
+{-# language OverloadedStrings, RecursiveDo #-}
 
 module Language.Effect.List
   ( List(..)
-  , MaybeIfVoid(..)
+  , StartOrEnd(..)
   , listEffectParser
   ) where
 
+import FractalStream.Prelude
+
 import Language.Value
 import Data.Indexed.Functor
-import Language.Parser
 import Language.Code.Parser
 import Language.Value.Parser
+import Language.Parser
+import Language.Effect
 
-import Fcf
-import GHC.TypeLits
-import Data.Type.Equality ((:~:)(..))
-import Data.Kind
+data StartOrEnd = Start | End
 
--- | A type that is like @a@ if @t@ is non-void,
--- or like @Maybe a@ when @t@ is @'VoidT@.
-data MaybeIfVoid (t :: FSType) a where
-  VNothing :: forall a. MaybeIfVoid 'VoidT a
-  VJust :: forall t a. a -> MaybeIfVoid t a
-
-instance Functor (MaybeIfVoid t) where
-  fmap f = \case
-    VNothing -> VNothing
-    VJust x  -> VJust (f x)
-
-instance Foldable (MaybeIfVoid t) where
-  foldMap f = \case
-    VNothing -> mempty
-    VJust x  -> f x
-
-instance Traversable (MaybeIfVoid t) where
-  sequenceA = \case
-    VNothing -> pure VNothing
-    VJust mx -> VJust <$> mx
-
-data List (listName :: Symbol) (listType :: FSType) (code :: (Environment, FSType) -> Exp Type) (et :: (Environment, FSType)) where
+data List (listName :: Symbol) (listType :: FSType) (code :: Environment -> Exp Type) (env :: Environment) where
 
   Insert :: forall name ty env code
           . Proxy name
          -> TypeProxy ty
-         -> EnvTypeProxy '(env, 'VoidT)
+         -> StartOrEnd
+         -> EnvironmentProxy env
          -> Value '(env, ty)
-         -> List name ty code '(env, 'VoidT)
+         -> List name ty code env
 
-  Lookup :: forall name ty env t code item
+  Lookup :: forall name ty env code item
           . KnownSymbol item
          => Proxy name
          -> TypeProxy ty
          -> Proxy item
          -> NameIsAbsent item env
-         -> EnvTypeProxy '( '(item, ty) ': env, t)
-         -> EnvTypeProxy '(env, t)
+         -> EnvironmentProxy ('(item, ty) ': env)
+         -> EnvironmentProxy env
          -> Value '( '(item, ty) ': env, 'BooleanT)
          -- ^ predicate to test for
-         -> Eval (code '( '(item, ty) ': env, t))
+         -> Eval (code ( '(item, ty) ': env))
          -- ^ action to run on the first item matching the predicate
-         -> MaybeIfVoid t (Eval (code '(env, t)))
-         -- ^ fallback action to run if there was no match; optional
-         -- if the result type is void.
-         -> List name ty code '(env, t)
+         -> Maybe (Eval (code env))
+         -- ^ optional fallback action to run if there was no match
+         -> List name ty code env
 
   ClearList :: forall name ty env code
              . Proxy name
-            -> TypeProxy ty
-            -> EnvTypeProxy '(env, 'VoidT)
-            -> List name ty code '(env, 'VoidT)
+            -> EnvironmentProxy env
+            -> List name ty code env
 
   Remove :: forall name ty env code item
           . KnownSymbol item
@@ -76,9 +54,9 @@ data List (listName :: Symbol) (listType :: FSType) (code :: (Environment, FSTyp
          -> TypeProxy ty
          -> Proxy item
          -> NameIsAbsent item env
-         -> EnvTypeProxy '(env, 'VoidT)
+         -> EnvironmentProxy env
          -> Value '( '(item, ty) ': env, 'BooleanT)
-         -> List name ty code '(env, 'VoidT)
+         -> List name ty code env
 
   ForEach :: forall name ty env code item
            . KnownSymbol item
@@ -86,47 +64,126 @@ data List (listName :: Symbol) (listType :: FSType) (code :: (Environment, FSTyp
           -> TypeProxy ty
           -> Proxy item
           -> NameIsAbsent item env
-          -> EnvTypeProxy '(env, 'VoidT)
-          -> EnvTypeProxy '( '(item, ty) ': env, 'VoidT)
-          -> Eval (code '( '( item, ty) ': env, 'VoidT))
-          -> List name ty code '(env, 'VoidT)
+          -> EnvironmentProxy env
+          -> EnvironmentProxy ('(item, ty) ': env)
+          -> Eval (code ( '( item, ty) ': env))
+          -> List name ty code env
 
 instance IFunctor (List name ty) where
-  type IndexProxy (List name ty) = EnvTypeProxy
+  type IndexProxy (List name ty) = EnvironmentProxy
 
   imap :: forall a b i
-        . (forall j. EnvTypeProxy j -> Eval (a j) -> Eval (b j))
+        . (forall j. EnvironmentProxy j -> Eval (a j) -> Eval (b j))
        -> List name ty a i
        -> List name ty b i
   imap f = \case
-    Insert name ty et v -> Insert name ty et v
-    Lookup name ty item pf et et' test match miss ->
-      Lookup name ty item pf et et' test (f et match) (f et' <$> miss)
-    ClearList name ty et -> ClearList name ty et
-    Remove name ty item pf et v -> Remove name ty item pf et v
-    ForEach name ty item pf et et' body -> ForEach name ty item pf et et' (f et' body)
+    Insert name ty soe env v -> Insert name ty soe env v
+    Lookup name ty item pf env env' test match miss ->
+      Lookup name ty item pf env env' test (f env match) (f env' <$> miss)
+    ClearList name env -> ClearList name env
+    Remove name ty item pf env v -> Remove name ty item pf env v
+    ForEach name ty item pf env env' body -> ForEach name ty item pf env env' (f env' body)
 
   toIndex = \case
-    Insert _ _ et _           -> et
-    Lookup _ _ _ _ _ et _ _ _ -> et
-    ClearList _ _ et          -> et
-    Remove _ _ _ _ et _       -> et
-    ForEach _ _ _ _ et _ _    -> et
+    Insert _ _ _ env _         -> env
+    Lookup _ _ _ _ _ env _ _ _ -> env
+    ClearList _ env            -> env
+    Remove _ _ _ _ env _       -> env
+    ForEach _ _ _ _ env _ _    -> env
 
 instance ITraversable (List name ty) where
 
   isequence = \case
-    Insert name ty et v -> pure (Insert name ty et v)
+    Insert name ty soe env v -> pure (Insert name ty soe env v)
     Lookup name ty item pf et et' test mmatch mmiss ->
       Lookup name ty item pf et et' test <$> mmatch <*> sequenceA mmiss
-    ClearList name ty et -> pure (ClearList name ty et)
-    Remove name ty item pf et v -> pure (Remove name ty item pf et v)
-    ForEach name ty item pf et et' mbody -> ForEach name ty item pf et et' <$> mbody
+    ClearList name env -> pure (ClearList name env)
+    Remove name ty item pf env v -> pure (Remove name ty item pf env v)
+    ForEach name ty item pf env env' mbody -> ForEach name ty item pf env env' <$> mbody
+
+ident :: Prod r String Token String
+ident = tokenMatch $ \case
+  Identifier n -> Just n
+  _ -> Nothing
+
+tok :: String -> Prod r String Token ()
+tok s = tokenMatch $ \case
+  Identifier n | s == n -> Just ()
+  _ -> Nothing
+
+toks :: String -> Prod r String Token ()
+toks s = go (words s)
+  where
+    go = \case
+      [] -> empty
+      [w] -> tok w
+      (w:ws) -> tok w *> go ws
 
 listEffectParser :: forall name ty
                   . (KnownSymbol name, KnownType ty)
                  => EffectParser (List name ty)
-listEffectParser = EffectParser Proxy $ \(et :: EnvTypeProxy et) code_ -> do
+listEffectParser = EffectParser Proxy $ \value code -> mdo
+
+  toplevel <- ruleChoice
+    [ mkInsert <$> (tok "insert" *> value)
+               <*> (tok "at" *> startOrEnd <* tok "of" <* listName <* token Newline)
+
+    , mkRemove <$> (toks "remove each" *> ident)
+               <*> (tok "matching" *> value <*
+                    tok "from" <* listName <* token Newline)
+
+    , mkRemoveAll <$ (toks "remove all items from" *> listName <* token Newline)
+
+    , mkFor <$> (toks "for each" *> ident <* tok "in"
+                 <* listName <* token "do" <* token Newline)
+            <*> code
+    ]
+
+  let myListName = tokenMatch $ \case
+        Identifier n | n == symbolVal (Proxy @name) -> Just ()
+        _ -> Nothing
+
+  listName <- rule myListName
+
+  startOrEnd <- ruleChoice
+    [ tok "start" $> Start
+    , tok "end"   $> End
+    ]
+
+  pure toplevel
+
+mkInsert :: KnownType ty => TypedValue -> StartOrEnd -> EnvCodeOfEffect (List name ty) code
+mkInsert v soe = EnvCodeOfEffect $ \env -> withEnvironment env $ do
+  Insert Proxy typeProxy soe env <$> atType v typeProxy
+
+mkRemove :: forall ty name code. KnownType ty
+         => String
+         -> TypedValue
+         -> EnvCodeOfEffect (List name ty) code
+mkRemove n v = EnvCodeOfEffect $ \env -> do
+  SomeSymbol name <- pure (someSymbolVal n)
+  let ty = typeProxy @ty
+  case lookupEnv' name env of
+    Found' _ _ -> Errs $ Left ["Variable " ++ n ++ " is already defined, so it cannot be used here."]
+    Absent' pf -> recallIsAbsent pf $ withEnvironment (BindingProxy name ty env) $
+      Remove Proxy ty name pf env <$> atType v BooleanType
+
+mkRemoveAll :: EnvCodeOfEffect (List name ty) code
+mkRemoveAll = EnvCodeOfEffect (pure . ClearList Proxy)
+
+mkFor :: KnownType ty => String -> EnvCodeOf code -> EnvCodeOfEffect (List name ty) code
+mkFor n (EnvCodeOf body) = EnvCodeOfEffect $ \env -> do
+  SomeSymbol name <- pure (someSymbolVal n)
+  case lookupEnv' name env of
+    Found' {} -> Errs $ Left ["Variable " ++ n ++ " is already defined, so it cannot be used here."]
+    Absent' pf -> withEnvironment env $ recallIsAbsent pf $ do
+      let env' = BindingProxy name typeProxy env
+      ForEach Proxy typeProxy name pf env env' <$> body env'
+{-
+listEffectParser :: forall name ty
+                  . (KnownSymbol name, KnownType ty)
+                 => EffectParser (List name ty)
+listEffectParser = EffectParser Proxy $ \(env :: EnvironmentProxy env) code_ -> do
   -- All list effect commands have the form of a line followed by the list name,
   -- e.g. "insert 42 at start of myList"
   -- Check if the first few tokens are the start of a list command. If so,
@@ -138,16 +195,12 @@ listEffectParser = EffectParser Proxy $ \(et :: EnvTypeProxy et) code_ -> do
     tok_ (Identifier name)
     (eol <|> tok_ "do")
 
-  case lemmaEnvTy @et of
-    Refl -> withEnvType et $ \env -> \case
-      VoidType ->  pInsert env code_
-                <|> pRemoveSome env code_
-                <|> pRemoveAll env code_
-                <|> pFor env code_
-                <|> pWith env VoidType code_
-                <?> ("list command for " ++ name)
-      ty ->
-        (pWith env ty code_ <?> ("list command for " ++ name))
+  pInsert env code_
+    <|> pRemoveSome env code_
+    <|> pRemoveAll env code_
+    <|> pFor env code_
+    <|> pWith env code_
+    <?> ("list command for " ++ name)
 
   where
     name = symbolVal (Proxy @name)
@@ -160,24 +213,24 @@ listEffectParser = EffectParser Proxy $ \(et :: EnvTypeProxy et) code_ -> do
     -- insert VALUE at start of LISTNAME
     -- insert VALUE at end of LISTNAME
     pInsert :: EnvironmentProxy env
-            -> (forall et. EnvTypeProxy et -> Parser (Eval (code et)))
-            -> Parser (List name ty code '(env, 'VoidT))
+            -> (forall env'. EnvironmentProxy env' -> Parser (Eval (code env')))
+            -> Parser (List name ty code env)
     pInsert (env :: EnvironmentProxy env) _ = withEnvironment env $ do
       tok_ "insert"
       v <- value_ @ty @env EmptyContext
       tok_ "at"
       let start = do
             tok_ "start" >> tok_ "of" >> tok_ (Identifier name) >> eol
-            pure (Insert Proxy typeProxy (envTypeProxy env VoidType) v)
+            pure (Insert Proxy typeProxy env v)
           end = do
             tok_ "end" >> tok_ "of" >> tok_ (Identifier name) >> eol
-            pure (Insert Proxy typeProxy (envTypeProxy env VoidType) v) -- FIXME
+            pure (Insert Proxy typeProxy env v) -- FIXME
       (start <|> end <?> "insertion style")
 
     -- remove each item matching VALUE from LISTNAME
     pRemoveSome :: EnvironmentProxy env
-                -> (forall et. EnvTypeProxy et -> Parser (Eval (code et)))
-                -> Parser (List name ty code '(env, 'VoidT))
+                -> (forall env'. EnvironmentProxy env' -> Parser (Eval (code env')))
+                -> Parser (List name ty code env)
     pRemoveSome (env :: EnvironmentProxy env) _ = withEnvironment env $ do
       -- 'try' because this has a prefix overlap with pRemoveAll
       try (tok_ "remove" >> tok_ "each")
@@ -191,53 +244,48 @@ listEffectParser = EffectParser Proxy $ \(et :: EnvTypeProxy et) code_ -> do
             let env' = bindNameEnv item (typeProxy @ty) pf env
             v <- nest (parseValueFromTokens env' EmptyContext BooleanType vtoks)
             tok_ (Identifier name) >> eol
-            pure (Remove Proxy (typeProxy @ty) item pf (envTypeProxy env VoidType) v)
+            pure (Remove Proxy (typeProxy @ty) item pf env v)
 
     -- remove all items from LISTNAME
     pRemoveAll :: EnvironmentProxy env
-               -> (forall et. EnvTypeProxy et -> Parser (Eval (code et)))
-               -> Parser (List name ty code '(env, 'VoidT))
+               -> (forall env'. EnvironmentProxy env' -> Parser (Eval (code env')))
+               -> Parser (List name ty code env)
     pRemoveAll env _ = do
       tok_ "remove" >> tok_ "all" >> tok_ "items"
         >> tok_ "from" >> tok_ (Identifier name) >> eol
-      pure (ClearList Proxy (typeProxy @ty) (envTypeProxy env VoidType))
+      pure (ClearList Proxy env)
 
     -- for each item in LISTNAME do CODE
     pFor :: forall env code
           . EnvironmentProxy env
-         -> (forall et. EnvTypeProxy et -> Parser (Eval (code et)))
-         -> Parser (List name ty code '(env, 'VoidT))
+         -> (forall env'. EnvironmentProxy env' -> Parser (Eval (code env')))
+         -> Parser (List name ty code env)
     pFor env code_ = do
       tok_ "for" >> tok_ "each"
       Identifier itemStr <- satisfy (\case { Identifier _ -> True; _ -> False })
       tok_ "in" >> tok_ (Identifier name) >> tok_ "do"
-      many eol
-      lookAhead (tok_ Indent)
+      some eol
       case someSymbolVal itemStr of
         SomeSymbol (item :: Proxy item) -> case lookupEnv' item env of
-          Found' {} -> fail "a variable named 'item' is already defined"
+          Found' {} -> fail ("a variable named " ++ itemStr ++ " is already defined")
           Absent' pf -> recallIsAbsent pf $ do
             let env' = bindNameEnv item (typeProxy @ty) pf env
-            body <- code_ (envTypeProxy env' VoidType)
-            pure (ForEach Proxy (typeProxy @ty) item pf
-                   (envTypeProxy env VoidType)
-                   (envTypeProxy env' VoidType)
-                   body)
+            body <- code_ env'
+            pure (ForEach Proxy (typeProxy @ty) item pf env env' body)
 
     -- with first item matching VALUE in LISTNAME do CODE
     -- with first item matching VALUE in LISTNAME do CODE else CODE
-    pWith :: forall env t code
+    pWith :: forall env code
            . EnvironmentProxy env
-          -> TypeProxy t
-          -> (forall et. EnvTypeProxy et -> Parser (Eval (code et)))
-          -> Parser (List name ty code '(env, t))
-    pWith env t code_ = withEnvironment env $ do
+          -> (forall env'. EnvironmentProxy env' -> Parser (Eval (code env')))
+          -> Parser (List name ty code env)
+    pWith env code_ = withEnvironment env $ do
       tok_ "with" >> tok_ "first"
       Identifier itemStr <- satisfy (\case { Identifier _ -> True; _ -> False })
       tok_ "matching"
       case someSymbolVal itemStr of
         SomeSymbol (item :: Proxy item) -> case lookupEnv' item env of
-          Found' {} -> fail "a variable named 'item' is already defined"
+          Found' {} -> fail ("a variable named " ++ itemStr ++ " is already defined")
           Absent' pf -> recallIsAbsent pf $ do
             let env' = bindNameEnv item (typeProxy @ty) pf env
             v <- value_ @'BooleanT @( '(item, ty) ': env) EmptyContext
@@ -245,23 +293,11 @@ listEffectParser = EffectParser Proxy $ \(et :: EnvTypeProxy et) code_ -> do
             tok_ "do"
             many eol
             lookAhead (tok_ Indent)
-            case t of
-              VoidType -> do
-                match <- code_ (envTypeProxy env' t)
-                -- Else branch is optional for void return type
-                let elseParser = do
-                      tok_ "else" >> many eol >> lookAhead (tok_ Indent)
-                      VJust <$> code_ (envTypeProxy env t)
-                miss <- elseParser <|> pure VNothing
-                pure (Lookup Proxy (typeProxy @ty) item pf
-                      (envTypeProxy env' VoidType)
-                      (envTypeProxy env  VoidType)
-                      v match miss)
-              _ -> do
-                match <- code_ (envTypeProxy env' t)
-                many eol >> tok_ "else" >> many eol >> lookAhead (tok_ Indent)
-                miss <- VJust <$> code_ (envTypeProxy env t)
-                pure (Lookup Proxy (typeProxy @ty) item pf
-                      (envTypeProxy env' t)
-                      (envTypeProxy env t)
-                      v match miss)
+            match <- code_ env'
+            -- Else branch is optional for void return type
+            let elseParser = do
+                  tok_ "else" >> many eol >> lookAhead (tok_ Indent)
+                  Just <$> code_ env
+            miss <- elseParser <|> pure Nothing
+            pure (Lookup Proxy (typeProxy @ty) item pf env' env v match miss)
+-}
