@@ -81,7 +81,7 @@ jobs:
         cd wxWidgets-3.2.8
         mkdir build-cocoa
         cd build-cocoa
-        cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxBUILD_MONOLITHIC=ON ..
+        cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxBUILD_MONOLITHIC=OFF ..
         cmake --build .
 
     - if: ${{ inputs.wxwidgets == 'build-dynamic' && steps.cache-wxwidgets.outputs.cache-hit != 'true' }}
