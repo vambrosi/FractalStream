@@ -119,12 +119,16 @@ makeWxComplexViewer
     let initialModel = Model (0,0) (1/128, 1/128)
     model <- variable [value := initialModel]
 
+    -- History tracking
+    history <- newIORef (History [] initialModel [])
+
     -- Get the tools
     let theTools = cvTools'
 
     -------------------------------------------------------
     -- Main view
     -------------------------------------------------------
+
 
     -- trigger repaint
     let triggerRepaint = do
@@ -156,6 +160,21 @@ makeWxComplexViewer
               img <- get savedTileImage value >>= traverse imageCopy
               set lastTileImage [value := img]
               set animate [value := Just (now, oldModel, img)]
+
+    let changeViewTo newModel = do
+          modifyIORef' history (historyAppend newModel)
+          jumpViewTo newModel
+
+        jumpViewTo newModel = do
+          oldModel <- get model value
+          Size { sizeW = w, sizeH = h } <- get f clientSize
+          set model [ value := newModel ]
+          get currentTile value >>= cancelTile
+          renderAction <- cvGetFunction
+          newViewerTile <- renderTile' renderId renderAction (w, h) model
+          set currentTile [ value := newViewerTile ]
+          startAnimatingFrom oldModel
+          triggerRepaint
 
     -- Convert back and forth between viewport coordinates and coordinates
     -- in the underlying model (e.g. viewport coordinates to C-plane coordinates in
@@ -281,19 +300,10 @@ makeWxComplexViewer
                     Nothing  -> get currentToolIndex value >>= \case
                       Nothing -> do
                         -- Completed a click, recenter to the clicked point.
-                        Size { sizeW = w, sizeH = h } <- get f clientSize
                         oldModel <- get model value
                         newCenter <- viewToModel pt
-                        set model [value := oldModel
-                                    { modelCenter = toCoords newCenter }]
+                        changeViewTo oldModel { modelCenter = toCoords newCenter }
 
-                        get currentTile value >>= cancelTile
-                        renderAction <- cvGetFunction
-                        newViewerTile <- renderTile' renderId renderAction (w, h) model
-                        set currentTile [value := newViewerTile]
-
-                        startAnimatingFrom oldModel
-                        triggerRepaint
                       Just ix -> do
                         z <- viewToModel pt
                         toolEventHandler (theTools !! ix) (Click z)
@@ -321,16 +331,8 @@ makeWxComplexViewer
                             newArea = boxW * boxH
                             literalScale = sqrt (newArea / oldArea)
                             scale = if literalScale < 0.001 then 1 else literalScale
-                        set model [value := oldModel
-                                    { modelCenter = toCoords newCenter
-                                    , modelPixelDim = (px * scale, py * scale)
-                                    }]
-                        get currentTile value >>= cancelTile
-                        renderAction <- cvGetFunction
-                        newViewerTile <- renderTile' renderId renderAction (w, h) model
-                        set currentTile [value := newViewerTile]
-                        startAnimatingFrom oldModel
-                        triggerRepaint
+                        changeViewTo Model { modelCenter = toCoords newCenter
+                                           , modelPixelDim = (px * scale, py * scale) }
 
                 set draggedTo [value := Nothing]
                 set lastClick [value := Nothing]
@@ -391,7 +393,6 @@ makeWxComplexViewer
           Nothing -> do
 
             oldModel <- get model value
-            Size { sizeW = w, sizeH = h } <- get f clientSize
             let (px, py) = modelPixelDim oldModel
                 speed = 1.05
                 scale = if b then speed else 1.0 / speed
@@ -414,16 +415,8 @@ makeWxComplexViewer
                     cmx' = pmx + (cmx - pmx) * scale
                     cmy' = pmy + (cmy - pmy) * scale
 
-                set model [value := oldModel
-                           { modelPixelDim = (px * scale, py * scale)
-                           , modelCenter = (cmx', cmy')
-                           }]
-                get currentTile value >>= cancelTile
-                renderAction <- cvGetFunction
-                newViewerTile <- renderTile' renderId renderAction (w, h) model
-                set currentTile [value := newViewerTile]
-                startAnimatingFrom oldModel
-                triggerRepaint
+                changeViewTo Model { modelPixelDim = (px * scale, py * scale)
+                                   , modelCenter = (cmx', cmy') }
 
         _ -> propagateEvent
 
@@ -447,15 +440,7 @@ makeWxComplexViewer
                  , enabled := True
                  , on command := do
                      needRefresh <- (== Just ()) <$> tryTakeMVar offThreadRefresh
-                     when needRefresh $ do
-                        Size { sizeW = w, sizeH = h } <- get f clientSize
-
-                        get currentTile value >>= cancelTile
-                        renderAction <- cvGetFunction
-                        newViewerTile <- renderTile' renderId renderAction (w, h) model
-                        set currentTile [value := newViewerTile]
-
-                        triggerRepaint
+                     when needRefresh (changeViewTo =<< get model value)
                  ]
 
     -- Animation timer. At ~65Hz, check if we are animating between
@@ -541,9 +526,25 @@ makeWxComplexViewer
     -- Viewer menu
     viewMenu <- menuPane [text := "&Viewer"]
     menuItem viewMenu [ text := "Reset view\t^"
-                      , on command := do
-                          set model [ value := initialModel ]
-                          requestRefresh
+                      , on command := (historyFirst <$> readIORef history) >>= \case
+                          Nothing -> requestRefresh
+                          Just (h', m') -> do
+                            writeIORef history h'
+                            jumpViewTo m'
+                      ]
+    menuItem viewMenu [ text := "Previous view\t<"
+                      , on command := (historyBack <$> readIORef history) >>= \case
+                          Nothing -> wxcBell
+                          Just (h', m') -> do
+                            writeIORef history h'
+                            jumpViewTo m'
+                      ]
+    menuItem viewMenu [ text := "Next view\t>"
+                      , on command := (historyForward <$> readIORef history) >>= \case
+                          Nothing -> wxcBell
+                          Just (h', m') -> do
+                            writeIORef history h'
+                            jumpViewTo m'
                       ]
     menuItem viewMenu [ text := "Clone viewer\t2"
                       , on command := clone
@@ -592,6 +593,7 @@ data Model = Model
   { modelCenter   :: (Double, Double)
   , modelPixelDim :: (Double, Double)
   }
+  deriving Eq
 
 -- | Given the dimensions of the window, work out a rectangle describing
 -- the viewport in the underlying coordinate system.
@@ -762,3 +764,25 @@ type instance Eval (Unit _) = ()
 
 data UnitET :: (Environment, FSType) -> Exp Type
 type instance Eval (UnitET _) = ()
+
+data History = History [Model] Model [Model]
+
+historyBack :: History -> Maybe (History, Model)
+historyBack (History olds m news) = case olds of
+  (m':olds') -> Just (History olds' m' (m:news), m')
+  _ -> Nothing
+
+historyForward :: History -> Maybe (History, Model)
+historyForward (History olds m news) = case news of
+  (m':news') -> Just (History (m:olds) m' news', m')
+  _ -> Nothing
+
+historyFirst :: History -> Maybe (History, Model)
+historyFirst (History olds m news) = case reverse olds of
+  (m':olds') -> Just (History [] m' (olds' ++ [m] ++ news), m')
+  [] -> Nothing
+
+historyAppend :: Model -> History -> History
+historyAppend m h@(History olds m' _)
+  | m == m'   = h
+  | otherwise = History (m' : olds) m []
