@@ -161,6 +161,10 @@ makeWxComplexViewer
               set lastTileImage [value := img]
               set animate [value := Just (now, oldModel, img)]
 
+    -- Putting a value in this MVar is used to trigger a Refresh event
+    -- on the currently active tool.
+    needToSendRefreshEvent <- newEmptyMVar
+
     let changeViewTo newModel = do
           modifyIORef' history (historyAppend newModel)
           jumpViewTo newModel
@@ -174,7 +178,9 @@ makeWxComplexViewer
           newViewerTile <- renderTile' renderId renderAction (w, h) model
           set currentTile [ value := newViewerTile ]
           startAnimatingFrom oldModel
+          void $ tryPutMVar needToSendRefreshEvent ()
           triggerRepaint
+
 
     -- Convert back and forth between viewport coordinates and coordinates
     -- in the underlying model (e.g. viewport coordinates to C-plane coordinates in
@@ -394,7 +400,7 @@ makeWxComplexViewer
 
             oldModel <- get model value
             let (px, py) = modelPixelDim oldModel
-                speed = 1.05
+                speed = 4
                 scale = if b then speed else 1.0 / speed
             {-
             -- This *seems* like it should work to get the position of the
@@ -411,12 +417,14 @@ makeWxComplexViewer
             readIORef lastKnownMouse >>= \case
               Nothing -> propagateEvent
               Just (pmx, pmy) -> do
-                let (cmx, cmy) = modelCenter oldModel
-                    cmx' = pmx + (cmx - pmx) * scale
-                    cmy' = pmy + (cmy - pmy) * scale
+                isAnimating <- isJust <$> get animate value
+                unless isAnimating $ do
+                  let (cmx, cmy) = modelCenter oldModel
+                      cmx' = pmx + (cmx - pmx) * scale
+                      cmy' = pmy + (cmy - pmy) * scale
 
-                changeViewTo Model { modelPixelDim = (px * scale, py * scale)
-                                   , modelCenter = (cmx', cmy') }
+                  changeViewTo Model { modelPixelDim = (px * scale, py * scale)
+                                     , modelCenter = (cmx', cmy') }
 
         _ -> propagateEvent
 
@@ -465,19 +473,20 @@ makeWxComplexViewer
                               needResize <- get pendingResize value
                               when needResize $ do
                                   set pendingResize [value := False]
-                                  Size { sizeW = w0, sizeH = h0 } <- get f clientSize
-                                  let w = roundUp w0 16
-                                      h = roundUp h0 16
-                                      roundUp x n = case x `mod` n of
-                                          0 -> x
-                                          k -> x + (n - k)
-                                  get currentTile value >>= cancelTile
-                                  renderAction <- cvGetFunction
-                                  newViewerTile <- renderTile' renderId renderAction (w, h) model
-                                  set currentTile [value := newViewerTile]
-                                  -- no animation?
-                                  triggerRepaint ]
+                                  jumpViewTo =<< get model value
+                      ]
 
+    -- Add a timer which checks if the tool layer should receive a refresh event.
+    _ <- timer f [ interval := 50
+                 , enabled := True
+                 , on command := do
+                     needToSendRefresh <- isJust <$> tryTakeMVar needToSendRefreshEvent
+                     when needToSendRefresh $ get currentToolIndex value >>= \case
+                       Nothing -> pure ()
+                       Just ix -> do
+                         toolEventHandler (theTools !! ix) Refresh
+                         cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
+                     ]
 
     set f [ on resize := do
                   set onResizeTimer [enabled := False]
@@ -576,6 +585,8 @@ makeWxComplexViewer
               set toolStatus [text := tiName]
               set currentToolIndex [value := Just ix]
               toolEventHandler (theTools !! ix) Activated
+              when (toolRefreshOnActivate (theTools !! ix)) $
+                toolEventHandler (theTools !! ix) Refresh
               cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
           ]
 
