@@ -38,16 +38,13 @@ jobs:
       uses: actions/cache@v4
       with:
         key: ${{ runner.os }}-cache-wxc
-        path: wxHaskell
+        path: wxHaskell-3.2
 
     - if: ${{ steps.cache-wxc.outputs.cache-hit != 'true' }}
       name: Build wxc from wxHaskell
       run: |
-        git clone https://codeberg.org/wxHaskell/wxHaskell.git
-        cd wxHaskell
-        cp ../patches/static-build-for-wxc.patch .
-        git apply static-build-for-wxc.patch
-        cd wxc
+        git clone https://github.com/matt-noonan/wxHaskell-3.2.git
+        cd wxHaskell-3.2/wxc
         ./generate-version-header.sh
         mkdir build
         cd build
@@ -57,7 +54,7 @@ jobs:
     - name: Install wxc
       run: |
         pwd
-        cd wxHaskell/wxc/build
+        cd wxHaskell-3.2/wxc/build
         sudo cmake --install .
 
     - name: Install LLVM 12
