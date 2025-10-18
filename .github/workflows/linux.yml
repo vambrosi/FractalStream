@@ -45,10 +45,11 @@ jobs:
       run: |
         git clone https://github.com/matt-noonan/wxHaskell-3.2.git
         cd wxHaskell-3.2/wxc
+        git apply ../../patches/build-shared-wxc.patch
         ./generate-version-header.sh
         mkdir build
         cd build
-        cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=ON ..
+        cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON ..
         cmake --build .
 
     - name: Install wxc
