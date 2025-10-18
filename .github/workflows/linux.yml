@@ -48,7 +48,7 @@ jobs:
         ./generate-version-header.sh
         mkdir build
         cd build
-        cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON ..
+        cmake -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=ON ..
         cmake --build .
 
     - name: Install wxc
