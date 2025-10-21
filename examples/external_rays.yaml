@@ -1,0 +1,274 @@
+viewers:
+  - title: Parameter plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: C
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      z : C <- 0
+      k : Z <- 0
+      while k < max_iters and |z| < escape_radius
+        z <- z^2 + C
+        k <- k + 1
+      if |z| < escape_radius then
+        color <- black
+      else
+        # see https://linas.org/art-gallery/escape/ray.html
+        m : R <- k + 1 - log (log (|z|²) / (2 log escape_radius)) / log 2
+        base_color : Color <- if im z > 0 then dark purple else dark green
+        color <- blend (cos (pi m / 20)^2, base_color, light base_color)
+
+    tools:
+      - name: Select parameter value
+        shortcut: s
+        actions:
+          - event: click-or-drag
+            code: selectedC <- C
+
+      - name: Parameter plane external rays
+        shortcut: r
+        configuration:
+          title: Parameter ray
+          size: 400x200
+          vertical-contents:
+            - panel:
+                title: p/q
+                horizontal-contents:
+                  - text-entry:
+                      label: "p ="
+                      value: "1"
+                      type: Z
+                      variable: p
+                  - text-entry:
+                      label: "q ="
+                      value: "5"
+                      type: Z
+                      variable: q
+            - panel:
+                title: Approximation settings
+                vertical-contents:
+                  - text-entry:
+                      label: "Subdivisions per level set: "
+                      value: "10"
+                      type: Z
+                      variable: S
+                  - text-entry:
+                      label: "Step size"
+                      value: "0.01"
+                      type: R
+                      variable: error
+                  - text-entry:
+                      label: "Newton iteration limit"
+                      value: "100"
+                      type: Z
+                      variable: iter_limit
+        actions:
+            - event: refresh
+              code: |
+                erase
+
+                # This is nearly a literal copy of
+                # https://github.com/sagemath/sage/blob/develop/src/sage/dynamics/complex_dynamics/mandel_julia_helper.pyx#L179-L287
+
+                D : Z <- max_iters
+                R : R <- escape_radius
+
+                theta : R <- p / q
+                z : C <- R e^{2 pi i theta}
+
+                dist : R <- error
+
+                k : Z <- 0
+                while k < D and dist >= error
+                  k <- k + 1
+                  j : Z <- 0
+                  while j < S and dist >= error
+                    j <- j + 1
+                    m : R <- (k - 1) S + j
+                    r_m : R <- R^(2^(-m / S))
+                    t_m : C <- r_m^(2^k) e^{2^{k+1} pi i theta}
+                    temp_c : C <- z
+                    difference : R <- error
+
+                    C_k : C <- temp_c
+                    D_k : C <- 1
+
+                    n : Z <- 0
+                    while difference >= error and n < iter_limit
+                      n <- n + 1
+                      old_c : C <- temp_c
+                      C_k <- old_c
+                      D_k <- 1
+
+                      # Work out C_k = f^{\circ k}(z) and D_k = d/dz (f^{\circ k}(z))
+                      t : Z <- 0
+                      while t < k
+                        t <- t + 1
+                        D_k <- 2 D_k C_k + 1
+                        C_k <- C_k^2 + old_c
+
+                      # Use C_k and D_k to take one step of Newton's method for
+                      # f^{\circ(k)}(z) - t_m
+                      temp_c <- old_c - (C_k - t_m) / D_k
+                      difference <- |old_c - temp_c|
+
+                    if n = iter_limit then
+                      dist <- 0 # failed to converge, break out of the loops
+                      draw filled circle at z with radius error
+                    else
+                      dist <- 2 |C_k| log |C_k| / |D_k|
+                      draw line from z to temp_c
+                      z <- temp_c
+
+            - event: deactivated
+              code: erase
+
+  - title: Dynamical plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: z
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      C : C <- selectedC
+      k : Z <- 0
+      while k < max_iters and |z| < escape_radius
+        z <- z^2 + C
+        k <- k + 1
+      if |z| < escape_radius then
+        color <- black
+      else
+        # see https://linas.org/art-gallery/escape/ray.html
+        m : R <- k + 1 - log (log (|z|²) / (2 log escape_radius)) / log 2
+        base_color : Color <- if im z > 0 then dark purple else dark green
+        color <- blend (cos (pi m / 20)^2, base_color, light base_color)
+
+    tools:
+
+      - name: Dynamical plane external rays
+        shortcut: r
+        configuration:
+          title: Parameter ray
+          size: 400x200
+          vertical-contents:
+            - panel:
+                title: p/q
+                horizontal-contents:
+                  - text-entry:
+                      label: "p ="
+                      value: "1"
+                      type: Z
+                      variable: p
+                  - text-entry:
+                      label: "q ="
+                      value: "5"
+                      type: Z
+                      variable: q
+            - panel:
+                title: Approximation settings
+                vertical-contents:
+                  - text-entry:
+                      label: "Subdivisions per level set: "
+                      value: "10"
+                      type: Z
+                      variable: S
+                  - text-entry:
+                      label: "Step size"
+                      value: "0.01"
+                      type: R
+                      variable: error
+                  - text-entry:
+                      label: "Newton iteration limit"
+                      value: "100"
+                      type: Z
+                      variable: iter_limit
+
+        actions:
+            - event: refresh
+              code: |
+                erase
+
+                draw circle at 0 with radius escape_radius
+                # This is nearly a literal copy of
+                # https://github.com/sagemath/sage/blob/develop/src/sage/dynamics/complex_dynamics/mandel_julia_helper.pyx#L179-L287
+                C : C <- selectedC
+
+                D : Z <- max_iters
+                R : R <- escape_radius
+
+                theta : R <- p / q
+                z <- R e^{2 pi i theta}
+
+                dist : R <- error
+
+                k : Z <- 0
+                while k < D and dist >= error
+                  k <- k + 1
+                  j : Z <- 0
+                  while j < S and dist >= error
+                    j <- j + 1
+                    m : R <- (k - 1) S + j
+                    r_m : R <- R^(2^(-m / S))
+                    t_m : C <- r_m^(2^k) e^{2^{k+1} pi i theta}
+
+                    difference : R <- error
+
+                    temp_z : C <- z
+
+                    # these get initialized for real below, in the loop
+                    z_k : C <- 0
+                    dz_k : C <- 0
+
+                    n : Z <- 0
+                    while difference >= error and n < iter_limit
+                      n <- n + 1
+
+                      old_z : C <- temp_z
+                      z_k <- temp_z
+                      dz_k <- 1
+
+                      # Work out C_k = f^{\circ k}(z) and D_k = d/dz (f^{\circ k}(z))
+                      t : Z <- 0
+                      while t < k
+                        t <- t + 1
+                        dz_k <- 2 dz_k z_k
+                        z_k <- z_k^2 + C
+
+                      # Use z_k and dz_k to take one step of Newton's method for
+                      # f^{\circ(k)}(z) - t_m
+                      temp_z <- old_z - (z_k - t_m) / dz_k
+                      difference <- |old_z - temp_z|
+
+                    if n = iter_limit then
+                      dist <- 0 # failed to converge, break out of the loops
+                      draw filled circle at z with radius error
+                    else
+                      dist <- |z - temp_z| # 2 |z_k| log |z_k| / |dz_k|
+                      draw line from z to temp_z
+                      z <- temp_z
+
+            - event: deactivated
+              code: erase
+
+configuration:
+  title: Configuration
+  size: 400x200
+  vertical-contents:
+    - text-entry:
+        label: "f(z) = z^2 +"
+        value: "-0.11 + 0.78i"
+        type: C
+        variable: selectedC
+    - text-entry:
+        label: "Max. iterations:"
+        value: "100"
+        type: Z
+        variable: max_iters
+    - text-entry:
+        label: "Escape radius:"
+        value: 10
+        type: R
+        variable: escape_radius
