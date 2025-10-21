@@ -344,10 +344,11 @@ makeWxComplexViewer
                 propagateEvent
 
               MouseLeftDrag pt modifiers | isNoShiftAltControlDown modifiers -> do
+                mpt <- viewToModel pt
+                set status [text := show mpt]
                 set draggedTo [value := Just $ Viewport (pointX pt, pointY pt)]
                 get currentToolIndex value >>= \case
                   Nothing -> do
-                    mpt <- viewToModel pt
                     set status [text := show mpt]
 
                     dragBox <- getDragBox lastClick draggedTo
