@@ -257,6 +257,9 @@ valueGrammar splices = mdo
                 <*> (token Comma *> atom)
                 <*> (token Comma *> atom <* token CloseParen))
     , withSourceRange (
+        mkRainbow <$> (token (Identifier "rainbow") *>
+                       (token OpenParen *> arith <* token CloseParen)))
+    , withSourceRange (
         mkRGB <$> (token (Identifier "rgb") *> (token OpenParen *> arith))
               <*> (token Comma *> arith)
               <*> (token Comma *> arith <* token CloseParen))
@@ -266,7 +269,7 @@ valueGrammar splices = mdo
 
   let reserved = (`Set.member` reservedWords)
       reservedWords = Set.fromList
-        [ "dark", "light", "invert", "blend", "cycle", "rgb", "mod"]
+        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "rgb", "mod"]
         `Set.union` Map.keysSet colors
         `Set.union` Map.keysSet commonFunctions
         `Set.union` Map.keysSet realFunctions
@@ -395,9 +398,7 @@ mkDiv lhs rhs sr = ParsedValue sr $ \ty -> case ty of
   _ -> throwError (Surprise sr "the result of /" "of some numeric type" (Expected $ an ty))
 
 mkIDiv lhs rhs sr = ParsedValue sr $ \ty -> case ty of
-  IntegerType -> (DivI <$> atType lhs IntegerType <*> atType rhs IntegerType)
-  RealType    -> I2R <$> (DivI <$> atType lhs IntegerType <*> atType rhs IntegerType)
-  ComplexType -> R2C . I2R <$> (DivI <$> atType lhs IntegerType <*> atType rhs IntegerType)
+  IntegerType -> DivI <$> atType lhs IntegerType <*> atType rhs IntegerType
   _ -> throwError (Surprise sr "the result of //" "an integer" (Expected $ an ty))
 
 mkNeg :: ParsedValue -> SourceRange -> ParsedValue
@@ -468,7 +469,8 @@ mkInvert c sr = ParsedValue sr $ \ty -> case ty of
   ColorType -> InvertRGB <$> atType c ColorType
   _ -> throwError (Surprise sr "the result of a color inversion" "a color" (Expected $ an ty))
 
-mkBlend, mkCycle, mkRGB :: ParsedValue -> ParsedValue -> ParsedValue -> SourceRange -> ParsedValue
+mkBlend, mkCycle, mkRGB ::
+  ParsedValue -> ParsedValue -> ParsedValue -> SourceRange -> ParsedValue
 mkBlend t c1 c2 sr = ParsedValue sr $ \ty -> case ty of
   ColorType -> Blend <$> atType t RealType
                      <*> atType c1 ColorType
@@ -483,14 +485,9 @@ mkCycle t c1 c2 sr = ParsedValue sr $ \ty -> case ty of
            => NameIsAbsent "#cycle-arg" env
            -> TC (Value '(env, 'ColorT))
         go pf = recallIsAbsent pf $ do
-          argVal <- ModF <$> atType t RealType
-                         <*> pure (Const (Scalar RealType 1))
+          argVal <- ModF <$> atType t RealType <*> pure 1
           let argVar = Var argName RealType bindingEvidence
-              two = Const (Scalar RealType 2)
-              expr = ITE RealType
-                       (LTF argVar (Const (Scalar RealType 0.5)))
-                       (MulF argVar two)
-                       (SubF two (MulF argVar two))
+              expr = ITE RealType (argVar `LTF` 0.5) (2 * argVar) (2 - 2 * argVar)
           blend <- Blend <$> pure expr
                          <*> atType c1 ColorType
                          <*> atType c2 ColorType
@@ -501,6 +498,51 @@ mkCycle t c1 c2 sr = ParsedValue sr $ \ty -> case ty of
       Absent' pf -> go pf
 
   _ -> throwError (Surprise sr "the result of a cyclic blend operation" "a color" (Expected $ an ty))
+
+-- Cycle through 8 colors over the [0,1] interval:
+--   red, orange, yellow, green, cyan, blue, purple, magenta
+mkRainbow :: ParsedValue -> SourceRange -> ParsedValue
+mkRainbow t sr = ParsedValue sr $ \ty -> case ty of
+  ColorType -> do
+    let argName = Proxy @"#rainbow-arg"
+
+        go :: forall env. KnownEnvironment env
+           => NameIsAbsent "#rainbow-arg" env
+           -> TC (Value '(env, 'ColorT))
+        go pf = recallIsAbsent pf $ do
+          argVal <- ModF <$> atType t RealType <*> pure 1
+          let argVar = Var argName RealType bindingEvidence
+              ifBelow = ITE tripleType . LTF argVar
+              expr = ifBelow 0.5
+                       (ifBelow 0.25
+                          (ifBelow 0.125 (triple 0) (triple 1))
+                          (ifBelow 0.375 (triple 2) (triple 3)))
+                       (ifBelow 0.75
+                          (ifBelow 0.625 (triple 4) (triple 5))
+                          (ifBelow 0.875 (triple 6) (triple 7)))
+              wheel = map (Const . Scalar ColorType)
+                          [red, orange, yellow, green, cyan, blue, purple, violet, red]
+              cyan = rgbToColor (0, 128, 128)
+
+              triple i =
+                let lo = fromIntegral i * 0.125
+                in PairV tripleType (8 * (argVar - Const (Scalar RealType lo)))
+                         (PairV pairType (wheel !! (i + 1)) (wheel !! i))
+
+              tripleType = PairType RealType pairType
+              pairType = PairType ColorType ColorType
+
+              blend = Blend (ProjV1 tripleType expr)
+                            (ProjV1 pairType (ProjV2 tripleType expr))
+                            (ProjV2 pairType (ProjV2 tripleType expr))
+
+          pure (LocalLet argName RealType pf argVal ColorType blend)
+
+    case lookupEnv' argName (envProxy Proxy) of
+      Found' {} -> throwError (internal $ AlreadyDefined sr (symbolVal argName))
+      Absent' pf -> go pf
+
+  _ -> throwError (Surprise sr "the result of a rainbow blend operation" "a color" (Expected $ an ty))
 
 mkRGB r g b sr = ParsedValue sr $ \ty -> case ty of
   ColorType -> RGB <$> atType r RealType

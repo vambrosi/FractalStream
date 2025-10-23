@@ -21,7 +21,7 @@ viewer:
       if k = max_iters then
         color <- black
       else
-        color <- cycle (k / 20, red, yellow)
+        color <- rainbow (k / 20)
 
   tools:
     - name: Bulb info

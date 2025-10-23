@@ -213,7 +213,9 @@ makeWxComplexViewer
                   Just im -> drawCenteredImage im dc viewRect (w, h)
 
                 mdl <- get model value
-                paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
+                get currentToolIndex value >>= \case
+                  Just{}  -> paintToolLayer (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands dc
+                  Nothing -> paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
 
               Just (startTime, oldModel, oldImage) -> do
                 -- Animated paint. Zoom and blend smoothly between
@@ -361,8 +363,6 @@ makeWxComplexViewer
                 set status [text := show mpt]
                 set draggedTo [value := Just $ Viewport (pointX pt, pointY pt)]
                 let dragAction = do
-                      set status [text := show mpt]
-
                       dragBox <- getDragBox lastClick draggedTo
                       case dragBox of
                         Nothing -> return ()
@@ -737,15 +737,16 @@ generateTileImage viewerTile _windowRect = do
 
 -- | Read draw commands from each tool layer and paint them into the
 -- given device context, and then draw the zoom drag box on top.
-paintToolLayerWithDragBox :: ((Double, Double) -> IO Point)
-               -> (Double, Double)
-               -> IO [[DrawCommand]]
-               -> Var (Maybe Viewport)
-               -> Var (Maybe Viewport)
-               -> DC d
-               -> Rect
-               -> Rect
-               -> IO ()
+paintToolLayerWithDragBox
+  :: ((Double, Double) -> IO Point)
+  -> (Double, Double)
+  -> IO [[DrawCommand]]
+  -> Var (Maybe Viewport)
+  -> Var (Maybe Viewport)
+  -> DC d
+  -> Rect
+  -> Rect
+  -> IO ()
 paintToolLayerWithDragBox modelToView pxDim getDrawCommands lastClick draggedTo dc _ _ = dcEncapsulate dc $ do
     paintToolLayer modelToView pxDim getDrawCommands dc
     dragBox <- getDragBox lastClick draggedTo
@@ -757,11 +758,12 @@ paintToolLayerWithDragBox modelToView pxDim getDrawCommands lastClick draggedTo 
 
 -- | Read draw commands for each tool layer and paint them into the
 -- given device context
-paintToolLayer :: ((Double, Double) -> IO Point)
-               -> (Double, Double)
-               -> IO [[DrawCommand]]
-               -> DC d
-               -> IO ()
+paintToolLayer
+  :: ((Double, Double) -> IO Point)
+  -> (Double, Double)
+  -> IO [[DrawCommand]]
+  -> DC d
+  -> IO ()
 paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
 
     cmdss <- getDrawCommands
