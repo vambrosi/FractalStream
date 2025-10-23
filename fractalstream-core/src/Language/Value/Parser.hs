@@ -279,6 +279,10 @@ valueGrammar splices = mdo
                 <*> (token Comma *> atom)
                 <*> (token Comma *> atom <* token CloseParen))
     , withSourceRange (
+        mkCycle <$> (token (Identifier "cycle") *> (token OpenParen *> arith))
+                <*> (token Comma *> atom)
+                <*> (token Comma *> atom <* token CloseParen))
+    , withSourceRange (
         mkRGB <$> (token (Identifier "rgb") *> (token OpenParen *> arith))
               <*> (token Comma *> arith)
               <*> (token Comma *> arith <* token CloseParen))
@@ -288,7 +292,7 @@ valueGrammar splices = mdo
 
   let reserved = (`Set.member` reservedWords)
       reservedWords = Set.fromList
-        [ "dark", "light", "invert", "blend", "rgb", "mod"]
+        [ "dark", "light", "invert", "blend", "cycle", "rgb", "mod"]
         `Set.union` Map.keysSet colors
         `Set.union` Map.keysSet commonFunctions
         `Set.union` Map.keysSet realFunctions
@@ -494,12 +498,39 @@ mkInvert c sr = TypedValue $ \ty -> case ty of
   ColorType -> InvertRGB <$> atType c ColorType
   _ -> typeError sr ty "a color inversion operation" "color"
 
-mkBlend, mkRGB :: TypedValue -> TypedValue -> TypedValue -> SourceRange -> TypedValue
+mkBlend, mkCycle, mkRGB :: TypedValue -> TypedValue -> TypedValue -> SourceRange -> TypedValue
 mkBlend t c1 c2 sr = TypedValue $ \ty -> case ty of
   ColorType -> Blend <$> atType t RealType
                      <*> atType c1 ColorType
                      <*> atType c2 ColorType
   _ -> typeError sr ty "a blend operation" "color"
+
+mkCycle t c1 c2 sr = TypedValue $ \ty -> case ty of
+  ColorType -> do
+    let argName = Proxy @"#cycle-arg"
+
+        go :: forall env. KnownEnvironment env
+           => NameIsAbsent "#cycle-arg" env
+           -> Errs (Value '(env, 'ColorT))
+        go pf = recallIsAbsent pf $ do
+          argVal <- ModF <$> atType t RealType
+                         <*> pure (Const (Scalar RealType 1))
+          let argVar = Var argName RealType bindingEvidence
+              two = Const (Scalar RealType 2)
+              expr = ITE RealType
+                       (LTF argVar (Const (Scalar RealType 0.5)))
+                       (MulF argVar two)
+                       (SubF two (MulF argVar two))
+          blend <- Blend <$> pure expr
+                         <*> atType c1 ColorType
+                         <*> atType c2 ColorType
+          pure (LocalLet argName RealType pf argVal ColorType blend)
+
+    case lookupEnv' argName (envProxy Proxy) of
+      Found' {} -> Errs $ Left ["Internal error, #cycle-arg already defined"]
+      Absent' pf -> go pf
+
+  _ -> typeError sr ty "a cyclic blend operation" "color"
 
 mkRGB r g b sr = TypedValue $ \ty -> case ty of
   ColorType -> RGB <$> atType r RealType
@@ -575,6 +606,8 @@ complexFunctions = Map.fromList
   , ("Arg", ComplexFun RealType ArgC)
   , ("conj", ComplexFun ComplexType ConjC)
   , ("Conj", ComplexFun ComplexType ConjC)
+  , ("bar", ComplexFun ComplexType ConjC)
+  , ("Bar", ComplexFun ComplexType ConjC)
   ]
 
 types :: Map String FSType

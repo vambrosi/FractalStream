@@ -21,9 +21,7 @@ viewer:
       if k = max_iters then
         color <- black
       else
-        t : R <- mod (k / 10, 1)
-        t <- if t > 0.5 then 2 (1 - t) else 2 t
-        color <- blend (t, red, yellow)
+        color <- cycle (k / 20, red, yellow)
 
   tools:
     - name: Bulb info
