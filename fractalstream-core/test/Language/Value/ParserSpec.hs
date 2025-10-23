@@ -50,15 +50,15 @@ spec = do
 
     it "parses with expected precedence" $ do
       let parses1 = parseI "1 + 2 * 3 + 4"
-          --parses2 = parseI "1 + 12 / 2 * 3"
+          parses2 = parseI "1 + 12 // 2 * 3"
           parses3 = parseI "1 - 2 - 3"
-          --parses4 = parseI "1 - 4 / 2 - 3"
+          parses4 = parseI "1 - 4 // 2 - 3"
           parses5 = parseI "5 - 3 + 4 - 2 + 1"
           parses6 = parseI "--10 + ---6"
       parses1 `shouldBe` Right 11
-      --parses2 `shouldBe` Right 3
+      parses2 `shouldBe` Right 19
       parses3 `shouldBe` Right (-4)
-      --parses4 `shouldBe` Right (-4)
+      parses4 `shouldBe` Right (-4)
       parses5 `shouldBe` Right 5
       parses6 `shouldBe` Right 4
 
@@ -125,12 +125,14 @@ spec = do
           parses4 = parseF "cos(2) * pi  - cos (2 pi)"
           parses5 = parseF "3 cos 2 sin 1"
           parses6 = parseF "3 2^2"
+          parses7 = parseF "2-3" -- this should become subtraction, not 2 * -3!
       parses1 `shouldBe` Right 36
       parses2 `shouldBe` Right (-2)
-      parses3 `shouldBe` Left "To avoid ambiguity when using implicit mulitplication, functions must go to the left of other values."
+      parses3 `shouldBe` Left "To avoid ambiguity when using implicit mulitplication, functions must go to the left of other values. loc=SourceRange (Pos {posRow = 0, posCol = 0}) (Pos {posRow = 0, posCol = 4})"
       parses4 `shouldBe` Right (cos 2 * pi - 1)
       parses5 `shouldBe` Right (3 * cos 2 * sin 1)
       parses6 `shouldBe` Right 12
+      parses7 `shouldBe` Right (-1)
 
   describe "when parsing parameterized values" $ do
 
@@ -157,20 +159,24 @@ spec = do
           parses2 = parseI1 "x x + 1"
           parses3 = parseBC "re(z) re(z) + im(z) im(z) < r^2"
           parses4 = parseI1 "x² + 1"
+          parses5 = parseI1 "-2 x + 5"
+          parses6 = parseCR "x^2 y^2"
       parses1 0    `shouldBe` Right 7
       parses1 (-1) `shouldBe` Right 4
       parses2 2    `shouldBe` Right 5
       parses3 (1 :+ 2) 2 `shouldBe` Right False
       parses3 (1 :+ 2) 3 `shouldBe` Right True
       parses4 3 `shouldBe` Right 10
+      parses5 2 `shouldBe` Right 1
+      parses6 2 3 `shouldBe` Right 36
 
     it "will not parse an unbound variable" $ do
       let parses1 = parseI1 "(1 + y) *3 + 4"
-      parses1 0    `shouldBe` Left "No variable named y is in scope here." -- FIXME: location should be 4
+      parses1 0 `shouldBe` Left "No variable named y is in scope here. loc=SourceRange (Pos {posRow = 0, posCol = 5}) (Pos {posRow = 0, posCol = 5})"
 
     it "will not parse a variable at the wrong type" $ do
       let parses1 = parseI1 "if x and false then 1 else 2"
-      parses1 0 `shouldBe` Left "I expected a value of Boolean type here, but x has Integer type." -- FIXME, location: (2, MismatchedType "x")
+      parses1 0 `shouldBe` Left "I expected a value of Boolean type here, but x has ℤ type. loc=SourceRange (Pos {posRow = 0, posCol = 3}) (Pos {posRow = 0, posCol = 3})"
 
     it "can coerce values of compatible types" $ do
       let parses1 = parseI1 "if (pi = x) then 1 else 0"

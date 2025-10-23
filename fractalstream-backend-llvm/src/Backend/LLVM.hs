@@ -17,6 +17,8 @@ module Backend.LLVM
 
 import qualified Data.ByteString.Char8 as BS
 
+import FractalStream.Prelude
+
 import LLVM.Module
 import LLVM.Context hiding (Context)
 import LLVM.PassManager
@@ -27,7 +29,6 @@ import qualified LLVM.CodeModel as CodeModel
 import qualified LLVM.CodeGenOpt as CodeGenOpt
 import qualified LLVM.Relocation as Reloc
 import Control.Concurrent.MVar
-import Data.String
 
 import Foreign.LibFFI
 import Foreign.C.Types
@@ -43,10 +44,8 @@ import Data.Color
 
 import qualified Data.Map as Map
 import Foreign hiding (void)
-import GHC.TypeLits
 
 import Text.Disassembler.X86Disassembler
-import Control.Monad (forM_, when)
 
 data JITFun (env :: Environment) (ret :: FSType) where
   JITFun :: EnvironmentProxy env -> TypeProxy ret -> FunPtr () -> JITFun env ret

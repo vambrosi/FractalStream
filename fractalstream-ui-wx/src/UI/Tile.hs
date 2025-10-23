@@ -73,7 +73,8 @@ ifElseModified tile yes no = do
         Just _  -> yes
 
 -- | Construct a tile from a dynamical system, and begin drawing to it.
-renderTile :: BlockComputeAction -- ^ The rendering action
+renderTile :: Bool -- ^ Use smoothing?
+           -> BlockComputeAction -- ^ The rendering action
            -> (Int, Int)   -- ^ The height and width of this tile.
            -> Rectangle (Double, Double)
               -- ^ The region of the dynamical plane corresponding
@@ -81,7 +82,7 @@ renderTile :: BlockComputeAction -- ^ The rendering action
            -> IO Tile      -- ^ An action which allocates the tile and
                            --   forks a task which draws into it.
 
-renderTile renderingAction (width, height) mRect = do
+renderTile smooth renderingAction (width, height) mRect = do
 
     -- Allocate an red/green/blue pixel byte for each point in the tile
     buf <- mallocForeignPtrBytes (3 * width * height)
@@ -101,7 +102,7 @@ renderTile renderingAction (width, height) mRect = do
     worker <- async $ progressively fillBlock
                     $ Block { coordToModel = convertRect iRect mRect . fromCoords
                             , compute = renderingAction
-                            , logSampleRate = 0
+                            , logSampleRate = if smooth then 1 else 0
                             , blockBuffer = managedBuf
                             , x0 = 0
                             , y0 = 0

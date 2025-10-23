@@ -79,19 +79,37 @@ fillBlock Block{..} = do
                     | (x,y) <- points ]
         indexOf (u,v) = u + v * xStride
 
-
     -- Run the computation on each subsampled point.
-    allocaArray (length points * 3) $ \tmp -> do
-      compute (fromIntegral (xSize `div` skip))
-              (fromIntegral (ySize `div` skip))
-              (floor k)
-              (deltaX :+ deltaY)
+    allocaArray (length points * 3 * k * k) $ \tmp -> do
+      compute (fromIntegral (xSize `div` skip) * fromIntegral k)
+              (fromIntegral (ySize `div` skip) * fromIntegral k)
+              (fromIntegral k)
+              ((deltaX :+ deltaY) / fromIntegral k)
               (let (u,v) = coordToModel (fromIntegral x0, fromIntegral y0)
                in u :+ v)
               tmp
 
-      -- Resample the results
-      --let rgbs = resampleBy averageColor nSubsamples results
+      -- Resample the results. We'll write back into the same buffer
+      -- we started from so that no extra allocation is needed.
+      when (k > 1) $ do
+        let indexOf' (u,v) = fromIntegral k * u + v * xSize * fromIntegral k^2
+            du = [0 .. k - 1]
+            dv = [i * xSize * k | i <- [0 .. k - 1]]
+            ixOffsets = [u' + v' | u' <- du, v' <- dv]
+        forM_ points $ \(u,v) -> do
+          let ix = indexOf' (u,v)
+              tgt = u + v * xSize
+              average :: [Word8] -> Word8
+              average = fromIntegral . (`div` k^2) . sum . map fromIntegral
+          r <- average <$> mapM (\ix' -> peekByteOff @Word8 tmp (3 * (ix + ix') + 0))
+                             ixOffsets
+          g <- average <$> mapM (\ix' -> peekByteOff @Word8 tmp (3 * (ix + ix') + 1))
+                             ixOffsets
+          b <- average <$> mapM (\ix' -> peekByteOff @Word8 tmp (3 * (ix + ix') + 2))
+                             ixOffsets
+          pokeByteOff tmp (3*tgt + 0) r
+          pokeByteOff tmp (3*tgt + 1) g
+          pokeByteOff tmp (3*tgt + 2) b
 
       -- Fill target buffer with result colors.
       with blockBuffer $ \buffer -> withForeignPtr buffer $ \ptr -> do

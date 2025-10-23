@@ -1,0 +1,112 @@
+viewers:
+  - title: Parameter plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: C
+    pixel-size: px
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+        z : C <- 0
+        dz : C <- 1
+
+        tol : R <- px fatness / 2
+
+        dzdc : C <- 0
+        der : C <- 1
+
+        k : Z <- 0
+        repeat
+          dzdc <- 1 + 2 z dzdc
+          z <- z^2 + C
+          der <- 2 z der
+          k <- k + 1
+        until |z / dzdc| < tol or |z| > big or |der| < tiny or k = maxIters
+
+        if k = maxIters or |der| < tiny then
+          color <- interior_color
+        else if |z / dzdc| < tol then
+          color <- boundary_color
+        else
+          color <- exterior_color
+
+    tools:
+      - name: "Select C"
+        shortcut: s
+        actions:
+          - event: click-or-drag
+            code: selectedC <- C
+
+  - title: Dynamical plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: z
+    pixel-size: px
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+        C : C <- selectedC
+        dz : C <- 1
+        w : C <- z
+        tol : R <- 2 px fatness
+
+        k : Z <- 0
+        repeat
+          dz <- 2 z dz
+          z <- z^2 + C
+          k <- k + 1
+        until |z| > big or |z/dz - w/dz| < tol or |dz| < tiny or k = maxIters
+
+        if k = maxIters or |dz| < tiny then
+          color <- interior_color
+        else if |z/dz - w/dz| < tol then
+          color <- boundary_color
+        else
+          color <- exterior_color
+
+configuration:
+  title: Configuration
+  size: 400x200
+  vertical-contents:
+    - text-entry:
+        label: "Selected value of C:"
+        value: -0.1226 + 0.7449i
+        type: C
+        variable: selectedC
+    - text-entry:
+        label: "Max. iterations: "
+        value: "100"
+        type: Z
+        variable: maxIters
+    - text-entry:
+        label: "Max. radius: "
+        value: "10"
+        type: R
+        variable: big
+    - text-entry:
+        label: "Min. radius: "
+        value: "0.001"
+        type: R
+        variable: tiny
+    - text-entry:
+        label: "Fatness"
+        value: "0.1"
+        type: R
+        variable: fatness
+    - panel:
+        title: "Colors"
+        vertical-contents:
+          - color-picker:
+              label: "Boundary"
+              value: black
+              variable: boundary_color
+          - color-picker:
+              label: "Exterior"
+              value: white
+              variable: exterior_color
+          - color-picker:
+              label: "Interior"
+              value: rgb(0.926, 0.863, 0.927)
+              variable: interior_color

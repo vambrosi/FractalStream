@@ -145,12 +145,13 @@ makeWxComplexViewer
 
     viewerTile     <- do
       renderAction <- cvGetFunction
-      renderTile' renderId renderAction (width, height) model
+      renderTile' renderId True renderAction (width, height) model
     currentTile    <- variable [value := viewerTile]
     savedTileImage <- variable [value := Nothing]
     lastTileImage  <- variable [value := Nothing]
     animate        <- variable [value := Nothing]
     currentToolIndex <- variable [value := Nothing]
+    useSmoothing <- variable [value := True]
 
     let startAnimatingFrom oldModel = do
             alreadyAnimating <- isJust <$> get animate value
@@ -174,7 +175,8 @@ makeWxComplexViewer
           set model [ value := newModel ]
           get currentTile value >>= cancelTile
           renderAction <- cvGetFunction
-          newViewerTile <- renderTile' renderId renderAction (w, h) model
+          smoothing <- get useSmoothing value
+          newViewerTile <- renderTile' renderId smoothing renderAction (w, h) model
           set currentTile [ value := newViewerTile ]
           startAnimatingFrom oldModel
           void $ tryPutMVar needToSendRefreshEvent ()
@@ -345,7 +347,6 @@ makeWxComplexViewer
                               z <- viewToModel pt
                               case getToolEventHandler ix (DragDone z zstart) of
                                 Just handle -> do
-                                  finishDrag
                                   handle
                                   cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
                                 Nothing -> finishDrag
@@ -551,6 +552,18 @@ makeWxComplexViewer
     menuItem viewMenu [ text := "Clone viewer\t2"
                       , on command := clone
                       ]
+    menuLine viewMenu
+    smoothingSelection <- menuItem viewMenu [
+      text := "Use subpixel smoothing"
+      , checkable := True
+      , checked := True
+      ]
+    set smoothingSelection [
+      on command := do
+          isChecked <- get smoothingSelection checked
+          set useSmoothing [ value := isChecked ]
+          requestRefresh
+      ]
 
     -- Tool menu
     tools <- menuPane [text := "&Tool"]
@@ -669,17 +682,18 @@ interpolateModel t m1 m2 = m2
 -- matches the current ID value.
 renderTile' :: Valued w
             => IORef Int
+            -> Bool
             -> BlockComputeAction
             -> (Int, Int)
             -> w Model
             -> IO Tile
-renderTile' renderId action dim model = do
+renderTile' renderId smooth action dim model = do
     iD <- atomicModifyIORef' renderId (\x -> (x + 1, x + 1))
     modelRect <- modelToRect dim <$> get model value
     let action' p q r x y c = do
             curId <- readIORef renderId
             if (curId == iD) then action p q r x y c else pure ()
-    renderTile action' dim modelRect
+    renderTile smooth action' dim modelRect
 
 drawCenteredImage :: Image b -> DC d -> Rect -> (Int,Int) -> IO ()
 drawCenteredImage img dc windowRect (width, height) = do

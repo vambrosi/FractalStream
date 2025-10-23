@@ -1,10 +1,11 @@
 {-# language OverloadedStrings #-}
-{-# options_ghc -Wno-x-partial #-}
 module Language.Parser
   (
    tokenize
   , tokenizeWithIndentation
   , Token(..)
+  , BaseToken(..)
+  , SourceRange(..)
   , Errs(..)
   , optional
   , void
@@ -16,15 +17,19 @@ module Language.Parser
   , ($>)
   , (<$)
 
-   -- * Re-exports from Text.Earley
-  , Grammar
-  , Prod
-  , rule
   , token
+  , tokenMatch
   , satisfy
+  , ruleChoice
+  , rule
+  , ProdSR(..)
+  , withSourceRange
   , (<?>)
-  , fullParses
   , parser
+
+   -- * Re-exports from Text.Earley
+  , P.Grammar
+  , P.fullParses
 
   ) where
 
@@ -34,13 +39,13 @@ import qualified Data.Map as Map
 import Data.Char
 import Data.List (isPrefixOf, sortOn)
 import Data.Ord
-import Text.Earley
+import qualified Text.Earley as P
 
-ident :: Char -> Bool
-ident c = (isAlphaNum c && not (c `elem` superscripts) && (c /= '⁻'))
-          || c == '_'
+identChar :: Char -> Bool
+identChar c = (isAlphaNum c && not (c `elem` superscripts) && (c /= '⁻'))
+              || c == '_'
 
-opTokens :: [(String, Token)]
+opTokens :: [(String, BaseToken)]
 opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
   [ ("+", Plus), ("-", Minus), ("*", Times)
   , ("//", IntegerDivide), ("/", Divide)
@@ -58,12 +63,13 @@ opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
   , ("→", RightArrow), ("←", LeftArrow)
   ]
 
-longestMatchingOperator :: String -> Maybe (Token, String)
+longestMatchingOperator :: SRString -> Maybe (Token, SRString)
 longestMatchingOperator cs =
-  listToMaybe [ (t, drop (length s) cs)
-              | (s, t) <- opTokens, s `isPrefixOf` cs ]
+  listToMaybe [ ( Token t (mconcat $ map snd $ take (length s) cs)
+                , drop (length s) cs)
+              | (s, t) <- opTokens, s `isPrefixOf` (map fst cs) ]
 
-wordlikeTokens :: Map String Token
+wordlikeTokens :: Map String BaseToken
 wordlikeTokens = Map.fromList
   [ ("if", If), ("then", Then), ("else", Else)
   , ("e", Euler), ("𝑒", Euler)
@@ -75,72 +81,75 @@ wordlikeTokens = Map.fromList
 data TokenGroup
   = Group [Token] [TokenGroup]
   | Single [Token]
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Show)
 
 toTok :: TokenGroup -> [Token]
-toTok (Single s) = s ++ [Newline]
-toTok (Group s xs) = [Indent] ++ s ++ [Newline] ++ concatMap toTok xs ++ [Dedent]
+toTok (Single s) = s ++ [Token Newline NoSourceRange]
+toTok (Group s xs) = [Token Indent NoSourceRange] ++ s ++
+                     [Token Newline NoSourceRange] ++
+                     concatMap toTok xs ++ [Token Dedent NoSourceRange]
 
 tokenize :: String -> [Token]
-tokenize = \case
+tokenize = tokenize' .
+  zipWith (\i c -> let p = Pos 0 i in (c, SourceRange p p)) [0..]
+
+tokenize' :: SRString -> [Token]
+tokenize' = \case
   -- Done!
   [] -> []
 
   -- Skip whitespace
-  (c:cs) | isSpace c -> tokenize cs
+  (c:cs) | isSpace (fst c) -> tokenize' cs
 
   -- Skip comments
-  ('#':_) -> []
-
-  -- Tokenize negative numbers
-  ('-':cs@(d:_))
-    | isDigit d ->
-      let ds = '-' : takeWhile isDigit cs
-      in case dropWhile isDigit cs of
-            ('.' : cs'@(d' : _))
-              | isDigit d' ->
-                  let ds' = ds <> "." <> takeWhile isDigit cs'
-                  in NumberF (read ds') : tokenize (dropWhile isDigit cs')
-            cs' -> NumberI (read ds) : tokenize cs'
+  (('#',_):_) -> []
 
   -- Tokenize positive numbers
   cs@(d:_)
-    | isDigit d ->
-        let ds = takeWhile isDigit cs
-        in case dropWhile isDigit cs of
-          ('.' : cs'@(d' : _))
-            | isDigit d' ->
-                let ds' = ds <> "." <> takeWhile isDigit cs'
-                    in NumberF (read ds') : tokenize (dropWhile isDigit cs')
-          cs' -> NumberI (read ds) : tokenize cs'
+    | isDigit (fst d) ->
+        let ds = takeWhile (isDigit . fst) cs
+        in case dropWhile (isDigit . fst) cs of
+          (('.',sr) : cs'@(d' : _))
+            | isDigit (fst d') ->
+                let ds' = ds <> [('.', sr)] <> takeWhile (isDigit . fst) cs'
+                in Token (NumberF (read $ map fst ds')) (mconcat $ map snd ds')
+                   : tokenize' (dropWhile (isDigit . fst) cs')
+          cs' -> Token (NumberI (read $ map fst ds)) (mconcat $ map snd ds)
+                 : tokenize' cs'
 
   -- Tokenize the ⁻, ⁰, ¹, ², ³, ⁴, ⁵, ⁶, ⁷, ⁸, ⁹ superscripts
-  ('⁻':cs@(d:_))
-    | d `elem` superscripts ->
-        let ds  = takeWhile (`elem` superscripts) cs
-            cs' = dropWhile (`elem` superscripts) cs
-         in Caret : NumberI (negate $ superscriptNumber ds) : tokenize cs'
+  (('⁻',sr):cs@(d:_))
+    | fst d `elem` superscripts ->
+        let ds  = takeWhile ((`elem` superscripts) . fst) cs
+            cs' = dropWhile ((`elem` superscripts) . fst) cs
+         in Token Caret NoSourceRange
+            : Token (NumberI (negate $ superscriptNumber (map fst ds)))
+                    (sr <> mconcat (map snd ds))
+            : tokenize' cs'
   cs@(d:_)
-    | d `elem` superscripts ->
-        let ds  = takeWhile (`elem` superscripts) cs
-            cs' = dropWhile (`elem` superscripts) cs
-         in Caret : NumberI (superscriptNumber ds) : tokenize cs'
+    | fst d `elem` superscripts ->
+        let ds  = takeWhile ((`elem` superscripts) . fst) cs
+            cs' = dropWhile ((`elem` superscripts) . fst) cs
+         in Token Caret NoSourceRange
+            : Token (NumberI (superscriptNumber (map fst ds)))
+                    (mconcat (map snd ds))
+            : tokenize' cs'
 
   -- Tokenize special operators
   cs | Just (tok, cs') <- longestMatchingOperator cs
-       -> tok : tokenize cs'
+       -> tok : tokenize' cs'
 
   -- Tokenize identifiers
-  cs@(c:_) | isAlpha c && not (c `elem` superscripts) && (c /= '⁻') ->
-               let ds = takeWhile ident cs
-                   cs' = dropWhile ident cs
-                   tok = case Map.lookup ds wordlikeTokens of
+  cs@(c:_) | isAlpha (fst c) && not (fst c `elem` superscripts) && (fst c /= '⁻') ->
+               let ds = takeWhile (identChar . fst) cs
+                   cs' = dropWhile (identChar . fst) cs
+                   tok = case Map.lookup (map fst ds) wordlikeTokens of
                      Just t  -> t
-                     Nothing -> Identifier ds
-               in tok : tokenize cs'
+                     Nothing -> Identifier (map fst ds)
+               in Token tok (mconcat (map snd ds)) : tokenize' cs'
 
   -- Otherwise, grab a junk character
-  (c:cs) -> Junk c : tokenize cs
+  ((c, sr):cs) -> Token (Junk c) sr : tokenize' cs
 
 superscripts :: String
 superscripts = "⁰¹²³⁴⁵⁶⁷⁸⁹"
@@ -163,43 +172,51 @@ superscriptNumber = go 0
       ('⁹':xs) -> next 9 xs
       _ -> error "should be impossible"
 
+type SRString = [(Char, SourceRange)]
+
 tokenizeWithIndentation :: String -> [Token]
 tokenizeWithIndentation
-         = ([Indent] ++) . (++ [Dedent])
+         = ([Token Indent NoSourceRange] ++)
+         . (++ [Token Dedent NoSourceRange])
          . concatMap toTok
          . block
          . map observeSpaces
-         . filter (not . all isSpace)
+         . filter (not . all (isSpace . fst))
          . map dropComments
+         . map (\(r, xs) -> map (\(c, x) -> let p = Pos r c
+                                            in (x, SourceRange p p)) xs)
+         . zip [0..]
+         . map (zip [0..])
          . lines
   where
-    dropComments :: String -> String
+    dropComments :: SRString -> SRString
     dropComments = \case
       []      -> []
-      ('#':_) -> []
+      (('#',_):_) -> []
       (c:cs)  -> c : dropComments cs
 
-    observeSpaces :: String -> (Int, String)
-    observeSpaces s = (length (takeWhile isSpace s), dropWhile isSpace s)
+    observeSpaces :: SRString -> (Int, SRString)
+    observeSpaces s = (length (takeWhile (isSpace . fst) s)
+                      , dropWhile (isSpace . fst) s)
 
     -- Dedent all lines by n spaces
-    extract :: Int -> [(Int, String)] -> ([TokenGroup], [(Int, String)])
+    extract :: Int -> [(Int, SRString)] -> ([TokenGroup], [(Int, SRString)])
     extract n ss =
       let ss'  = takeWhile ((>= n) . fst) ss
           ss'' = dropWhile ((>= n) . fst) ss
       in (block [(m - n, x) | (m,x) <- ss'], ss'')
 
-    block :: [(Int, String)] -> [TokenGroup]
+    block :: [(Int, SRString)] -> [TokenGroup]
     block = \case
       [] -> []
       ((n,s) : ss)
-        | n == 0 -> Single (tokenize s) : block ss
+        | n == 0 -> Single (tokenize' s) : block ss
         | n > 0 ->
             let (is, ss') = extract n ss
-            in Group (tokenize s) is : block ss'
+            in Group (tokenize' s) is : block ss'
       _ -> error "bad indent"
 
-data Token
+data BaseToken
   = NumberI Integer
   | NumberF Double
   | Plus
@@ -244,7 +261,34 @@ data Token
   | RightArrow
   deriving (Eq, Ord, Show)
 
-instance IsString Token where fromString = Identifier
+data SourceRange
+  = SourceRange Pos Pos
+  | NoSourceRange
+  deriving (Eq, Show)
+
+data Pos = Pos { posRow :: Int, posCol :: Int }
+  deriving (Eq, Ord, Show)
+
+instance Semigroup SourceRange where
+  NoSourceRange <> r = r
+  r <> NoSourceRange = r
+  SourceRange s e <> SourceRange s' e' =
+    SourceRange (min s s') (max e e')
+
+instance Monoid SourceRange where
+  mempty = NoSourceRange
+
+data Token = Token
+  { baseToken :: BaseToken
+  , tokenSourceRange :: SourceRange
+  }
+  deriving (Show)
+
+-- | CAUTION! Sketchy Eq instance ahead!
+instance Eq Token where
+  t1 == t2 = baseToken t1 == baseToken t2
+
+instance IsString BaseToken where fromString = Identifier
 
 newtype Errs a = Errs (Either [String] a)
   deriving (Show, Functor, Applicative, Monad)
@@ -255,3 +299,53 @@ instance Alternative Errs where
     (_, Right v) -> Right v
     (Left xer, Left yer) -> Left (xer ++ yer)
   empty = Errs (Left [])
+
+newtype ProdSR r e a = ProdSR { runProdSR :: P.Prod r e Token (SourceRange, a) }
+  deriving Functor
+
+instance Applicative (ProdSR r e) where
+  pure = ProdSR . pure . (NoSourceRange,)
+  ProdSR mf <*> ProdSR ma = ProdSR $
+    (\(sr, f) (sr', x) -> (sr <> sr', f x)) <$> mf <*> ma
+
+instance Alternative (ProdSR r e) where
+  empty = ProdSR empty
+  ProdSR x <|> ProdSR y = ProdSR (x <|> y)
+  many (ProdSR p) = ProdSR (sequence <$> many p)
+  some (ProdSR p) = ProdSR (sequence <$> some p)
+
+instance Semigroup a => Semigroup (ProdSR r e a) where
+  ProdSR px <> ProdSR py = ProdSR $
+    (\(sr,x) (sr',y) -> (sr <> sr', x <> y)) <$> px <*> py
+
+instance Monoid a => Monoid (ProdSR r e a) where
+  mempty = ProdSR (pure (NoSourceRange, mempty))
+
+token :: BaseToken -> ProdSR r e BaseToken
+token bt = satisfy (== bt)
+
+tokenMatch :: (BaseToken -> Maybe a) -> ProdSR r e a
+tokenMatch f = satisfy (isJust . f) <&> \t -> case f t of
+    Just x  -> x
+    Nothing -> error "impossible"
+
+satisfy :: (BaseToken -> Bool) -> ProdSR r e BaseToken
+satisfy f = ProdSR ((\(Token bt sr) -> (sr, bt)) <$> P.satisfy (f . baseToken))
+
+ruleChoice :: [ProdSR r e a] -> P.Grammar r (ProdSR r e a)
+ruleChoice = rule . asum
+
+rule :: ProdSR r e a -> P.Grammar r (ProdSR r e a)
+rule = fmap ProdSR . P.rule . runProdSR
+
+
+-- | A named production (used for reporting expected things).
+infixr 0 <?>
+(<?>) :: ProdSR r e a -> e -> ProdSR r e a
+ProdSR p <?> e = ProdSR (p P.<?> e)
+
+parser :: (forall r. P.Grammar r (ProdSR r e a)) -> P.Parser e [Token] a
+parser p = P.parser (fmap snd . runProdSR <$> p)
+
+withSourceRange :: ProdSR r e (SourceRange -> a) -> ProdSR r e a
+withSourceRange (ProdSR p) = ProdSR $ (\(sr, f) -> (sr, f sr)) <$> p

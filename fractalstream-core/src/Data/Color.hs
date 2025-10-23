@@ -74,7 +74,7 @@ yellow = rgbToColor (255, 255,   0)
 
 -- | Green color.
 green  :: Color
-green  = rgbToColor (  0, 128,   0)
+green  = rgbToColor (  0, 180,   0)
 
 -- | Blue color.
 blue   :: Color

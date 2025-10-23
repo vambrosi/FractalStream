@@ -1,0 +1,35 @@
+viewer:
+  title: Circle
+  style: complex-plane
+  size: 512x512
+  resizable: true
+  z-coord: z
+  initial-center: 0
+  initial-pixel-size: 1/128
+  code: |
+      if |z| < 1 then
+        color <- red
+      else if im z > 0 then
+        color <- green
+      else
+        color <- blue
+
+  tools:
+    - name: Show circles
+      shortcut: s
+      actions:
+        - event: refresh
+          code: |
+            erase
+            for each center in myList do
+              draw circle at center with radius 1
+
+configuration:
+  title: Configuration
+  size: 400x200
+  vertical-contents:
+    - text-entry:
+        label: "Centers"
+        value: "0, 1, i"
+        type: List of ℂ
+        variable: myList
