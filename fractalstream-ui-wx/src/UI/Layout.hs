@@ -13,6 +13,7 @@ import qualified Graphics.UI.WXCore.Events as WX
 import qualified Graphics.UI.WX as WX
 import           Graphics.UI.WXCore.WxcClassesAL
 import           Graphics.UI.WXCore.WxcClassesMZ
+import           Graphics.UI.WXCore.WxcDefs
 
 generateWxLayout :: Dynamic dyn
                  => Window a
@@ -97,27 +98,59 @@ generateWxLayout frame0 wLayout = do
                          , tooltip := ""
                          ]
        normalBG <- get te bgcolor
+
+       errorMessage <- variable [value := Nothing]
+       showErrorTimer <- timer frame0 [ interval := 100
+                                      , enabled := False ]
+
+       errorPopup <- frame
+         [ visible := False
+         , style := wxFRAME_TOOL_WINDOW .+. wxNO_BORDER
+         , position := Point 0 0
+         ]
+       ep <- panel errorPopup [ bgcolor := rgb 255 200 (200 :: Int)]
+       txt <- staticText ep [ text := ""
+                            , font := fontFixed
+                            , fontSize := 12
+                            , color := black ]
+       let showError err = do
+             Point wx wy <- get te position
+             set txt [ text := err ]
+             set errorPopup [ visible := True
+                            , layout := fill $ container ep $ margin 5 $ widget txt
+                            , position := Point (wx + 40) (wy + 40)]
+
+       set showErrorTimer [ on command := do
+         set showErrorTimer [ enabled := False ]
+         msg <- get errorMessage value
+         case msg of
+           Nothing -> pure ()
+           Just err -> showError err
+         ]
+
+       let alert = \case
+             Nothing -> do
+               set te [ bgcolor := normalBG ]
+               set errorMessage [ value := Nothing ]
+             Just err -> do
+               set te [ bgcolor := rgb 180 80 (80 :: Int)]
+               showError err
+
        set te [ on command := do
                   newText <- get te text
-                  setDynamic v newText >>= \case
-                    Nothing -> set te [ bgcolor := normalBG
-                                      , tooltip := "" ]
-                    Just err -> do
-                      set te [ bgcolor := rgb 160 100 (100 :: Int)
-                             , tooltip := err
-                             ]
+                  setDynamic v newText >>= alert
               , on focus := (\case
                                 True -> pure ()
                                 False -> do
                                   newText <- get te text
                                   oldText <- getDynamic v
-                                  when (newText /= oldText) $ setDynamic v newText >>= \case
-                                    Nothing -> set te [ bgcolor := normalBG
-                                                      , tooltip := "" ]
-                                    Just err -> do
-                                      set te [ bgcolor := rgb 160 100 (100 :: Int)
-                                             , tooltip := err
-                                             ])
+                                  when (newText /= oldText) $ setDynamic v newText >>= alert)
+              , on enter := \_ -> do
+                  alreadyShowing <- get errorPopup visible
+                  unless alreadyShowing $ set showErrorTimer [ enabled := True ]
+              , on leave := \_ -> do
+                  set showErrorTimer [ enabled := False ]
+                  set errorPopup [ visible := False ]
               ]
        listenWith v (\_ newText -> set te [ text := newText ])
        pure (fill $ row 5 [ margin 3 (label lab), hfill (widget te) ])
