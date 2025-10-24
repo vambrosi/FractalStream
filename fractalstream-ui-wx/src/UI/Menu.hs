@@ -2,11 +2,14 @@ module UI.Menu
   ( makeMenuBar
   ) where
 
+import FractalStream.Prelude hiding (get)
 import FractalStream.Metadata
 
 import UI.ProjectActions
+import Data.DynamicValue
 
 import Graphics.UI.WX hiding (when)
+import Graphics.UI.WXCore.WxcClassesMZ (menuDestroyByItem)
 
 -- | Make a standard menu bar for `f`, plus any additional
 -- menus we are given. Apparently this should be run after
@@ -32,6 +35,33 @@ makeMenuBar ProjectActions{..} f addlMenus = do
   menuItem prj [ text := "&Edit project"
                , help := "Modify an existing FractalStream project"
                , on command := getProject "Edit" projectEdit ]
+  menuLine prj
+
+  sessionItems <- variable [ value := [] ]
+
+  let updateSessionMenuItems sessions = do
+        forM_ sessions $ \s@SessionInfo{..} -> case sessionVisible of
+          True  -> do
+            mis <- get sessionItems value
+            mi <- menuItem prj [ text := "Hide " ++ sessionName
+                               , on command := hideSession s ]
+            set sessionItems [ value := mi : mis ]
+
+          False -> do
+            mis <- get sessionItems value
+            mi <- menuItem prj [ text := "Show " ++ sessionName
+                                , on command := showSession s ]
+            set sessionItems [ value := mi : mis ]
+
+      destroySessionMenuItems = do
+        mis <- get sessionItems value
+        set sessionItems [ value := [] ]
+        mapM_ (menuDestroyByItem prj) mis
+
+  getDynamic activeSessions >>= updateSessionMenuItems
+  listenWith activeSessions $ \_ newSessions -> do
+    destroySessionMenuItems
+    updateSessionMenuItems newSessions
 
   _quit <- menuQuit prj [ text := "Quit FractalStream" ]
 

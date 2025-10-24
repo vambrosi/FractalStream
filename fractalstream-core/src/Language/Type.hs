@@ -221,3 +221,9 @@ showValue ty v = case ty of
   PairType xt yt -> let (x, y) = v
                      in showValue xt x <> " , " <> showValue yt y
   ListType xt -> "[" ++ intercalate ", " (map (showValue xt) v) ++ "]"
+
+instance An SomeType where
+  an = an . show
+
+instance KnownType t => An (TypeProxy t) where
+  an = an . SomeType

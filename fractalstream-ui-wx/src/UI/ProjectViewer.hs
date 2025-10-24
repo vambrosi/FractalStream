@@ -20,6 +20,7 @@ import           Graphics.UI.WXCore.WxcDefs
 import           Graphics.UI.WXCore.WxcTypes      (rgba)
 import           Graphics.UI.WXCore.WxcClassesAL
 import           Graphics.UI.WXCore.WxcClassesMZ
+import Graphics.UI.WXCore.Frame (frameDefaultStyle)
 import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Planar
 
@@ -41,15 +42,16 @@ import Task.Block (BlockComputeAction)
 
 import qualified Data.Set as Set
 
-viewProject :: (forall a. Frame a -> [Menu ()] -> IO ())
+viewProject :: Window ()
+            -> (forall a. Frame a -> [Menu ()] -> IO ())
             -> UI
-viewProject addMenuBar = UI
+viewProject projectWindow addMenuBar = UI
   { newEnsemble = pure ()
 
   , runSetup = \_ title setupUI continue -> do
-      f <- frame [ text := title
+      f <- frameEx frameDefaultStyle [ text := title
                  , on resize := propagateEvent
-                 ]
+                 ] projectWindow
 
       addMenuBar f []
       WX.windowOnClose f (set f [ visible := False ])
@@ -65,9 +67,9 @@ viewProject addMenuBar = UI
             ]
 
   , makeLayout = \_ title ui -> do
-      f <- frame [ text := title
+      f <- frameEx frameDefaultStyle [ text := title
                  , on resize := propagateEvent
-                 ]
+                 ] projectWindow
 
       WX.windowOnClose f (set f [ visible := False ])
 
@@ -76,26 +78,28 @@ viewProject addMenuBar = UI
       innerLayout <- generateWxLayout f ui
       set f [ layout := fill . margin 5 . column 5 $ [ innerLayout ] ]
 
-  , makeViewer = const (makeWxComplexViewer addMenuBar)
+  , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar)
   }
 
-makeWxComplexViewer :: (forall a. Frame a -> [Menu ()] -> IO ())
+makeWxComplexViewer :: Window ()
+                    -> (forall a. Frame a -> [Menu ()] -> IO ())
                     -> ViewerUIProperties
                     -> ComplexViewer'
                     -> IO ()
 makeWxComplexViewer
+  projectWindow
   addMenuBar
   vup@ViewerUIProperties{..}
   theViewer@ComplexViewer'{..} = do
 
     let clone = do
           newCV <- cloneComplexViewer theViewer
-          makeWxComplexViewer addMenuBar vup newCV
+          makeWxComplexViewer projectWindow addMenuBar vup newCV
 
     let (width, height) = (fst vpSize, snd vpSize)
-    f <- frame [ text := vpTitle
+    f <- frameEx frameDefaultStyle [ text := vpTitle
                , on resize := propagateEvent
-               ]
+               ] projectWindow
     WX.windowOnClose f (set f [ visible := False ])
 
     p <- scrolledWindow f [ scrollRate := sz 10 10 ]

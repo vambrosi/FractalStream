@@ -33,7 +33,6 @@ import Data.DynamicValue
 import Language.Value.Evaluator (HaskellTypeOfBinding, evaluate)
 import Language.Value
 import Language.Value.Parser
-import Language.Parser
 
 import Data.Aeson hiding (Value)
 import qualified Data.Aeson.Types as JSON
@@ -88,7 +87,7 @@ newtype SomeType' = SomeType' { getSomeType :: SomeType }
 instance FromJSON SomeType' where
   parseJSON = withText "type" $ \txt -> do
     case parseType (Text.unpack txt) of
-      Left err -> fail (ppFullError (Left err) $ Text.unpack txt)
+      Left err -> fail (ppFullError err $ Text.unpack txt)
       Right t  -> pure (SomeType' t)
 
 parseLayout :: Object -> JSON.Parser (Layout Dummy)

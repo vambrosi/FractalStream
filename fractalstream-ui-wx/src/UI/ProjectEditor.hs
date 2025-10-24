@@ -30,12 +30,12 @@ editProject yamlFile = do
              , on resize := propagateEvent
              ]
 
-  let splitter pp props0 = feed2 props0 (wxSP_3D .+.
+  let splitter pp' props0 = feed2 props0 (wxSP_3D .+.
                                          wxSP_3DBORDER .+.
                                          wxSP_3DSASH .+.
                                          wxSP_LIVE_UPDATE) $
         initialContainer $ \i r -> \props flags  ->
-        do p <- splitterWindowCreate pp i r flags
+        do p <- splitterWindowCreate pp' i r flags
            windowSetFocus p
            set p props
            return p

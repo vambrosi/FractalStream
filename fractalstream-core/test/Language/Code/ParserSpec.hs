@@ -7,7 +7,6 @@ import FractalStream.Prelude
 
 import Language.Type
 import Language.Value
-import Language.Parser (ppFullError)
 import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Draw

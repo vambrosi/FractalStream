@@ -10,7 +10,6 @@ import Language.Value.Evaluator
 
 import qualified Data.Map as Map
 
-import Language.Parser (ppFullError)
 import qualified Language.Value.Parser as P
 
 parseValue :: EnvironmentProxy env
@@ -18,7 +17,7 @@ parseValue :: EnvironmentProxy env
            -> String
            -> Either String (Value '(env, t))
 parseValue env ty i = withEnvironment env $ withKnownType ty $
-  first (`ppFullError` i) (P.parseValue Map.empty i)
+  first (`P.ppFullError` i) (P.parseValue Map.empty i)
 
 
 spec :: Spec

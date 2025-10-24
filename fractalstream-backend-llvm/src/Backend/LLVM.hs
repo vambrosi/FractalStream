@@ -39,7 +39,6 @@ import Language.Value
 import Language.Value.Evaluator (HaskellTypeOfBinding)
 import Language.Value.Transform
 import Language.Code
-import Language.Parser (ppFullError)
 import Language.Code.Parser
 import Data.Color
 

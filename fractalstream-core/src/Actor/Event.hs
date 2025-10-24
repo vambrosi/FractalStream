@@ -21,7 +21,6 @@ import Language.Value.Evaluator (HaskellTypeOfBinding)
 import Language.Code
 import Language.Value.Parser
 import Language.Code.Parser
-import Language.Parser (ppFullError)
 import Language.Code.InterpretIO
 import Language.Draw
 

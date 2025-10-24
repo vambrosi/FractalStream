@@ -83,14 +83,19 @@ library
                        Language.Code.Simulator
                        Language.Code.InterpretIO
                        Language.Code.Parser
+                       Language.Code.Typecheck
                        Language.Type
                        Language.Environment
                        Language.Value
                        Language.Value.Evaluator
                        Language.Value.Parser
+                       Language.Value.Typecheck
                        Language.Value.Transform
                        Language.Draw
                        Language.Parser
+                       Language.Typecheck
+                       Language.Parser.Tokenizer
+                       Language.Parser.SourceRange
 
                        Project
 

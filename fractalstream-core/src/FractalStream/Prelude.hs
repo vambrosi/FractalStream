@@ -30,6 +30,8 @@ module FractalStream.Prelude
     , isSuffixOf
     , sortOn
     , unsnoc
+    , An(..)
+    , PrettyPrint(..)
   ) where
 
 import Data.Proxy (Proxy(..))
@@ -54,3 +56,19 @@ import Data.Maybe (isJust, fromMaybe, listToMaybe)
 import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn, unsnoc)
 import Data.Int
 import Data.Word
+
+class An a where
+  an :: a -> String
+
+instance An String where
+  an x = case x of
+    "" -> "???"
+    (c:_)
+      | c `elem` "aeiouAEIOU" -> "an " ++ x
+      | otherwise -> "a " ++ x
+
+class PrettyPrint a where
+  pp :: a -> [String]
+
+instance (PrettyPrint a, PrettyPrint b) => PrettyPrint (Either a b) where
+  pp = either pp pp
