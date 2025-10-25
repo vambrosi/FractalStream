@@ -29,8 +29,6 @@ import Language.Parser
 import Language.Typecheck
 import Language.Parser.Tokenizer
 
-type Splices = Map String ParsedValue
-
 ------------------------------------------------------
 -- Main functions for parsing Values
 ------------------------------------------------------
@@ -47,8 +45,8 @@ parseValue splices input = do
   case atType tv typeProxy of TC x -> first Right x
 
 parseParsedValue :: Map String ParsedValue
-                -> String
-                -> Either ParseError ParsedValue
+                 -> String
+                 -> Either ParseError ParsedValue
 parseParsedValue splices = parse (valueGrammar splices) . tokenize
 
 parseValueOrList :: forall env ty. (KnownEnvironment env, KnownType ty)
@@ -152,6 +150,8 @@ valueGrammar splices = mdo
     , check (tcGT  <$> (arith <* token GreaterThan) <*> arith)
     , check (tcGTE <$> (arith <* token GreaterThanOrEqual) <*> arith)
     , check (tcLTE <$> (arith <* token LessThanOrEqual) <*> arith)
+    , check (tcEscapes splices <$> (arith <* token Escapes))
+    , check (tcVanishes splices <$> (arith <* token Vanishes))
     , arith
     ]
 

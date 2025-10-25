@@ -25,6 +25,7 @@ module FractalStream.Prelude
     , isJust
     , fromMaybe
     , listToMaybe
+    , maybeToList
     , intercalate
     , isPrefixOf
     , isSuffixOf
@@ -52,7 +53,7 @@ import Fcf (Exp, Eval, Pure1)
 
 import Data.Map (Map)
 import Data.Set (Set)
-import Data.Maybe (isJust, fromMaybe, listToMaybe)
+import Data.Maybe (isJust, fromMaybe, listToMaybe, maybeToList)
 import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn, unsnoc)
 import Data.Int
 import Data.Word

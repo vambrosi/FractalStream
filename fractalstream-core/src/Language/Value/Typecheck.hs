@@ -22,6 +22,8 @@ data ParsedValue = ParsedValue SourceRange
     => TypeProxy ty
     -> TC (Value '(env, ty)))
 
+type Splices = Map String ParsedValue
+
 -- | Values which have been checked for type and scope
 -- correctness.
 type CheckedValue = SourceRange -> (forall env ty. (KnownEnvironment env, KnownType ty) => TypeProxy ty -> TC (Value '(env,ty)))
@@ -325,6 +327,36 @@ tcMod x y sr = \case
   ty -> throwError (Surprise sr
                        "the result of a modulo operation"
                        "an integer or real number" (Expected $ an (SomeType ty)))
+
+tcEscapes :: Splices -> ParsedValue -> CheckedValue
+tcEscapes splices pv sr = \case
+  BooleanType -> do
+    p <- tryEach (Advice sr "The argument to `escapes` should be a real or complex number.")
+     [ AbsC <$> atType pv ComplexType
+     , AbsF <$> atType pv RealType ]
+    case Map.lookup internalEscapeRadius splices of
+      Nothing -> throwError $ internal (Advice sr "The internal escape radius was not defined.")
+      Just r  -> LTF <$> atType r RealType <*> pure p
+  ty -> throwError (Surprise sr "the result of `escapes`" "a truth value" (Expected $ an (SomeType ty)))
+
+tcVanishes :: Splices -> ParsedValue -> CheckedValue
+tcVanishes splices pv sr = \case
+  BooleanType -> do
+    p <- tryEach (Advice sr "The argument to `vanishes` should be a real or complex number.")
+     [ AbsC <$> atType pv ComplexType
+     , AbsF <$> atType pv RealType ]
+    case Map.lookup internalVanishingRadius splices of
+      Nothing -> throwError $ internal (Advice sr "The internal vanishing radius was not defined.")
+      Just r  -> LTF p <$> atType r RealType
+  ty -> throwError (Surprise sr "the result of `vanishes`" "a truth value" (Expected $ an (SomeType ty)))
+
+internalEscapeRadius, internalVanishingRadius :: String
+internalEscapeRadius    = "[internal] escape radius"
+internalVanishingRadius = "[internal] vanishing radius"
+
+------------------------------------------------------
+-- Various tables
+------------------------------------------------------
 
 colors :: Map String Color
 colors = Map.fromList

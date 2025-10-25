@@ -60,6 +60,8 @@ data Token
   | Not_
   | LeftArrow
   | RightArrow
+  | Escapes
+  | Vanishes
   deriving (Eq, Ord, Show)
 
 instance IsString Token where fromString = Identifier
@@ -165,6 +167,7 @@ wordlikeTokens = Map.fromList
   , ("i", I), ("𝑖", I)
   , ("true", True_), ("false", False_)
   , ("or", Or_), ("and", And_), ("not", Not_)
+  , ("escapes", Escapes), ("vanishes", Vanishes)
   ]
 
 data TokenGroup

@@ -25,6 +25,7 @@ import Language.Draw
 import Language.Code.InterpretIO (ScalarIORefM, IORefTypeOfBinding, eval)
 
 import Language.Value.Parser
+import Language.Value.Typecheck (internalVanishingRadius, internalEscapeRadius)
 import Language.Code.Parser
 
 import Language.Value.Evaluator
@@ -49,6 +50,9 @@ data ComplexViewer = ComplexViewer
   , cvPixelSize :: StringOf 'RealT
   , cvCoord :: String
   , cvPixel :: Maybe String
+  , cvEscapeRadius :: Maybe String
+  , cvVanishRadius :: Maybe String
+  , cvIterationLimit :: Maybe String
   , cvCode :: String
   , cvOverlay :: Maybe String
   , cvTools :: [ComplexTool]
@@ -62,6 +66,9 @@ instance FromJSON ComplexViewer where
     cvCanResize <- o .:? "resizable" .!= True
     cvCoord <- o .: "z-coord"
     cvPixel <- o .:? "pixel-size"
+    cvEscapeRadius <- o .:? "escape-radius"
+    cvVanishRadius <- o .:? "vanishing-radius"
+    cvIterationLimit <- o .:? "iteration-limit"
     StringOrNumber cvCenter <- o .: "initial-center"
     StringOrNumber cvPixelSize <- o .: "initial-pixel-size"
     cvCode <- Text.unpack <$> o .: "code"
@@ -81,7 +88,8 @@ type InternalY  = "[internal] y"
 type InternalPx = "[internal] px"
 
 data ComplexViewer' where
-  ComplexViewer' :: forall z px env. (KnownSymbol z, KnownSymbol px) =>
+  ComplexViewer' :: forall z px env
+    . (KnownSymbol z, KnownSymbol px) =>
     { cvCenter'    :: UIValue (Complex Double)
     , cvPixelSize' :: UIValue Double
     , cvConfig' :: Context DynamicValue env
@@ -160,12 +168,33 @@ withComplexViewer' :: forall env
                       -> ComplexViewer'
                       -> IO ())
                    -> IO ()
-withComplexViewer' jit cvConfig' splices ComplexViewer{..} action = withEnvironment (contextToEnv cvConfig') $ do
+withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnvironment (contextToEnv cvConfig') $ do
+
+  escapeRadius <- case cvEscapeRadius of
+    Nothing -> pure Nothing
+    Just x -> case parseParsedValue Map.empty x of
+      Right v  -> pure (Just v)
+      Left err -> throwIO (BadProject "I couldn't parse the viewer's escape-radius field."
+                            (ppFullError err x))
+
+  vanishRadius <- case cvVanishRadius of
+    Nothing -> pure Nothing
+    Just x -> case parseParsedValue Map.empty x of
+      Right v  -> pure (Just v)
+      Left err -> throwIO (BadProject "I couldn't parse the viewer's vanishing-radius field."
+                            (ppFullError err x))
+
   let cvPixelName = fromMaybe "#pixel" cvPixel
       argX = Proxy @InternalX
       argY = Proxy @InternalY
       argPx = Proxy @InternalPx
       argOutput = Proxy @"color"
+
+      splices = Map.unions $ concat
+                [ [Map.singleton internalEscapeRadius x    | x <- maybeToList escapeRadius]
+                , [Map.singleton internalVanishingRadius x | x <- maybeToList vanishRadius]
+                , [splices0] ]
+
   case (someSymbolVal cvCoord, someSymbolVal cvPixelName) of
     (SomeSymbol (cvCoord' :: Proxy cvCoord'), SomeSymbol (cvPixel' :: Proxy cvPixel')) -> do
      let envOrig = contextToEnv cvConfig'
@@ -179,7 +208,7 @@ withComplexViewer' jit cvConfig' splices ComplexViewer{..} action = withEnvironm
 
       cvCenter' <- case valueOf cvCenter of
         Right v  -> newUIValue v
-        Left err -> throwIO (BadProject "I couldn't parse viewer's initial-center field." err)
+        Left err -> throwIO (BadProject "I couldn't parse the viewer's initial-center field." err)
       cvPixelSize' <- case valueOf cvPixelSize of
         Right v  -> newUIValue v
         Left err -> throwIO (BadProject "I couldn't parse the viewer's initial-pixel-size field" err)

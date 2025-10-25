@@ -10,6 +10,8 @@ import Data.DynamicValue
 
 import Graphics.UI.WX hiding (when)
 import Graphics.UI.WXCore.WxcClassesMZ (menuDestroyByItem)
+import Graphics.UI.WXCore.Events
+import Control.Concurrent.MVar
 
 -- | Make a standard menu bar for `f`, plus any additional
 -- menus we are given. Apparently this should be run after
@@ -37,6 +39,9 @@ makeMenuBar ProjectActions{..} f addlMenus = do
                , on command := getProject "Edit" projectEdit ]
   menuLine prj
 
+  isActive <- newMVar True
+  windowAddOnDelete f (modifyMVar_ isActive (pure . const False))
+
   sessionItems <- variable [ value := [] ]
 
   let updateSessionMenuItems sessions = do
@@ -60,8 +65,10 @@ makeMenuBar ProjectActions{..} f addlMenus = do
 
   getDynamic activeSessions >>= updateSessionMenuItems
   listenWith activeSessions $ \_ newSessions -> do
-    destroySessionMenuItems
-    updateSessionMenuItems newSessions
+    active <- readMVar isActive
+    when active $ do
+      destroySessionMenuItems
+      updateSessionMenuItems newSessions
 
   _quit <- menuQuit prj [ text := "Quit FractalStream" ]
 

@@ -1,3 +1,4 @@
+{-# language AllowAmbiguousTypes #-}
 module Language.Value.ParserSpec (spec) where
 
 import Test.Hspec
@@ -18,7 +19,6 @@ parseValue :: EnvironmentProxy env
            -> Either String (Value '(env, t))
 parseValue env ty i = withEnvironment env $ withKnownType ty $
   first (`P.ppFullError` i) (P.parseValue Map.empty i)
-
 
 spec :: Spec
 spec = do
@@ -232,3 +232,35 @@ spec = do
       parses4 1 0 0 `shouldBe` Right False
       parses4 2 0 0 `shouldBe` Right True
       parses4 3 0 0 `shouldBe` Right True
+
+  describe "when using `escapes` and `vanishes` keywords" $ do
+
+    it "Can splice in the escape radius and vanishing radius comparisons" $ do
+      let ctx :: Complex Double -> Double -> Double -> Double
+              -> Context HaskellTypeOfBinding VanishEscapeEnv
+          ctx z x big tiny
+            = Bind (Proxy @"z") ComplexType z
+            $ Bind (Proxy @"x") RealType    x
+            $ Bind (Proxy @"R") RealType    big
+            $ Bind (Proxy @"epsilon") RealType tiny
+            $ EmptyContext
+          splices = Map.fromList
+            [ ("[internal] escape radius",
+               either (error . show) id (P.parseParsedValue Map.empty "R"))
+            , ("[internal] vanishing radius",
+               either (error . show) id (P.parseParsedValue Map.empty "epsilon"))
+            ]
+          test z x big tiny input =
+            let c = ctx z x big tiny
+            in (evaluateInContext @_ @'BooleanT $ ctx z x big tiny)
+               <$> first (`P.ppFullError` input) (withEnvironment (contextToEnv c)
+                                                  $ P.parseValue splices input)
+      test 1 0    2 0.1 "z escapes" `shouldBe` Right False
+      test 3 0    2 0.1 "z escapes" `shouldBe` Right True
+      test 1 1.01 2 0.1 "|z| - x vanishes" `shouldBe` Right True
+      test 1 1.01 2 0.1 "z + x escapes" `shouldBe` Right True
+
+type VanishEscapeEnv = '("z", 'ComplexT) ':
+                       '("x", 'RealT) ':
+                       '("R", 'RealT) ':
+                       '("epsilon", 'RealT) ': '[]
