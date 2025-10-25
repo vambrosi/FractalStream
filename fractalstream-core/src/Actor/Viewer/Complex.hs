@@ -6,6 +6,7 @@ module Actor.Viewer.Complex
   , ComplexViewerCompiler(..)
   , withComplexViewer'
   , cloneComplexViewer
+  , BadProject(..)
   ) where
 
 import FractalStream.Prelude
@@ -33,6 +34,12 @@ import Data.Aeson
 import qualified Data.Text as Text
 import qualified Data.Map as Map
 import Control.Concurrent.MVar
+import Control.Exception (Exception(..), throwIO)
+
+data BadProject = BadProject String String
+  deriving Show
+
+instance Exception BadProject
 
 data ComplexViewer = ComplexViewer
   { cvTitle :: String
@@ -103,16 +110,16 @@ cloneComplexViewer cv = do
            })
 
 newtype StringOf (t :: FSType) =
-  StringOf { valueOf :: HaskellType t }
+  StringOf { valueOf :: Either String (HaskellType t) }
 
 instance KnownType t => Show (StringOf t) where
-  show (StringOf v) = showValue (typeProxy @t) v
+  show (StringOf v) = either id (showValue (typeProxy @t)) v
 
 instance KnownType t => IsString (StringOf t) where
   fromString s =
     case parseValue @_ @t Map.empty s of
-      Left err -> error (show err)
-      Right v  -> StringOf (evaluate v EmptyContext)
+      Left err -> StringOf (Left $ ppFullError err s)
+      Right v  -> StringOf (Right $ evaluate v EmptyContext)
 
 instance KnownType t => FromJSON (StringOf t) where
   parseJSON = fmap unStringOrNumber . parseJSON
@@ -126,7 +133,7 @@ bindContextIO :: KnownSymbol name
 bindContextIO name ty v ctx =
   case lookupEnv name ty (contextToEnv ctx) of
     Absent pf -> recallIsAbsent pf (pure (Bind name ty v ctx))
-    _ -> error (symbolVal name ++ " is defined twice")
+    _ -> throwIO (BadProject (symbolVal name ++ " is defined twice") [])
 
 declareIO :: forall a name ty env
            . KnownSymbol name
@@ -138,7 +145,7 @@ declareIO :: forall a name ty env
 declareIO name ty env k =
   case lookupEnv name ty env of
     Absent pf -> recallIsAbsent pf (k $ BindingProxy name ty env)
-    _ -> error (symbolVal name ++ " is defined twice")
+    _ -> throwIO (BadProject (symbolVal name ++ " is defined twice") [])
 
 withComplexViewer' :: forall env
                     . ( NotPresent "[internal argument] #blockWidth" env
@@ -170,15 +177,19 @@ withComplexViewer' jit cvConfig' splices ComplexViewer{..} action = withEnvironm
        $ \env3 -> declareIO cvCoord' ComplexType env3
        $ \env4 -> declareIO cvPixel' RealType env4 $ \env -> do
 
-      cvCenter' <- newUIValue (valueOf cvCenter)
-      cvPixelSize' <- newUIValue (valueOf cvPixelSize)
+      cvCenter' <- case valueOf cvCenter of
+        Right v  -> newUIValue v
+        Left err -> throwIO (BadProject "I couldn't parse viewer's initial-center field." err)
+      cvPixelSize' <- case valueOf cvPixelSize of
+        Right v  -> newUIValue v
+        Left err -> throwIO (BadProject "I couldn't parse the viewer's initial-pixel-size field" err)
 
       let vpTitle = cvTitle
           vpSize  = cvSize
           vpCanResize = cvCanResize
 
       case parseCode env splices cvCode of
-        Left err -> error ("bad parse: " ++ show err)
+        Left err -> throwIO (BadProject "there was an error parsing the viewer's script" (ppFullError err cvCode))
         Right cvCode' -> do
           Found pfX <- pure (lookupEnv argX RealType env3)
           Found pfY <- pure (lookupEnv argY RealType env3)
@@ -217,14 +228,14 @@ withComplexViewer' jit cvConfig' splices ComplexViewer{..} action = withEnvironm
                 -- Build the event handler actions using the viewer context
                 -- extended by the tool's configuration context.
                 cvToolContext <- case innerContext <#> inheritedContext of
-                  Left msg -> error msg
+                  Left msg -> throwIO (BadProject "there was a problem parsing the tool's configuration" msg)
                   Right ctx -> pure ctx
                 putStrLn ("building tool `" ++ tiName ptoolInfo ++ "`")
                 putStrLn ("environment: " ++ show (contextToEnv cvToolContext))
                 (toolVars, h) <- case toEventHandlers
                                       (contextToEnv cvToolContext)
                                       splices ptoolEventHandlers of
-                       Left err -> error ("toEventHandlers returned " ++ err)
+                       Left err -> throwIO (BadProject "there was a problem parsing the tool event handler" err)
                        Right ok -> pure ok
                 let toolInfo = ptoolInfo
                     toolDrawLayer = ptoolDrawLayer
@@ -342,4 +353,6 @@ makeDrawCommandGetter = do
   pure (getDrawCommands, drawCommandsChanged, drawTo)
 
 runExceptTIO :: ExceptT String IO a -> IO a
-runExceptTIO = fmap (either error id) . runExceptT
+runExceptTIO action = runExceptT action >>= \case
+  Right result -> pure result
+  Left err     -> throwIO (BadProject "there was a problem building the viewer's configuration values." err)

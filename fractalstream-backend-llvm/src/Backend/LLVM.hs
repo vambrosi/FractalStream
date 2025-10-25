@@ -159,7 +159,7 @@ withCompiledCode :: forall env
                  -> IO ()
 withCompiledCode env code run = do
   c <- case parseCode env Map.empty code of
-         Left e  -> error e
+         Left e  -> error (ppFullError e code)
          Right c -> pure c
   m <- either error pure (compileRenderer c)
   loadLibraryPermanently Nothing

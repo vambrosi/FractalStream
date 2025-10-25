@@ -1,6 +1,9 @@
 module Language.Value.ParserSpec (spec) where
 
 import Test.Hspec
+
+import FractalStream.Prelude
+
 import Language.Type
 import Language.Value
 import Language.Value.Evaluator
@@ -13,10 +16,8 @@ parseValue :: EnvironmentProxy env
            -> TypeProxy t
            -> String
            -> Either String (Value '(env, t))
-parseValue env ty
-  = withEnvironment env
-  $ withKnownType ty
-  $ P.parseValue Map.empty
+parseValue env ty i = withEnvironment env $ withKnownType ty $
+  first (`P.ppFullError` i) (P.parseValue Map.empty i)
 
 
 spec :: Spec
@@ -121,14 +122,17 @@ spec = do
     it "also parses concatenation as multiplication" $ do
       let parses1 = parseI "(1 + 2) 3 4"
           parses2 = parseF "2 cos pi"
-          parses3 = parseF "cos 2pi"
+          parses3 = parseF "cos 2 pi"
           parses4 = parseF "cos(2) * pi  - cos (2 pi)"
           parses5 = parseF "3 cos 2 sin 1"
           parses6 = parseF "3 2^2"
           parses7 = parseF "2-3" -- this should become subtraction, not 2 * -3!
       parses1 `shouldBe` Right 36
       parses2 `shouldBe` Right (-2)
-      parses3 `shouldBe` Left "To avoid ambiguity when using implicit mulitplication, functions must go to the left of other values. loc=SourceRange (Pos {posRow = 0, posCol = 0}) (Pos {posRow = 0, posCol = 4})"
+      parses3 `shouldBe` Left (unlines
+          [ "  cos 2 pi"
+          , "  ^^^^^"
+          , "To avoid ambiguity when using implicit multiplication, functions must go to the left of other values"])
       parses4 `shouldBe` Right (cos 2 * pi - 1)
       parses5 `shouldBe` Right (3 * cos 2 * sin 1)
       parses6 `shouldBe` Right 12
@@ -172,11 +176,17 @@ spec = do
 
     it "will not parse an unbound variable" $ do
       let parses1 = parseI1 "(1 + y) *3 + 4"
-      parses1 0 `shouldBe` Left "No variable named y is in scope here. loc=SourceRange (Pos {posRow = 0, posCol = 5}) (Pos {posRow = 0, posCol = 5})"
+      parses1 0 `shouldBe` Left (unlines
+        [ "  (1 + y) *3 + 4"
+        , "       ^"
+        , "No variable named y is defined here." ])
 
     it "will not parse a variable at the wrong type" $ do
       let parses1 = parseI1 "if x and false then 1 else 2"
-      parses1 0 `shouldBe` Left "I expected a value of Boolean type here, but x has ℤ type. loc=SourceRange (Pos {posRow = 0, posCol = 3}) (Pos {posRow = 0, posCol = 3})"
+      parses1 0 `shouldBe` Left (unlines
+        [ "  if x and false then 1 else 2"
+        , "     ^"
+        , "I expected a truth value here, but x is an integer."])
 
     it "can coerce values of compatible types" $ do
       let parses1 = parseI1 "if (pi = x) then 1 else 0"

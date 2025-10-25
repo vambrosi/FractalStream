@@ -151,6 +151,7 @@ viewers:
     size: 512x512
     resizable: true
     z-coord: z
+    pixel-size: px
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
@@ -237,7 +238,7 @@ viewers:
 
                       temp_z : ℂ ⭠ z
 
-                    # these get initialized for real below, in the loop
+                      # these get initialized for real below, in the loop
                       z_k : ℂ ⭠ 0
                       dz_k : ℂ ⭠ 0
 
@@ -249,15 +250,15 @@ viewers:
                         z_k ⭠ temp_z
                         dz_k ⭠ 1
 
-                      # Work out z_k = f^{\circ k}(z) and dz_k = d/dz (f^{\circ k}(z))
+                        # Work out z_k = f^{\circ k}(z) and dz_k = d/dz (f^{\circ k}(z))
                         t : ℤ ⭠ 0
                         while t < k
                           t ⭠ t + 1
                           dz_k ⭠ 2 dz_k z_k
                           z_k ⭠ z_k² + C
 
-                      # Use z_k and dz_k to take one step of Newton's method for
-                      # f^{\circ(k)}(z) - t_m
+                        # Use z_k and dz_k to take one step of Newton's method for
+                        # f^{\circ(k)}(z) - t_m
                         temp_z ⭠ old_z - (z_k - t_m) / dz_k
                         difference ⭠ |old_z - temp_z|
 

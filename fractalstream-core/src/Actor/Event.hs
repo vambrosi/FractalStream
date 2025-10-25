@@ -91,7 +91,7 @@ toEventHandlers :: forall env
 toEventHandlers env splices ParsedEventHandlers{..} = fmap swap $ flip runStateT Set.empty $ do
   let parse :: EnvironmentProxy e -> String -> StateT (Set String) (Either String) (Code e)
       parse e i = do
-        c <- lift $ parseCode e splices i
+        c <- lift $ first (`ppFullError` i) $ parseCode e splices i
         modify' (execState (usedVarsInCode c))
         pure c
 

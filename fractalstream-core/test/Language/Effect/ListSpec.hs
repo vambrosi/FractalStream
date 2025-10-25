@@ -29,8 +29,9 @@ runWithXY x y lst input = do
   testVar <- case lookupEnv (Proxy @"test") (ListType RealType) (contextToEnv ctx) of
     Found pf -> pure $ Var (Proxy @"test") (ListType RealType) pf
     _ -> Left "impossible"
-  fmap ((`evalState` (ctx, ())) . (\c -> simulate noDraw c >> eval testVar))
-   $ parseCode (envProxy Proxy) Map.empty input
+  first (`ppFullError` input)
+    $ fmap ((`evalState` (ctx, ())) . (\c -> simulate noDraw c >> eval testVar))
+    $ parseCode (envProxy Proxy) Map.empty input
 
 noDraw :: DrawHandler (HaskellTypeM ())
 noDraw = DrawHandler (const $ pure ())

@@ -9,6 +9,7 @@ module FractalStream.Prelude
     , module Control.Monad.Reader
     , module Control.Monad.Except
     , module Data.Functor
+    , module Data.Bifunctor
     , module Data.String
     , module Data.Complex
     , module Data.Coerce
@@ -25,6 +26,12 @@ module FractalStream.Prelude
     , fromMaybe
     , listToMaybe
     , intercalate
+    , isPrefixOf
+    , isSuffixOf
+    , sortOn
+    , unsnoc
+    , An(..)
+    , PrettyPrint(..)
   ) where
 
 import Data.Proxy (Proxy(..))
@@ -39,12 +46,29 @@ import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Except
 import Data.Functor hiding (unzip)
+import Data.Bifunctor
 import Data.String
 import Fcf (Exp, Eval, Pure1)
 
 import Data.Map (Map)
 import Data.Set (Set)
 import Data.Maybe (isJust, fromMaybe, listToMaybe)
-import Data.List (intercalate)
+import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn, unsnoc)
 import Data.Int
 import Data.Word
+
+class An a where
+  an :: a -> String
+
+instance An String where
+  an x = case x of
+    "" -> "???"
+    (c:_)
+      | c `elem` "aeiouAEIOU" -> "an " ++ x
+      | otherwise -> "a " ++ x
+
+class PrettyPrint a where
+  pp :: a -> [String]
+
+instance (PrettyPrint a, PrettyPrint b) => PrettyPrint (Either a b) where
+  pp = either pp pp

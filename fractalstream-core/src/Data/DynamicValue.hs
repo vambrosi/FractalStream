@@ -14,7 +14,7 @@ module Data.DynamicValue
 import FractalStream.Prelude
 
 import Language.Type
-import Language.Value.Parser (TypedValue(..))
+import Language.Value.Parser (ParsedValue(..))
 
 import Control.Concurrent.MVar
 
@@ -96,5 +96,5 @@ data SomeUIExpr where
                . (KnownSymbol name)
               => Proxy name
               -> TypeProxy ty
-              -> IO TypedValue
+              -> IO ParsedValue
               -> SomeUIExpr

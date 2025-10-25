@@ -87,7 +87,7 @@ newtype SomeType' = SomeType' { getSomeType :: SomeType }
 instance FromJSON SomeType' where
   parseJSON = withText "type" $ \txt -> do
     case parseType (Text.unpack txt) of
-      Left err -> fail err
+      Left err -> fail (ppFullError err $ Text.unpack txt)
       Right t  -> pure (SomeType' t)
 
 parseLayout :: Object -> JSON.Parser (Layout Dummy)
@@ -166,7 +166,7 @@ parseToHaskellValue ctx ty input =
   withKnownType ty $
   withEnvironment (contextToEnv ctx) $
   case parseValueOrList @env @ty Map.empty input of
-    Left err -> Left err
+    Left err -> Left (ppFullError err input)
     Right v  -> pure (evaluate v ctx)
 
 setTextOnly :: forall ty
@@ -179,14 +179,14 @@ setTextOnly _ s ui = do
   pure Nothing
 
 setToParsed :: forall ty
-             . (TypeProxy ty -> String -> Either String (HaskellType ty))
+             . (TypeProxy ty -> String -> Either (Either ParseError TCError) (HaskellType ty))
             -> TypeProxy ty
             -> String
             -> UIValue (String, HaskellType ty)
             -> IO (Maybe String)
-setToParsed parse ty input ui = do
-  case parse ty input of
-    Left err -> pure (Just err)
+setToParsed parser ty input ui = do
+  case parser ty input of
+    Left err -> pure (Just $ ppFullError err input)
     Right v  -> setUIValue ui (input, v) >> pure Nothing
 
 
@@ -212,7 +212,7 @@ instance Dynamic Expression where
     Expression _ (env :: EnvironmentProxy env) (ty :: TypeProxy ty) v -> do
       withEnvironment env $ withKnownType ty $
         case parseValueOrList @env @ty Map.empty new of
-          Left err   -> pure (Just (show err))
+          Left err   -> pure (Just $ ppFullError err new)
           Right newV -> do
             setDynamic v (new, newV)
             pure Nothing
@@ -244,7 +244,7 @@ instance Dynamic ConstantExpression where
     ConstantExpression _ (ty :: TypeProxy ty) v ->
       withKnownType ty $
       case parseValueOrList @'[] @ty Map.empty new of
-        Left err   -> pure (Just err)
+        Left err   -> pure (Just $ ppFullError err new)
         Right newV -> do
           setDynamic v (new, evaluate newV EmptyContext)
           pure Nothing
@@ -274,20 +274,20 @@ allocateUIExpressions = go
           withEnvFromMap varEnv $ \(env :: EnvironmentProxy env) ->
             withEnvironment env $
             case parseValueOrList @env @ty Map.empty varValue of
-              Left err -> fail err
+              Left err -> throwError (ppFullError err varValue)
               Right v  ->
                 TextBox lab . Expression varVariable env ty
                 <$> newUIValue (varValue, v)
 
       CheckBox lab (Dummy ConfigVar{..}) ->
         case parseValueOrList @'[] @'BooleanT Map.empty varValue of
-          Left err -> fail err
+          Left err -> throwError (ppFullError err varValue)
           Right v  -> CheckBox lab . BoolExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
       ColorPicker lab (Dummy ConfigVar{..}) ->
         case parseValueOrList @'[] @'ColorT Map.empty varValue of
-          Left err -> fail err
+          Left err -> throwError (ppFullError err varValue)
           Right v  -> ColorPicker lab . ColorExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
@@ -308,19 +308,19 @@ allocateUIConstants = go
       TextBox lab (Dummy ConfigVar{..}) -> case varType of
         SomeType (ty :: TypeProxy ty) -> withKnownType ty $
           case parseValueOrList @'[] @ty Map.empty varValue of
-            Left err -> fail err
+            Left err -> throwError (ppFullError err varValue)
             Right v  -> TextBox lab . ConstantExpression varVariable ty
                         <$> newUIValue (varValue, evaluate v EmptyContext)
 
       CheckBox lab (Dummy ConfigVar{..}) ->
         case parseValueOrList @'[] @'BooleanT Map.empty varValue of
-          Left err -> fail err
+          Left err -> throwError (ppFullError err varValue)
           Right v  -> CheckBox lab . ConstantBoolExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
       ColorPicker lab (Dummy ConfigVar{..}) ->
         case parseValueOrList @'[] @'ColorT Map.empty varValue of
-          Left err -> fail err
+          Left err -> throwError (ppFullError err varValue)
           Right v  -> ColorPicker lab . ConstantColorExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
@@ -332,7 +332,7 @@ withSplices :: forall t
 withSplices lo action =
     go [] (extractAllBindings toSomeUIExpr lo)
   where
-    go :: [(String, TypedValue)] -> [SomeUIExpr] -> IO t
+    go :: [(String, ParsedValue)] -> [SomeUIExpr] -> IO t
     go splices = \case
       [] -> action (Map.fromList splices)
       (SomeUIExpr name _ty getExpr : etc) -> do
@@ -349,15 +349,15 @@ withSplices lo action =
       Expression nameStr _ ty v ->
         case someSymbolVal nameStr of
           SomeSymbol name ->
-            SomeUIExpr name ty (unsafeFromRight . parseTypedValue Map.empty . fst <$> getDynamic v)
+            SomeUIExpr name ty (unsafeFromRight . parseParsedValue Map.empty . fst <$> getDynamic v)
       BoolExpression nameStr b ->
         case someSymbolVal nameStr of
           SomeSymbol name ->
-            SomeUIExpr name BooleanType (unsafeFromRight . parseTypedValue Map.empty . showValue BooleanType <$> getDynamic b)
+            SomeUIExpr name BooleanType (unsafeFromRight . parseParsedValue Map.empty . showValue BooleanType <$> getDynamic b)
       ColorExpression nameStr b ->
         case someSymbolVal nameStr of
           SomeSymbol name ->
-            SomeUIExpr name ColorType (unsafeFromRight . parseTypedValue Map.empty . showValue ColorType <$> getDynamic b)
+            SomeUIExpr name ColorType (unsafeFromRight . parseParsedValue Map.empty . showValue ColorType <$> getDynamic b)
 {-
 withSplices lo action = go EmptyContext (extractAllBindings toSomeUIExpr lo)
   where

@@ -56,8 +56,8 @@ getConfigurationSplices Configuration{..}
       [x] -> pure x
       _   -> fail ("duplicate splices")
 
-    getSplice :: ConfigVar -> m (String, TypedValue)
+    getSplice :: ConfigVar -> m (String, ParsedValue)
     getSplice (ConfigVar valStr (SomeType _ty) _envMap name) = do
-      case parseTypedValue Map.empty valStr of
-        Left e -> fail e
+      case parseParsedValue Map.empty valStr of
+        Left e -> fail (ppFullError e valStr)
         Right v -> pure (name, v)

@@ -13,6 +13,7 @@ import qualified Graphics.UI.WXCore.Events as WX
 import qualified Graphics.UI.WX as WX
 import           Graphics.UI.WXCore.WxcClassesAL
 import           Graphics.UI.WXCore.WxcClassesMZ
+import           Graphics.UI.WXCore.WxcDefs
 
 generateWxLayout :: Dynamic dyn
                  => Window a
@@ -97,33 +98,76 @@ generateWxLayout frame0 wLayout = do
                          , tooltip := ""
                          ]
        normalBG <- get te bgcolor
+
+       errorMessage <- variable [value := Nothing]
+
+       errorPopup <- frame
+         [ visible := False
+         , style := wxFRAME_TOOL_WINDOW .+. wxNO_BORDER
+         , position := Point 0 0
+         ]
+       ep <- panel errorPopup [ bgcolor := rgb 255 200 (200 :: Int)]
+       txt <- staticText ep [ text := ""
+                            , font := fontFixed
+                            , fontSize := 12
+                            , color := black ]
+
+
+       skipNextFocusLoss <- variable [ value := False ]
+       skipNextFocusGain <- variable [ value := False ]
+
+       let updateAlertStatus = do
+             get errorMessage value >>= \case
+               Nothing -> do
+                 set te [ bgcolor := normalBG ]
+                 set errorPopup [ visible := False ]
+               Just err -> do
+                 set te [ bgcolor := rgb 180 80 (80 :: Int)]
+                 Point wx wy <- getPosition te
+                 set txt [ text := err ]
+                 set skipNextFocusLoss [ value := True ]
+                 set skipNextFocusGain [ value := True ]
+                 set errorPopup [ layout := fill $ container ep $ margin 15 $ widget txt
+                                , position := Point (wx + 20) (wy + 60)
+                                , visible := True ]
+                 set frame0 [ visible := True ]
+
+       let setErrorMessage msg = do
+             oldMsg <- get errorMessage value
+             when (oldMsg /= msg) $ do
+               set errorMessage [value := msg]
+               updateAlertStatus
+
        set te [ on command := do
                   newText <- get te text
-                  setDynamic v newText >>= \case
-                    Nothing -> set te [ bgcolor := normalBG
-                                      , tooltip := "" ]
-                    Just err -> do
-                      set te [ bgcolor := rgb 160 100 (100 :: Int)
-                             , tooltip := unlines
-                                 [ "Could not parse an expression"
-                                 , ""
-                                 , err ]
-                             ]
-              , on focus := (\case
-                                True -> pure ()
-                                False -> do
-                                  newText <- get te text
-                                  oldText <- getDynamic v
-                                  when (newText /= oldText) $ setDynamic v newText >>= \case
-                                    Nothing -> set te [ bgcolor := normalBG
-                                                      , tooltip := "" ]
-                                    Just err -> do
-                                      set te [ bgcolor := rgb 160 100 (100 :: Int)
-                                             , tooltip := unlines
-                                               [ "Could not parse an expression"
-                                               , ""
-                                               , err ]
-                                             ])
+                  setDynamic v newText >>= setErrorMessage
+              , on focus := \case
+                  True -> do
+                    get skipNextFocusGain value >>= \case
+                      True  -> set skipNextFocusGain [ value := False ]
+                      False -> updateAlertStatus
+                    propagateEvent
+                  False -> do
+                    get skipNextFocusLoss value >>= \case
+                      True  ->  set skipNextFocusLoss [ value := False ]
+                      False -> do
+                        newText <- get te text
+                        oldText <- getDynamic v
+                        when (newText /= oldText) $ do
+                          setDynamic v newText >>= \msg -> do
+                            setErrorMessage msg
+                            set errorPopup [ visible := False ]
+
+                    propagateEvent
               ]
        listenWith v (\_ newText -> set te [ text := newText ])
        pure (fill $ row 5 [ margin 3 (label lab), hfill (widget te) ])
+
+getPosition :: Window a -> IO Point
+getPosition p
+  | objectIsNull p = pure (Point 0 0)
+  | otherwise = do
+      Point x y <- get p position
+      p' <- get p WX.parent
+      Point x' y' <- getPosition p'
+      pure (Point (x + x') (y + y'))

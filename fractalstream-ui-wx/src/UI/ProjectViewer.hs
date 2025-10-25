@@ -20,6 +20,7 @@ import           Graphics.UI.WXCore.WxcDefs
 import           Graphics.UI.WXCore.WxcTypes      (rgba)
 import           Graphics.UI.WXCore.WxcClassesAL
 import           Graphics.UI.WXCore.WxcClassesMZ
+import Graphics.UI.WXCore.Frame (frameDefaultStyle)
 import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Planar
 
@@ -41,15 +42,16 @@ import Task.Block (BlockComputeAction)
 
 import qualified Data.Set as Set
 
-viewProject :: (forall a. Frame a -> [Menu ()] -> IO ())
+viewProject :: Window ()
+            -> (forall a. Frame a -> [Menu ()] -> IO ())
             -> UI
-viewProject addMenuBar = UI
+viewProject projectWindow addMenuBar = UI
   { newEnsemble = pure ()
 
   , runSetup = \_ title setupUI continue -> do
-      f <- frame [ text := title
+      f <- frameEx frameDefaultStyle [ text := title
                  , on resize := propagateEvent
-                 ]
+                 ] projectWindow
 
       addMenuBar f []
       WX.windowOnClose f (set f [ visible := False ])
@@ -65,9 +67,9 @@ viewProject addMenuBar = UI
             ]
 
   , makeLayout = \_ title ui -> do
-      f <- frame [ text := title
+      f <- frameEx frameDefaultStyle [ text := title
                  , on resize := propagateEvent
-                 ]
+                 ] projectWindow
 
       WX.windowOnClose f (set f [ visible := False ])
 
@@ -76,26 +78,28 @@ viewProject addMenuBar = UI
       innerLayout <- generateWxLayout f ui
       set f [ layout := fill . margin 5 . column 5 $ [ innerLayout ] ]
 
-  , makeViewer = const (makeWxComplexViewer addMenuBar)
+  , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar)
   }
 
-makeWxComplexViewer :: (forall a. Frame a -> [Menu ()] -> IO ())
+makeWxComplexViewer :: Window ()
+                    -> (forall a. Frame a -> [Menu ()] -> IO ())
                     -> ViewerUIProperties
                     -> ComplexViewer'
                     -> IO ()
 makeWxComplexViewer
+  projectWindow
   addMenuBar
   vup@ViewerUIProperties{..}
   theViewer@ComplexViewer'{..} = do
 
     let clone = do
           newCV <- cloneComplexViewer theViewer
-          makeWxComplexViewer addMenuBar vup newCV
+          makeWxComplexViewer projectWindow addMenuBar vup newCV
 
     let (width, height) = (fst vpSize, snd vpSize)
-    f <- frame [ text := vpTitle
+    f <- frameEx frameDefaultStyle [ text := vpTitle
                , on resize := propagateEvent
-               ]
+               ] projectWindow
     WX.windowOnClose f (set f [ visible := False ])
 
     p <- scrolledWindow f [ scrollRate := sz 10 10 ]
@@ -213,7 +217,9 @@ makeWxComplexViewer
                   Just im -> drawCenteredImage im dc viewRect (w, h)
 
                 mdl <- get model value
-                paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
+                get currentToolIndex value >>= \case
+                  Just{}  -> paintToolLayer (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands dc
+                  Nothing -> paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
 
               Just (startTime, oldModel, oldImage) -> do
                 -- Animated paint. Zoom and blend smoothly between
@@ -361,8 +367,6 @@ makeWxComplexViewer
                 set status [text := show mpt]
                 set draggedTo [value := Just $ Viewport (pointX pt, pointY pt)]
                 let dragAction = do
-                      set status [text := show mpt]
-
                       dragBox <- getDragBox lastClick draggedTo
                       case dragBox of
                         Nothing -> return ()
@@ -737,15 +741,16 @@ generateTileImage viewerTile _windowRect = do
 
 -- | Read draw commands from each tool layer and paint them into the
 -- given device context, and then draw the zoom drag box on top.
-paintToolLayerWithDragBox :: ((Double, Double) -> IO Point)
-               -> (Double, Double)
-               -> IO [[DrawCommand]]
-               -> Var (Maybe Viewport)
-               -> Var (Maybe Viewport)
-               -> DC d
-               -> Rect
-               -> Rect
-               -> IO ()
+paintToolLayerWithDragBox
+  :: ((Double, Double) -> IO Point)
+  -> (Double, Double)
+  -> IO [[DrawCommand]]
+  -> Var (Maybe Viewport)
+  -> Var (Maybe Viewport)
+  -> DC d
+  -> Rect
+  -> Rect
+  -> IO ()
 paintToolLayerWithDragBox modelToView pxDim getDrawCommands lastClick draggedTo dc _ _ = dcEncapsulate dc $ do
     paintToolLayer modelToView pxDim getDrawCommands dc
     dragBox <- getDragBox lastClick draggedTo
@@ -757,11 +762,12 @@ paintToolLayerWithDragBox modelToView pxDim getDrawCommands lastClick draggedTo 
 
 -- | Read draw commands for each tool layer and paint them into the
 -- given device context
-paintToolLayer :: ((Double, Double) -> IO Point)
-               -> (Double, Double)
-               -> IO [[DrawCommand]]
-               -> DC d
-               -> IO ()
+paintToolLayer
+  :: ((Double, Double) -> IO Point)
+  -> (Double, Double)
+  -> IO [[DrawCommand]]
+  -> DC d
+  -> IO ()
 paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
 
     cmdss <- getDrawCommands

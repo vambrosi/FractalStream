@@ -1,0 +1,156 @@
+viewers:
+  - title: a-plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: a
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      z : C <- 0
+      b : C <- selectedB
+      aa : C <- (a + 1) / 2
+      disc : C <- aa^2 - b
+      p : C <- sqrt(disc) + aa
+      disc <- p^2 - a
+      lambda : C <- sqrt(disc) + p
+      save : C <- z * zoom
+      x : C <- p + lambda * save
+      y : C <- p + save
+      k : Z <- 0
+      while |x| < escape_radius and k < max_iters
+        k <- k + 1
+        t : C <- x
+        x <- x^2 + b - a y
+        y <- t
+      if k = max_iters then
+        color <- black
+      else
+        color <- cycle (k / 10, blue, white)
+    tools:
+      - name: Select value of a
+        shortcut: s
+        actions:
+        - event: click-or-drag
+          code: |
+            selectedA <- a
+
+  - title: b-plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: b
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      z : C <- 0
+      a : C <- selectedA
+      aa : C <- (a + 1) / 2
+      disc : C <- aa^2 - b
+      p : C <- sqrt(disc) + aa
+      disc <- p^2 - a
+      lambda : C <- sqrt(disc) + p
+      save : C <- z * zoom
+      x : C <- p + lambda * save
+      y : C <- p + save
+      k : Z <- 0
+      while |x| < escape_radius and k < max_iters
+        k <- k + 1
+        t : C <- x
+        x <- x^2 + b - a y
+        y <- t
+      if k = max_iters then
+        color <- black
+      else
+        color <- cycle (k / 10, blue, white)
+    tools:
+      - name: Select value of b
+        shortcut: s
+        actions:
+        - event: click-or-drag
+          code: |
+            selectedB <- b
+
+  - title: Hénon dynamics
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: z
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      a : C <- selectedA
+      b : C <- selectedB
+      aa : C <- (a + 1) / 2
+      disc : C <- aa^2 - b
+      p : C <- sqrt(disc) + aa
+      disc <- p^2 - a
+      lambda : C <- sqrt(disc) + p
+      save : C <- z * zoom
+      x : C <- p + lambda * save
+      y : C <- p + save
+      k : Z <- 0
+      while |x| < escape_radius and k < max_iters
+        k <- k + 1
+        t : C <- x
+        x <- x^2 + b - a y
+        y <- t
+      if k = max_iters then
+        color <- black
+      else
+        color <- rainbow (k / 10)
+
+    tools:
+      - name: Trace
+        shortcut: t
+        actions:
+          - event: click-or-drag
+            code: |
+              erase
+              a : C <- selectedA
+              b : C <- selectedB
+              aa : C <- (a + 1) / 2
+              disc : C <- aa^2 - b
+              p : C <- sqrt(disc) + aa
+              disc <- p^2 - a
+              lambda : C <- sqrt(disc) + p
+              save : C <- z * zoom
+              x : C <- p + lambda * save
+              y : C <- p + save
+              k : Z <- 0
+              while |x| < escape_radius and k < max_iters
+                k <- k + 1
+                t : C <- x
+                x <- x^2 + b - a y
+                y <- t
+                draw line from (x - p) / zoom to (y - p) / zoom
+
+configuration:
+  title: Configuration
+  size: 400x200
+  vertical-contents:
+    - text-entry:
+        label: "a = "
+        value: "0.3"
+        type: C
+        variable: selectedA
+    - text-entry:
+        label: "b = "
+        value: "0.6 + 0.2i"
+        type: C
+        variable: selectedB
+    - text-entry:
+        label: "zoom = "
+        value: "0.001"
+        type: R
+        variable: zoom
+    - text-entry:
+        label: "Max. iterations:"
+        value: "100"
+        type: Z
+        variable: max_iters
+    - text-entry:
+        label: "Escape radius:"
+        value: 10
+        type: R
+        variable: escape_radius

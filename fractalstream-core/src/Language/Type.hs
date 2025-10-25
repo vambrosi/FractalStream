@@ -195,16 +195,16 @@ pattern Color_ c = Scalar ColorType c
 
 showType :: TypeProxy t -> String
 showType = \case
-  BooleanType  -> "Boolean"
-  IntegerType  -> "ℤ"
-  RealType     -> "ℝ"
-  ComplexType  -> "ℂ"
-  RationalType -> "Rational"
-  ColorType    -> "Color"
-  VoidType     -> "Unit"
-  ImageType    -> "Image"
+  BooleanType  -> "truth value"
+  IntegerType  -> "integer"
+  RealType     -> "real number"
+  ComplexType  -> "complex number"
+  RationalType -> "rational number"
+  ColorType    -> "color"
+  VoidType     -> "unit"
+  ImageType    -> "image"
   PairType x y -> "(" <> showType x <> " x " <> showType y <> ")"
-  ListType x   -> "List of " <> showType x
+  ListType x   -> "list of " <> showType x
 
 showValue :: TypeProxy t -> HaskellType t -> String
 showValue ty v = case ty of
@@ -221,3 +221,9 @@ showValue ty v = case ty of
   PairType xt yt -> let (x, y) = v
                      in showValue xt x <> " , " <> showValue yt y
   ListType xt -> "[" ++ intercalate ", " (map (showValue xt) v) ++ "]"
+
+instance An SomeType where
+  an = an . show
+
+instance KnownType t => An (TypeProxy t) where
+  an = an . SomeType

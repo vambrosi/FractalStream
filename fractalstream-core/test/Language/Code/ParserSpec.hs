@@ -22,9 +22,10 @@ runWithX :: forall xt
 runWithX (Scalar xt x) input = withKnownType xt $
   let env = BindingProxy (Proxy @"x") xt EmptyEnvProxy
       ctx = Bind (Proxy @"x") xt x EmptyContext
-  in fmap ((`evalState` (ctx, ()))
-           . (\c -> simulate noDraw c >> eval (Var (Proxy @"x") xt bindingEvidence)))
-   $ parseCode env Map.empty input
+  in first (`ppFullError` input)
+     $ fmap ((`evalState` (ctx, ()))
+             . (\c -> simulate noDraw c >> eval (Var (Proxy @"x") xt bindingEvidence)))
+     $ parseCode env Map.empty input
 
 runWithXY :: forall xt yt
            . Scalar xt
@@ -35,9 +36,10 @@ runWithXY (Scalar xt x) (Scalar yt y) input = withKnownType xt $ withKnownType y
   let ctx = Bind (Proxy @"x") xt x
           $ Bind (Proxy @"y") yt y
           $ EmptyContext
-  in fmap ((`evalState` (ctx, ()))
-           . (\c -> simulate noDraw c >> eval (Var (Proxy @"x") xt bindingEvidence)))
-   $ parseCode (envProxy Proxy) Map.empty input
+  in first (`ppFullError` input)
+     $ fmap ((`evalState` (ctx, ()))
+             . (\c -> simulate noDraw c >> eval (Var (Proxy @"x") xt bindingEvidence)))
+     $ parseCode (envProxy Proxy) Map.empty input
 
 runWithXYC :: forall xt yt
            . Scalar xt
@@ -50,9 +52,10 @@ runWithXYC (Scalar xt x) (Scalar yt y) input =
           $ Bind (Proxy @"y") yt y
           $ Bind (Proxy @"color") ColorType grey
           $ EmptyContext
-  in fmap ((`evalState` (ctx, ()))
-           . (\c -> simulate noDraw c >> eval (Var (Proxy @"color") ColorType bindingEvidence)))
-   $ parseCode (envProxy Proxy) Map.empty input
+  in first (`ppFullError` input)
+     $ fmap ((`evalState` (ctx, ()))
+             . (\c -> simulate noDraw c >> eval (Var (Proxy @"color") ColorType bindingEvidence)))
+     $ parseCode (envProxy Proxy) Map.empty input
 
 noDraw :: DrawHandler (HaskellTypeM ())
 noDraw = DrawHandler (const $ pure ())
