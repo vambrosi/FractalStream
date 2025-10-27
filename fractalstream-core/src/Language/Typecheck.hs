@@ -12,6 +12,7 @@ module Language.Typecheck
   , DeclaredVar(..)
   , findVar
   , FoundVar(..)
+  , findVarAtType
   ) where
 
 import FractalStream.Prelude
@@ -77,7 +78,7 @@ ppError = concat .  \case
   Advice _ advice -> [advice]
   Internal e ->
     ["INTERNAL ERROR, please report at ",
-      "https://github.com/matt-noonan/FractalStream/issues: ",
+      "https://github.com/matt-noonan/FractalStream/issues:\n",
       ppError e]
 
 advise :: SourceRange -> String -> TC a
@@ -118,3 +119,16 @@ findVar :: forall name env
 findVar sr name env = case lookupEnv' name env of
   Found' ty pf -> withKnownType ty $ pure (FoundVar ty pf)
   Absent'{} -> throwError (MissingName sr (symbolVal name))
+
+findVarAtType :: forall name ty env
+         . (KnownSymbol name)
+        => SourceRange
+        -> Proxy name
+        -> TypeProxy ty
+        -> EnvironmentProxy env
+        -> TC (NameIsPresent name ty env)
+findVarAtType sr name ty env = case lookupEnv name ty env of
+  Found pf -> pure pf
+  Absent{} -> throwError (MissingName sr (symbolVal name))
+  WrongType ty' -> withKnownType ty $
+    throwError (Surprise sr (symbolVal name) (an ty') (Expected $ an ty))

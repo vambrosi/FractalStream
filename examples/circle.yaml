@@ -7,9 +7,9 @@ viewer:
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-      if |z| < 1 then
+      if |z| < 1:
         color <- red
-      else if im z > 0 then
+      else if im z > 0:
         color <- green
-      else
+      else:
         color <- blue

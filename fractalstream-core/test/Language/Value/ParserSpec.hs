@@ -132,6 +132,7 @@ spec = do
       parses3 `shouldBe` Left (unlines
           [ "  cos 2 pi"
           , "  ^^^^^"
+          , ""
           , "To avoid ambiguity when using implicit multiplication, functions must go to the left of other values"])
       parses4 `shouldBe` Right (cos 2 * pi - 1)
       parses5 `shouldBe` Right (3 * cos 2 * sin 1)
@@ -179,6 +180,7 @@ spec = do
       parses1 0 `shouldBe` Left (unlines
         [ "  (1 + y) *3 + 4"
         , "       ^"
+        , ""
         , "No variable named y is defined here." ])
 
     it "will not parse a variable at the wrong type" $ do
@@ -186,11 +188,12 @@ spec = do
       parses1 0 `shouldBe` Left (unlines
         [ "  if x and false then 1 else 2"
         , "     ^"
+        , ""
         , "I expected a truth value here, but x is an integer."])
 
     it "can coerce values of compatible types" $ do
-      let parses1 = parseI1 "if (pi = x) then 1 else 0"
-          parses2 = parseI1 "if (x = pi) then 1 else 0"
+      let parses1 = parseI1 "if (pi ≡ x) then 1 else 0"
+          parses2 = parseI1 "if (x ≡ pi) then 1 else 0"
           parses3 = parseCR "x + y i"
           parses4 = pprint <$> parseValue endOfDecls RealType "1 + 2"
       parses1 0 `shouldBe` Right 0
@@ -211,7 +214,7 @@ spec = do
           (parseValue env BooleanType s)
 
     it "can parse equalities" $ do
-      let parses1 = parseB1 "exp log 2 = log exp 2"
+      let parses1 = parseB1 "exp log 2 ≡ log exp 2"
           parses2 = parseB1 "1 + 2 + 3 = 2 * 3"
       parses1 1 2 3 `shouldBe` Right True
       parses2 0 0 0 `shouldBe` Right True
@@ -233,32 +236,38 @@ spec = do
       parses4 2 0 0 `shouldBe` Right True
       parses4 3 0 0 `shouldBe` Right True
 
-  describe "when using `escapes` and `vanishes` keywords" $ do
+  describe "when using keywords that require splices" $ do
 
-    it "Can splice in the escape radius and vanishing radius comparisons" $ do
-      let ctx :: Complex Double -> Double -> Double -> Double
-              -> Context HaskellTypeOfBinding VanishEscapeEnv
-          ctx z x big tiny
+    let ctx :: Complex Double -> Double -> Double -> Double
+            -> Context HaskellTypeOfBinding VanishEscapeEnv
+        ctx z x big tiny
             = Bind (Proxy @"z") ComplexType z
             $ Bind (Proxy @"x") RealType    x
             $ Bind (Proxy @"R") RealType    big
             $ Bind (Proxy @"epsilon") RealType tiny
             $ EmptyContext
-          splices = Map.fromList
+        splices = Map.fromList
             [ ("[internal] escape radius",
                either (error . show) id (P.parseParsedValue Map.empty "R"))
             , ("[internal] vanishing radius",
                either (error . show) id (P.parseParsedValue Map.empty "epsilon"))
             ]
-          test z x big tiny input =
+        test z x big tiny input =
             let c = ctx z x big tiny
             in (evaluateInContext @_ @'BooleanT $ ctx z x big tiny)
                <$> first (`P.ppFullError` input) (withEnvironment (contextToEnv c)
                                                   $ P.parseValue splices input)
+
+    it "Can splice in the escape radius and vanishing radius comparisons" $ do
       test 1 0    2 0.1 "z escapes" `shouldBe` Right False
       test 3 0    2 0.1 "z escapes" `shouldBe` Right True
       test 1 1.01 2 0.1 "|z| - x vanishes" `shouldBe` Right True
       test 1 1.01 2 0.1 "z + x escapes" `shouldBe` Right True
+
+    it "Can splice in vanishing radius during comparisons" $ do
+      test 1 1 2 0.1 "x = x + 0.01" `shouldBe` Right True
+      test 1 1 2 0.1 "x ≡ x + 0.01" `shouldBe` Right False
+
 
 type VanishEscapeEnv = '("z", 'ComplexT) ':
                        '("x", 'RealT) ':

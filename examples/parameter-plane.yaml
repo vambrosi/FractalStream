@@ -4,44 +4,44 @@ viewers:
     size: 512x512
     resizable: true
     z-coord: C
+    iteration-limit: maxIters
+    escape-radius: maxRadius
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
         z : C <- 0
-        k : Z <- 0
-        while k < maxIters and not stop
-          z <- f
-          k <- k + 1
-        if k = maxIters then
-          color <- black
-        else
+        iterate z -> f until stop
+
+        if stop:
           c1 : Color <- if im(z) > 0 then blue else yellow
           c2 : Color <- if im(z) > 0 then green else red
-          s : R <- k + 1 - (log (log (|z|^2 / 2))) / log 2
-          s <- cos (s pi / 10)
-          s <- s s
+          s : R <- iterations + 1 - (log (log (|z|^2 / 2))) / log 2
+          s <- cos (s pi / 10)^2
           color <- blend (s, c1, c2)
+        else:
+          color <- black
 
   - title: Dynamical plane
     style: complex-plane
     size: 512x512
     resizable: true
     z-coord: z
+    iteration-limit: maxIters
+    escape-radius: maxRadius
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        k : Z <- 0
-        while k < maxIters and not stop
-          z <- f
-          k <- k + 1
-        if k = maxIters then
-          color <- black
-        else
+        iterate z -> f until stop
+
+        if stop:
           c1 : Color <- if im(z) > 0 then blue else yellow
           c2 : Color <- if im(z) > 0 then green else red
-          s : R <- k + 1 - (log (log (|z|^2 / 2))) / log 2
-          s <- cos (s pi / 10)
-          color <- blend (s^2, c1, c2)
+          s : R <- iterations + 1 - (log (log (|z|^2 / 2))) / log 2
+          s <- cos (s pi / 10)^2
+          color <- blend (s, c1, c2)
+        else:
+          color <- black
+
     tools:
      - name: Trace
        shortcut: t
@@ -52,14 +52,12 @@ viewers:
           - event: click-or-drag
             code: |
               prevZ : C <- z
-              k : Z <- 0
               erase
-              while k < 100
+              until z escapes:
                 prevZ <- z
                 draw point at z
                 z <- f
                 draw line from z to prevZ
-                k <- k + 1
 
 setup:
   title: Parametric complex dynamics

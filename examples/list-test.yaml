@@ -7,11 +7,11 @@ viewer:
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-      if |z| < 1 then
+      if |z| < 1:
         color <- red
-      else if im z > 0 then
+      else if im z > 0:
         color <- green
-      else
+      else:
         color <- blue
 
   tools:
@@ -21,7 +21,7 @@ viewer:
         - event: refresh
           code: |
             erase
-            for each center in myList do
+            for each center in myList:
               draw circle at center with radius 1
 
 configuration:

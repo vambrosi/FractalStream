@@ -57,8 +57,8 @@ codeGrammar splices = mdo
   letStatement <- rule $
     check (
      tcLet <$> ident
-           <*> (token Colon *> typ)
-           <*> (token LeftArrow *> value <* token Newline)
+           <*> (colon *> typ)
+           <*> (token LeftArrow *> value <* nl)
            <*> (check (tcBlock <$> blockTail)) <?> "variable initialization")
 
   blockTail <- ruleChoice
@@ -71,30 +71,40 @@ codeGrammar splices = mdo
   typ <- typeGrammar
 
   lineStatement <- ruleChoice
-    [ simpleStatement <* token Newline
+    [ simpleStatement <* nl
     , check
-      (tcIfThenElse <$> (token If *> value <* (token Then <* token Newline))
+      (tcIfThenElse <$> (token If *> value <* (colon <* nl))
                     <*> block
                     <*> elseIf) <?> "if statement"
     , check
-      (tcWhile <$> (lit "while" *> value <* token Newline)
-               <*> block) <?> "while loop"
+      (tcWhile splices
+        <$> (lit "while" *> value)
+        <*> (optional upTo <* colon <* nl)
+        <*> block) <?> "while loop"
     , check
-      (tcDoWhile <$> (lit "repeat" *> token Newline *> block)
-                 <*> (lit "while" *> value <* token Newline))
+      (tcDoWhile splices
+        <$> (lit "repeat" *> optional upTo <* colon <* nl)
+        <*> block
+        <*> (lit "while" *> value <* nl)) <?> "repeat...while loop"
     , check
-      (tcUntil <$> (lit "until" *> value <* token Newline)
-               <*> block) <?> "until loop"
+      (tcUntil splices
+        <$> (lit "until" *> value)
+        <*> (optional upTo <* colon <* nl)
+        <*> block) <?> "until loop"
     , check
-      (tcDoUntil <$> (lit "repeat" *> token Newline *> block)
-                 <*> (lit "until" *> value <* token Newline))
+      (tcDoUntil splices
+        <$> (lit "repeat" *> optional upTo <* colon <* nl)
+        <*> block
+        <*> (lit "until" *> value <* nl)) <?> "repeat...until loop"
     , effect <?> "extended operation"
     ]
 
+  upTo <- rule (lit "up" *> lit "to" *> value <* token TimesKeyword)
+
   elseIf <- ruleChoice
-    [ ((token Else *> token Newline) *> block) <?> "else clause"
+    [ ((token Else *> colon *> nl) *> block) <?> "else clause"
     , check
-      (tcIfThenElse <$> ((token Else *> token If) *> value <* (token Then <* token Newline))
+      (tcIfThenElse <$> ((token Else *> token If) *> value <* (colon <* nl))
                     <*> block
                     <*> elseIf) <?> "else if clause"
     , pure (ParsedCode $ \env -> withEnvironment env $ pure NoOp) <?> "end of block"
@@ -105,6 +115,13 @@ codeGrammar splices = mdo
   simpleStatement <- ruleChoice
     [ check
       (tcSet <$> ident <*> (token LeftArrow *> value)) <?> "variable assignment"
+    , check
+      (tcIterate splices
+        <$> (lit "iterate" *> ident <* token RightArrow)
+        <*> value
+        <*> ((lit "while" $> True) <|> (lit "until" $> False))
+        <*> value
+        <*> optional upTo)
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 
@@ -116,9 +133,9 @@ codeGrammar splices = mdo
     ]
 
   toplevelDrawCommand <- ruleChoice
-    [ (tok "draw" *> drawCommand <* token Newline)
-    , (tok "use" *> penCommand <* token Newline)
-    , (tok "erase" *> eraseCommand <* token Newline)
+    [ (tok "draw" *> drawCommand <* nl)
+    , (tok "use" *> penCommand <* nl)
+    , (tok "erase" *> eraseCommand <* nl)
     ]
 
   eraseCommand <- ruleChoice [check (pure tcClear)]
@@ -155,24 +172,28 @@ codeGrammar splices = mdo
     [ check (tcListInsert
       <$> (tok "insert" *> value <* tok "at")
       <*> (startOrEnd <* tok "of")
-      <*> (ident <* token Newline))
+      <*> (ident <* nl))
     , check (tcListRemoveSome
       <$> (tok "remove" *> tok "each" *> ident)
       <*> (tok "matching" *> value)
-      <*> (tok "from" *> ident <* token Newline))
+      <*> (tok "from" *> ident <* nl))
     , check (tcListRemoveAll
-      <$> (tok "remove" *> tok "all" *> tok "items" *> tok "from" *> ident <* token Newline))
+      <$> (tok "remove" *> tok "all" *> tok "items" *> tok "from" *> ident <* nl))
     , check (tcListFor
       <$> (tok "for" *> tok "each" *> ident)
       <*> (tok "in" *> ident)
-      <*> (tok "do" *> token Newline *> block))
+      <*> (colon *> nl *> block))
     , check (tcListWith
       <$> (tok "with" *> tok "first" *> ident)
       <*> (tok "matching" *> value)
       <*> (tok "in" *> ident)
-      <*> (tok "do" *> token Newline *> block)
-      <*> optional (tok "else" *> token Newline *> block))
+      <*> (colon *> nl *> block)
+      <*> optional (tok "else" *> colon *> nl *> block))
     ]
+
+  colon <- rule (token Colon <?> ":")
+  nl <- rule (token Newline <?> "end of line")
+
   pure toplevel
 
 check :: Prod r CheckedCode -> Prod r ParsedCode

@@ -4,23 +4,23 @@ viewer:
   size: 512x512
   resizable: true
   z-coord: z
+  iteration-limit: maxIters
+  vanishing-radius: tol
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-        k : Z <- 0
         lastZ : C <- 0
 
-        while k < maxIters and |z - lastZ| > tol
+        while z != lastZ:
           lastZ <- z
           z <- z - f / df
-          k <- k + 1
 
-        if k = maxIters then
-          color <- black
-        else
+        if z = lastZ:
           c : Color <- if re(z) > 0 then red else if im(z) > 0 then yellow else blue
-          s : R <- (cos (k pi / 10))^2
+          s : R <- (cos (iterations pi / 10))^2
           color <- blend (s, dark c, light c)
+        else:
+          color <- black
 
   tools:
     - name: Trace
@@ -30,15 +30,13 @@ viewer:
           code: erase
         - event: click-or-drag
           code: |
-            k : Z <- 0
             lastZ : C <- 0
             erase
-            while k < maxIters and |z - lastZ| > tol
+            while z != lastZ:
               lastZ <- z
               z <- z - f / df
               draw point at lastZ
               draw line from lastZ to z
-              k <- k + 1
             draw point at z
 
 setup:

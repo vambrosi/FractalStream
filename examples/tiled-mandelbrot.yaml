@@ -4,6 +4,8 @@ viewer:
   size: 512x512
   resizable: true
   z-coord: w
+  iteration-limit: max_iters
+  escape-radius: R
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
@@ -13,15 +15,12 @@ viewer:
       C : ℂ ⭠ w - (x + i y) + (1 + i) size / 2
       z : ℂ ⭠ (x + i y - (1 + i) size / 2) * scale / size
 
-      k : ℤ ⭠ 0
-      while k < max_iters and |z| < R
-        z ⭠ z² + C
-        k ⭠ k + 1
+      iterate z ⟼ z² + C until z escapes
 
-      if |z| < R then
+      if stuck:
         color ⭠ black
-      else
-        m : ℝ ⭠ k + 1 - log (log (|z|²) / (2 log R)) / log 2
+      else:
+        m : ℝ ⭠ iterations + 1 - log (log (|z|²) / (2 log R)) / log 2
         color ⭠ blend (2 arctan (m / 20) / pi, dark blue, white)
 
 configuration:

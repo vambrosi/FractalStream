@@ -81,25 +81,14 @@ tcNot arg sr = \case
   BooleanType -> Not <$> atType arg BooleanType
   ty -> throwError (Surprise sr "the result of a logical negation" "a truth value" (Expected $ an ty))
 
-tcEql, tcNEq, tcLT, tcLTE, tcGT, tcGTE :: ParsedValue -> ParsedValue -> CheckedValue
+tcEql, tcLT, tcLTE, tcGT, tcGTE :: ParsedValue -> ParsedValue -> CheckedValue
 
 tcEql lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to = must be of some comparable type.")
+  BooleanType -> tryEach (Advice sr "Arguments to ≡ must be real or complex numbers.")
     [ Eql RealType    <$> atType lhs RealType    <*> atType rhs RealType
     , Eql ComplexType <$> atType lhs ComplexType <*> atType rhs ComplexType
-    , Eql IntegerType <$> atType lhs IntegerType <*> atType rhs IntegerType
-    , Eql BooleanType <$> atType lhs BooleanType <*> atType rhs BooleanType
     ]
   ty -> throwError (Surprise sr "the result of an equality check" "a truth value" (Expected $ an ty))
-
-tcNEq lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to ≠ must be of some comparable type.")
-    [ NEq RealType    <$> atType lhs RealType    <*> atType rhs RealType
-    , NEq ComplexType <$> atType lhs ComplexType <*> atType rhs ComplexType
-    , NEq IntegerType <$> atType lhs IntegerType <*> atType rhs IntegerType
-    , NEq BooleanType <$> atType lhs BooleanType <*> atType rhs BooleanType
-    ]
-  ty -> throwError (Surprise sr "the result of an inequality check" "a truth value" (Expected $ an ty))
 
 tcLT lhs rhs sr = \case
   BooleanType -> tryEach (Advice sr "Arguments to a comparison must be integers or real numbers.")
@@ -128,6 +117,28 @@ tcLTE lhs rhs sr = \case
     , Not <$> (LTI <$> atType rhs IntegerType <*> atType lhs IntegerType)
     ]
   ty -> throwError (Surprise sr "the result of a comparison" "a truth value" (Expected $ an ty))
+
+tcAppxEql, tcAppxNEq :: Splices -> ParsedValue -> ParsedValue -> CheckedValue
+
+tcAppxEql splices lhs rhs sr = \case
+  BooleanType -> tryEach (Advice sr "Arguments to ≠ must be of some comparable type.")
+    [ Eql IntegerType <$> atType lhs IntegerType <*> atType rhs IntegerType
+    , Eql BooleanType <$> atType lhs BooleanType <*> atType rhs BooleanType
+    , let delta = ParsedValue sr (tcSub lhs rhs sr)
+          norm  = ParsedValue sr (tcAbs delta sr)
+      in tcVanishes splices norm sr BooleanType
+    ]
+  ty -> throwError (Surprise sr "the result of an equality check" "a truth value" (Expected $ an ty))
+
+tcAppxNEq splices lhs rhs sr = \case
+  BooleanType -> tryEach (Advice sr "Arguments to = must be of some comparable type.")
+    [ NEq IntegerType <$> atType lhs IntegerType <*> atType rhs IntegerType
+    , NEq BooleanType <$> atType lhs BooleanType <*> atType rhs BooleanType
+    , let delta = ParsedValue sr (tcSub lhs rhs sr)
+          norm  = ParsedValue sr (tcAbs delta sr)
+      in Not <$> tcVanishes splices norm sr BooleanType
+    ]
+  ty -> throwError (Surprise sr "the result of an inequality check" "a truth value" (Expected $ an ty))
 
 -- | Do an arithmetic operation, but try to keep conversions at the outermost
 -- layer. For example, if we want to parse "1 + 2" at ComplexT, we want the
@@ -177,6 +188,22 @@ tcScalar :: String -> TypeProxy ty -> HaskellType ty -> CheckedValue
 tcScalar name ty' v sr ty = case sameHaskellType ty ty' of
   Just Refl -> pure (Const $ Scalar ty v)
   Nothing   -> throwError (Surprise sr name (an $ SomeType ty') (Expected $ an ty))
+
+tcIterations :: Splices -> CheckedValue
+tcIterations splices sr = \case
+  IntegerType -> case Map.lookup internalIterations splices of
+      Nothing -> throwError $ internal (Advice sr "The script's internal iteration counter was not defined.")
+      Just r  -> atType r IntegerType
+  ty -> throwError (Surprise sr "the `iterations` counter" (an ty) (Expected "an integer"))
+
+tcStuck :: Splices -> CheckedValue
+tcStuck splices sr = \case
+  BooleanType -> case Map.lookup internalIterations splices of
+    Just lhs -> case Map.lookup internalIterationLimit splices of
+      Just rhs -> tcAppxEql splices lhs rhs sr BooleanType
+      Nothing  -> throwError (Advice sr "The script's iteration limit was not defined.")
+    Nothing -> throwError (internal $ Advice sr "The script's internal iteration counter was not defined.")
+  ty -> throwError (Surprise sr "the `stuck` keyword" (an ty) (Expected "a truth value"))
 
 tcAbs :: ParsedValue -> CheckedValue
 tcAbs x sr = \case
@@ -335,7 +362,7 @@ tcEscapes splices pv sr = \case
      [ AbsC <$> atType pv ComplexType
      , AbsF <$> atType pv RealType ]
     case Map.lookup internalEscapeRadius splices of
-      Nothing -> throwError $ internal (Advice sr "The internal escape radius was not defined.")
+      Nothing -> throwError $ internal (Advice sr "The script's escape radius was not defined.")
       Just r  -> LTF <$> atType r RealType <*> pure p
   ty -> throwError (Surprise sr "the result of `escapes`" "a truth value" (Expected $ an (SomeType ty)))
 
@@ -346,13 +373,16 @@ tcVanishes splices pv sr = \case
      [ AbsC <$> atType pv ComplexType
      , AbsF <$> atType pv RealType ]
     case Map.lookup internalVanishingRadius splices of
-      Nothing -> throwError $ internal (Advice sr "The internal vanishing radius was not defined.")
+      Nothing -> throwError $ internal (Advice sr "The script's vanishing radius was not defined.")
       Just r  -> LTF p <$> atType r RealType
   ty -> throwError (Surprise sr "the result of `vanishes`" "a truth value" (Expected $ an (SomeType ty)))
 
-internalEscapeRadius, internalVanishingRadius :: String
+internalEscapeRadius, internalVanishingRadius, internalIterations, internalIterationLimit :: String
 internalEscapeRadius    = "[internal] escape radius"
 internalVanishingRadius = "[internal] vanishing radius"
+internalIterations =      "[internal] iteration count"
+type InternalIterations = "[internal] iteration count"
+internalIterationLimit = "[internal] iteration limit"
 
 ------------------------------------------------------
 -- Various tables

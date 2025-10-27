@@ -9,6 +9,9 @@ import Language.Value.Parser
 import Language.Code
 import Language.Draw
 import Language.Parser.SourceRange
+import Language.Value.Typecheck (internalIterationLimit, InternalIterations)
+
+import qualified Data.Map as Map
 
 ------------------------------------------------------
 -- Parsed code
@@ -45,31 +48,53 @@ tcSet n v sr env = do
   FoundVar ty pf <- findVar sr name env
   Set pf name <$> atType v ty
 
-tcWhile :: ParsedValue -> ParsedCode -> CheckedCode
-tcWhile cond body _sr env =
-  IfThenElse <$> atType cond BooleanType
-             <*> (DoWhile <$> atType cond BooleanType <*> atEnv env body)
-             <*> pure NoOp
+tcGenericLoop :: Bool
+              -> (forall env. KnownEnvironment env =>
+                    Value '(env, 'BooleanT) -> Code env -> Code env)
+              -> Splices -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
+tcGenericLoop negateCondition mkLoop splices mlimit body cond sr (env :: EnvironmentProxy env) =
+  withFresh sr env IntegerType 0 $ \env' (counterName :: Proxy fresh) pf -> recallIsAbsent pf $ do
+    let counter :: Value '( '(fresh, IntegerT) ': env, 'IntegerT)
+        counter = Var counterName IntegerType (bindName counterName IntegerType pf)
 
-tcDoWhile :: ParsedCode -> ParsedValue -> CheckedCode
-tcDoWhile body cond _sr env =
-  DoWhile <$> atType cond BooleanType <*> atEnv env body
+    limit <- case mlimit of
+      Just (ParsedValue _ limitFun) -> limitFun IntegerType
+      Nothing -> case Map.lookup internalIterationLimit splices of
+        Just (ParsedValue _ limitFun)  -> limitFun IntegerType
+        Nothing -> throwError $ internal $
+          Advice sr "The script's iteration limit was not defined."
 
-tcUntil :: ParsedValue -> ParsedCode -> CheckedCode
-tcUntil cond body _sr env =
-  IfThenElse <$> atType cond BooleanType
-             <*> (DoWhile <$> (Not <$> atType cond BooleanType) <*> atEnv env body)
-             <*> pure NoOp
+    c <- atType cond BooleanType
+    b <- atEnv env' body
+    let b' = Block [ b, Set bindingEvidence counterName (counter + 1)]
+        c' = And (if negateCondition then Not c else c) (counter `LTI` limit)
+        iterations = Proxy @InternalIterations
+    ipf <- findVarAtType sr iterations IntegerType env'
+    pure $ Block
+      [ mkLoop c' b'
+      , Set ipf iterations counter ]
 
-tcDoUntil :: ParsedCode -> ParsedValue -> CheckedCode
-tcDoUntil body cond _sr env =
-  DoWhile <$> (Not <$> atType cond BooleanType) <*> atEnv env body
+tcWhile, tcUntil :: Splices -> ParsedValue -> Maybe ParsedValue -> ParsedCode -> CheckedCode
+tcDoWhile, tcDoUntil :: Splices -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
+
+tcWhile s c l b =
+  tcGenericLoop False (\cond body -> IfThenElse cond (DoWhile cond body) NoOp) s l b c
+tcUntil s c l b =
+  tcGenericLoop True  (\cond body -> IfThenElse cond (DoWhile cond body) NoOp) s l b c
+tcDoWhile = tcGenericLoop False DoWhile
+tcDoUntil = tcGenericLoop True  DoWhile
 
 tcIfThenElse :: ParsedValue -> ParsedCode -> ParsedCode -> CheckedCode
 tcIfThenElse cond yes no _sr env =
   IfThenElse <$> atType cond BooleanType
              <*> atEnv env yes
              <*> atEnv env no
+
+tcIterate :: Splices -> String -> ParsedValue -> Bool -> ParsedValue -> Maybe ParsedValue -> CheckedCode
+tcIterate splices var expr isWhile cond upto sr env = do
+  let body = ParsedCode (\e -> withEnvironment e $ tcSet var expr sr e)
+      tc = if isWhile then tcWhile else tcUntil
+  tc splices cond upto body sr env
 
 tcPoint :: KnownEnvironment env => ParsedValue -> TC (Value '(env, 'Pair 'RealT 'RealT))
 tcPoint p@(ParsedValue sr _) =
@@ -171,3 +196,22 @@ getListType sr name env = case lookupEnv' name env of
   Found' ty pf -> case ty of
     ListType itemTy -> pure (ListExists itemTy pf)
     _ -> throwError (Surprise sr (symbolVal name) (an $ SomeType ty) (Expected "a list"))
+
+withFresh :: forall ty env
+           . SourceRange
+          -> EnvironmentProxy env
+          -> TypeProxy ty
+          -> Value '(env, ty)
+          -> (forall fresh. KnownSymbol fresh => EnvironmentProxy ( '(fresh, ty) ': env)
+                                              -> Proxy fresh
+                                              -> NameIsAbsent fresh env
+                                              -> TC (Code ( '(fresh, ty) ': env)))
+          -> TC (Code env)
+withFresh sr env ty value action = withEnvironment env $ do
+  let tmpName = "[internal] fresh #" ++
+        show (length $ fromEnvironment env (\_ _ -> ()))
+  case someSymbolVal tmpName of
+    SomeSymbol tmp -> case lookupEnv tmp ty env of
+      Absent pf -> recallIsAbsent pf $ let_ value <$>
+        action (bindNameEnv tmp ty pf env) tmp pf
+      _ -> throwError (Internal $ AlreadyDefined sr tmpName)

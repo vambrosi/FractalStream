@@ -4,24 +4,19 @@ viewer:
   size: 512x512
   resizable: true
   z-coord: C
+  escape-radius: escape_radius
+  vanishing-radius: epsilon
+  iteration-limit: max_iters
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-      # We want to follow the critical point
       z : C <- 0
+      iterate z -> z^2 + C until z escapes
 
-      # Iterate until z escapes or we repeat max_iters times
-      k : Z <- 0
-      while k < max_iters and |z| < escape_radius
-        z <- z^2 + C
-        k <- k + 1
-
-      # Color points that failed to escape black, and
-      # for other points use a gradient between red and yellow.
-      if k = max_iters then
+      if z escaped:
+        color <- rainbow (iterations / 20)
+      else:
         color <- black
-      else
-        color <- rainbow (k / 20)
 
   tools:
     - name: Bulb info
@@ -47,11 +42,6 @@ viewer:
                     type: Z
                     variable: warmup
                 - text-entry:
-                    label: "Tolerance"
-                    value: "0.0001"
-                    type: R
-                    variable: tolerance
-                - text-entry:
                     label: "Maximum period"
                     value: "1000"
                     type: Z
@@ -60,25 +50,23 @@ viewer:
       actions:
         - event: click
           code: |
-            period <- 0
-
+            # Iterate z^2 + C many times so that we end up with
+            # z close to one of the points on the attracting cycle.
             z : C <- 0
-            k : Z <- 0
-            while k < warmup and |z| < escape_radius
-              k <- k + 1
-              z <- z^2 + C
+            iterate z -> z^2 + C until z escapes up to warmup times
 
-            if k = warmup then
+            # Now that z is on the attracting cycle (or at least very near it),
+            # count how many times we need to apply z^2 + C until we get
+            # back to z again. Report the result in the `period` variable,
+            # or report 0 if something went wrong.
+            period <- 0
+            if not (z escaped):
               target : C <- z
-              k <- 0
-              while k < max_period
-                k <- k + 1
+              repeat up to max_period times:
                 z <- z^2 + C
-                if |z - target| < tolerance then
-                  period <- k
-                  k <- max_period
-
-
+              until z = target
+              if z = target:
+                period <- iterations
 
 configuration:
   title: Configuration
@@ -94,3 +82,8 @@ configuration:
         value: 10
         type: R
         variable: escape_radius
+    - text-entry:
+        label: "Minimum radius:"
+        value: "0.0001"
+        type: R
+        variable: epsilon

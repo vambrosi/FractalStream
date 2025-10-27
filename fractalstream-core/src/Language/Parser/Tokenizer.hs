@@ -39,6 +39,7 @@ data Token
   | Colon
   | Semicolon
   | Equal
+  | ExactlyEqual
   | NotEqual
   | GreaterThan
   | LessThan
@@ -62,6 +63,9 @@ data Token
   | RightArrow
   | Escapes
   | Vanishes
+  | Iterations
+  | TimesKeyword
+  | Stuck
   deriving (Eq, Ord, Show)
 
 instance IsString Token where fromString = Identifier
@@ -92,6 +96,7 @@ tokenizeWithIndentation
          . concatMap toTok
          . block
          . map observeSpaces
+         . joinLineContinuations
          . filter (not . all (isSpace . fst))
          . map dropComments
          . map (\(r, xs) -> map (\(c, x) -> let p = Pos r c
@@ -144,6 +149,7 @@ opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
   , ("{", OpenBrace), ("}", CloseBrace)
   , (",", Comma), (":", Colon), (";", Semicolon)
   , (">", GreaterThan), ("<", LessThan)
+  , ("===", ExactlyEqual), ("≡", ExactlyEqual)
   , ("==", Equal), ("=", Equal)
   , (">=", GreaterThanOrEqual), ("<=", LessThanOrEqual)
   , ("≥", GreaterThanOrEqual), ("≤", LessThanOrEqual)
@@ -151,6 +157,7 @@ opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
   , ("->", RightArrow), ("<-", LeftArrow)
   , ("⭢", RightArrow), ("⭠", LeftArrow)
   , ("→", RightArrow), ("←", LeftArrow)
+  , ("⟼", RightArrow), ("↦", RightArrow)
   ]
 
 longestMatchingOperator :: SRString -> Maybe (SRToken, SRString)
@@ -167,7 +174,10 @@ wordlikeTokens = Map.fromList
   , ("i", I), ("𝑖", I)
   , ("true", True_), ("false", False_)
   , ("or", Or_), ("and", And_), ("not", Not_)
-  , ("escapes", Escapes), ("vanishes", Vanishes)
+  , ("escapes", Escapes), ("escaped", Escapes)
+  , ("vanishes", Vanishes), ("vanished", Vanishes)
+  , ("iterations", Iterations), ("times", TimesKeyword)
+  , ("stuck", Stuck)
   ]
 
 data TokenGroup
@@ -262,3 +272,19 @@ superscriptNumber = go 0
       _ -> error "should be impossible"
 
 type SRString = [(Char, SourceRange)]
+
+-- Handle ... / … line continuation markers
+joinLineContinuations :: [SRString] -> [SRString]
+joinLineContinuations = \case
+  [] -> []
+  (x:xs) -> case hasLineContinuation x of
+    Nothing -> x : joinLineContinuations xs
+    Just x' -> case joinLineContinuations xs of
+      (y:ys) -> (x' ++ y) : ys
+      []     -> [x] -- leave the hanging ellipsis so we get a parse error later
+
+hasLineContinuation :: SRString -> Maybe SRString
+hasLineContinuation line = case dropWhile (isSpace . fst) (reverse line) of
+  ('.',_):('.',_):('.',_):line' -> Just (reverse line')
+  ('…',_):line' -> Just (reverse line')
+  _ -> Nothing
