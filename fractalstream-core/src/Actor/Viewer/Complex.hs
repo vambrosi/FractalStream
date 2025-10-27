@@ -25,10 +25,14 @@ import Language.Draw
 import Language.Code.InterpretIO (ScalarIORefM, IORefTypeOfBinding, eval)
 
 import Language.Value.Parser
-import Language.Value.Typecheck (internalVanishingRadius, internalEscapeRadius)
+import Language.Value.Typecheck ( internalVanishingRadius
+                                , internalEscapeRadius
+                                , internalIterationLimit
+                                , internalIterations )
 import Language.Code.Parser
-
+import Language.Parser.SourceRange
 import Language.Value.Evaluator
+import Language.Typecheck
 
 import Foreign (Ptr)
 import Data.Aeson
@@ -93,12 +97,13 @@ type RealViewer env =
     '("color", 'ColorT) ': env)
 
 data ComplexViewer' where
-  ComplexViewer' :: forall z env
-    . KnownSymbol z =>
+  ComplexViewer' :: forall z px env
+    . (KnownSymbol z, KnownSymbol px) =>
     { cvCenter'    :: UIValue (Complex Double)
     , cvPixelSize' :: UIValue Double
     , cvConfig' :: Context DynamicValue env
     , cvCoord' :: Proxy z
+    , cvPixel' :: Proxy px
     , cvCode' :: Code (RealViewer env)
     , cvTools' :: [Tool]
     , cvGetDrawCommands :: IO [[DrawCommand]]
@@ -128,6 +133,17 @@ instance KnownType t => IsString (StringOf t) where
 
 instance KnownType t => FromJSON (StringOf t) where
   parseJSON = fmap unStringOrNumber . parseJSON
+
+bindContextIO :: KnownSymbol name
+              => Proxy name
+              -> TypeProxy ty
+              -> Eval (a name ty)
+              -> Context a env
+              -> IO (Context a ( '(name, ty) ': env))
+bindContextIO name ty v ctx =
+  case lookupEnv name ty (contextToEnv ctx) of
+    Absent pf -> recallIsAbsent pf (pure (Bind name ty v ctx))
+    _ -> throwIO (BadProject (symbolVal name ++ " is defined twice") [])
 
 declareIO :: forall a name ty env
            . KnownSymbol name
@@ -233,6 +249,20 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
       Left err -> throwIO (BadProject "I couldn't parse the viewer's vanishing-radius field."
                             (ppFullError err x))
 
+  iterationLimit <- case cvIterationLimit of
+    Nothing -> pure Nothing
+    Just x -> case parseParsedValue Map.empty x of
+      Right v  -> pure (Just v)
+      Left err -> throwIO (BadProject "I couldn't parse the viewer's iteration-limit field."
+                            (ppFullError err x))
+
+  SomeSymbol it <- pure (someSymbolVal internalIterations)
+  let iterations = ParsedValue NoSourceRange $ \case
+        IntegerType -> do
+          pf <- findVarAtType NoSourceRange it IntegerType (envProxy Proxy)
+          pure (Var it IntegerType pf)
+        ty -> throwError (Surprise NoSourceRange "the hidden iteration counter"
+                          (an ty) (Expected "an integer"))
 
   let cvPixelName = fromMaybe "#pixel" cvPixel
       argX = Proxy @InternalX
@@ -243,6 +273,8 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
       splices = Map.unions $ concat
                 [ [Map.singleton internalEscapeRadius x    | x <- maybeToList escapeRadius]
                 , [Map.singleton internalVanishingRadius x | x <- maybeToList vanishRadius]
+                , [Map.singleton internalIterationLimit x  | x <- maybeToList iterationLimit]
+                , [Map.singleton internalIterations iterations]
                 , [splices0] ]
 
   case (someSymbolVal cvCoord, someSymbolVal cvPixelName) of
@@ -255,7 +287,7 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
        $ \env3 -> declareIO argX RealType env3
        $ \env -> declareOrGetIO cvCoord' ComplexType env
        $ \pfCoord' envX -> declareOrGetIO cvPixel' RealType envX
-       $ \pfPixel' envX' -> do
+       $ \pfPixel' envX' -> declareIO it IntegerType envX' $ \envX'' -> do
 
       cvCenter' <- case valueOf cvCenter of
         Right v  -> newUIValue v
@@ -268,14 +300,15 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
           vpSize  = cvSize
           vpCanResize = cvCanResize
 
-      case parseCode envX' splices cvCode of
+      case parseCode envX'' splices cvCode of
         Left err -> throwIO (BadProject "there was an error parsing the viewer's script" (ppFullError err cvCode))
-        Right cvCode0' -> do
+        Right cvCode0 -> do
           Found pfX <- pure (lookupEnv argX RealType env)
           Found pfY <- pure (lookupEnv argY RealType env)
           Found pfPx <- pure (lookupEnv argPx RealType envX)
 
-          let cvCode' = toRealViewerCode env envX envX' cvCoord' cvPixel' pfCoord' pfPixel' pfX pfY pfPx cvCode0'
+          let cvCode1 = withEnvironment envX' $ let_ 0 cvCode0
+              cvCode' = toRealViewerCode env envX envX' cvCoord' cvPixel' pfCoord' pfPixel' pfX pfY pfPx cvCode1
 
           withCompiledComplexViewer jit argX argY argPx argPx argOutput cvCode' $ \fun -> do
             let cvGetFunction = do
@@ -289,7 +322,9 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
                     fun (fromIntegral blockWidth) (fromIntegral blockHeight)
                         (fromIntegral subsamples) fullArgs buf
 
-            let inheritedContext = cvConfig'
+            inheritedContext <- bindContextIO cvPixel' RealType
+                                  (SomeDynamic cvPixelSize')
+                                  cvConfig'
 
             (cvGetDrawCommands, cvDrawCommandsChanged, drawTo) <- makeDrawCommandGetter
 
@@ -307,7 +342,7 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
                 -- Build the event handler actions using the viewer context
                 -- extended by the tool's configuration context.
                 cvToolContext <- case innerContext <#> inheritedContext of
-                  Left msg -> throwIO (BadProject "There was a problem parsing the tool's configuration" msg)
+                  Left msg -> throwIO (BadProject "there was a problem parsing the tool's configuration" msg)
                   Right ctx -> pure ctx
                 putStrLn ("building tool `" ++ tiName ptoolInfo ++ "`")
                 putStrLn ("environment: " ++ show (contextToEnv cvToolContext))
@@ -315,15 +350,18 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
                 let eventHandlers0 = case pfCoord' of
                       Left  {} -> ptoolEventHandlers
                       Right {} -> prependHandlerCode (cvCoord ++ " : C <- 0\n") ptoolEventHandlers
+                      {-
                     eventHandlers = case pfPixel' of
                       Left  {} -> eventHandlers0
                       Right {} -> prependHandlerCode (cvPixelName ++ " : R <- 0\n") eventHandlers0
+-}
+                    eventHandlers = eventHandlers0
 
                 (toolVars, h) <- case toEventHandlers
                                       (contextToEnv cvToolContext)
                                       (Set.singleton cvCoord)
                                       splices eventHandlers of
-                       Left err -> throwIO (BadProject "There was a problem parsing the tool's event handler" err)
+                       Left err -> throwIO (BadProject "there was a problem parsing the tool's event handler" err)
                        Right ok -> pure ok
                 let toolInfo = ptoolInfo
                     toolDrawLayer = ptoolDrawLayer

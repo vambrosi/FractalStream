@@ -4,6 +4,8 @@ viewers:
     size: 512x512
     resizable: true
     z-coord: a
+    escape-radius: escape_radius
+    iteration-limit: max_iters
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
@@ -16,22 +18,24 @@ viewers:
       save : C <- z * zoom
       x : C <- p + lambda * save
       y : C <- p + save
-      k : Z <- 0
-      while |x| < escape_radius and k < max_iters
-        k <- k + 1
+
+      repeat:
         t : C <- x
         x <- x^2 + b - a y
         y <- t
-      if k = max_iters then
+      until x escapes
+      if x escaped:
+        color <- cycle (iterations / 10, blue, white)
+      else:
         color <- black
-      else
-        color <- cycle (k / 10, blue, white)
 
   - title: b-plane
     style: complex-plane
     size: 512x512
     resizable: true
     z-coord: b
+    escape-radius: escape_radius
+    iteration-limit: max_iters
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
@@ -44,22 +48,25 @@ viewers:
       save : C <- z * zoom
       x : C <- p + lambda * save
       y : C <- p + save
-      k : Z <- 0
-      while |x| < escape_radius and k < max_iters
-        k <- k + 1
+
+      repeat:
         t : C <- x
         x <- x^2 + b - a y
         y <- t
-      if k = max_iters then
+      until x escapes
+
+      if x escaped:
+        color <- cycle (iterations / 10, blue, white)
+      else:
         color <- black
-      else
-        color <- cycle (k / 10, blue, white)
 
   - title: Hénon dynamics
     style: complex-plane
     size: 512x512
     resizable: true
     z-coord: z
+    escape-radius: escape_radius
+    iteration-limit: max_iters
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
@@ -71,39 +78,17 @@ viewers:
       save : C <- z * zoom
       x : C <- p + lambda * save
       y : C <- p + save
-      k : Z <- 0
-      while |x| < escape_radius and k < max_iters
-        k <- k + 1
+
+      repeat:
         t : C <- x
         x <- x^2 + b - a y
         y <- t
-      if k = max_iters then
-        color <- black
-      else
-        color <- rainbow (k / 10)
+      until x escapes
 
-    tools:
-      - name: Trace
-        shortcut: t
-        actions:
-          - event: click-or-drag
-            code: |
-              erase
-              aa : C <- (a + 1) / 2
-              disc : C <- aa^2 - b
-              p : C <- sqrt(disc) + aa
-              disc <- p^2 - a
-              lambda : C <- sqrt(disc) + p
-              save : C <- z * zoom
-              x : C <- p + lambda * save
-              y : C <- p + save
-              k : Z <- 0
-              while |x| < escape_radius and k < max_iters
-                k <- k + 1
-                t : C <- x
-                x <- x^2 + b - a y
-                y <- t
-                draw line from (x - p) / zoom to (y - p) / zoom
+      if x escaped:
+        color <- rainbow (iterations / 10)
+      else:
+        color <- black
 
 configuration:
   title: Configuration

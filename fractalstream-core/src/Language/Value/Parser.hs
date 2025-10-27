@@ -144,8 +144,9 @@ valueGrammar splices = mdo
     ]
 
   comparison <- ruleChoice
-    [ check (tcEql <$> (arith <* token Equal)    <*> arith)
-    , check (tcNEq <$> (arith <* token NotEqual) <*> arith)
+    [ check (tcEql <$> (arith <* token ExactlyEqual) <*> arith)
+    , check (tcAppxEql splices <$> (arith <* token Equal) <*> arith)
+    , check (tcAppxNEq splices <$> (arith <* token NotEqual) <*> arith)
     , check (tcLT  <$> (arith <* token LessThan) <*> arith)
     , check (tcGT  <$> (arith <* token GreaterThan) <*> arith)
     , check (tcGTE <$> (arith <* token GreaterThanOrEqual) <*> arith)
@@ -239,6 +240,8 @@ valueGrammar splices = mdo
     , check (tcScalar "𝑖" ComplexType (0.0 :+ 1.0) <$ token I)
     , check (tcScalar "𝑒" RealType (exp 1.0) <$ token Euler)
     , check (tcScalar "π" RealType pi <$ token Pi)
+    , check (tcIterations splices <$ token Iterations)
+    , check (tcStuck splices <$ token Stuck)
     , check (
         (\n -> tcScalar (show n) IntegerType (fromIntegral n))
         <$> tokenMatch (\case { NumberI n -> Just n; _ -> Nothing }))

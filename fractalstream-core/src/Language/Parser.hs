@@ -139,4 +139,4 @@ ppFullError :: (PrettyPrint t, HasErrorLocation t) => t -> String -> String
 ppFullError err input =
   let msg = pp err
       context = pp (Indicated (errorLocation err) input)
-  in unlines (context ++ msg)
+  in unlines (context ++ [""] ++ msg)

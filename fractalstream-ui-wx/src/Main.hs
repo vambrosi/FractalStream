@@ -20,7 +20,9 @@ import UI.Welcome
 
 import Backend
 import Graphics.UI.WX -- (start)
+import Graphics.UI.WXCore.Draw (withFontStyle)
 import Graphics.UI.WXCore.Frame (windowChildren)
+import Graphics.UI.WXCore.WxcClasses (styledTextCtrlStyleSetFont, styledTextCtrlSetText)
 
 import Control.Exception (catch, ErrorCall(..))
 
@@ -80,46 +82,47 @@ badYaml :: Frame a -> FilePath -> YAML.ParseException -> IO ()
 badYaml w path e = badProjectFile w path (BadProject "Bad YAML file" (show e))
 
 badProjectFile :: Frame a -> FilePath -> BadProject -> IO ()
-badProjectFile projectWindow path (BadProject why wher) = do
+badProjectFile projectWindow path (BadProject why wher) =
+  fatalErrorDialog projectWindow "Could not load project file" $ \p -> withFontStyle fontFixed $ \fnt -> do
+    txt <- staticText p
+        [ text := unlines
+          [ "I was unable to load the project from " ++ path
+          , "because " ++ why
+          , ""
+          ]]
+    errTxt <- styledTextCtrl p []
+    styledTextCtrlStyleSetFont errTxt 0 fnt
+    styledTextCtrlSetText errTxt wher
 
-  d <- dialog objectNull [ text := "Could not load project file" ]
-  p <- panel d []
-  txt <- staticText p
-    [ text := unlines
-      [ "I was unable to load the project from " ++ path
-      , "because " ++ why
-      , ""
-      ]]
-  errTxt <- staticText p
-    [ text := wher
-    , font := fontFixed
-    , fontSize := 14
-    ]
-  ok  <- button d [text := "Ok"]
-  set d [ layout := fill $ container p $ margin 15 $ floatCenter $
-          column 5 [ widget txt, widget errTxt, widget ok ]]
-  _ <- showModal d (\done -> set ok [on command := done Nothing])
-  close projectWindow
+    pure [ widget txt, expand $ widget errTxt ]
 
 errorCalled :: Frame a -> ErrorCall -> IO ()
-errorCalled projectWindow (ErrorCall msg) = do
-  d <- dialog objectNull [ text := "Internal error" ]
-  p <- panel d []
-  txt <- staticText p
-    [ text := unlines
-      [ "Oh my."
-      , ""
-      , "There was an uncaught internal error:" ]]
-  moreTxt <- staticText p [ text := msg, font := fontFixed, fontSize := 14 ]
-  yetMoreTxt <- staticText p
-    [ text := unlines
-      [ ""
-      , "Perhaps you should report this at"
-      , "https://github.com/matt-noonan/FractalStream/issues"
+errorCalled projectWindow (ErrorCall msg) =
+  fatalErrorDialog projectWindow "Internal error" $ \p -> withFontStyle fontFixed $ \fnt -> do
+    txt <- staticText p
+      [ text := unlines
+        [ "Oh my."
+        , ""
+        , "There was an uncaught internal error:" ]]
+    moreTxt <- styledTextCtrl p []
+    styledTextCtrlStyleSetFont moreTxt 0 fnt
+    styledTextCtrlSetText moreTxt msg
+    yetMoreTxt <- staticText p
+      [ text := unlines
+        [ ""
+        , "Perhaps you should report this at"
+        , "https://github.com/matt-noonan/FractalStream/issues"
+        ]
       ]
-    ]
-  ok  <- button d [text := "Ok"]
+    pure [widget txt, expand $ widget moreTxt, widget yetMoreTxt]
+
+fatalErrorDialog :: Frame a -> String -> (Panel () -> IO [Layout]) -> IO ()
+fatalErrorDialog projectWindow title mkContents = do
+  d <- dialog objectNull [ text := title ]
+  p <- panel d []
+  contents <- mkContents p
+  ok <- button d [text := "OK"]
   set d [ layout := fill $ container p $ margin 15 $ floatCenter $
-          column 5 [ widget txt, widget moreTxt, widget yetMoreTxt, widget ok ]]
-  _ <- showModal d (\done -> set ok [on command := done Nothing])
+          column 5 (contents ++ [widget ok]) ]
+  _ <- showModal d (\done -> set ok [on command := done Nothing ])
   close projectWindow

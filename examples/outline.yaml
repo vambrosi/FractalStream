@@ -5,6 +5,9 @@ viewers:
     resizable: true
     z-coord: C
     pixel-size: px
+    iteration-limit: maxIters
+    escape-radius: big
+    vanishing-radius: tiny
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
@@ -16,20 +19,18 @@ viewers:
         dzdc : C <- 0
         der : C <- 1
 
-        k : Z <- 0
-        repeat
+        repeat:
           dzdc <- 1 + 2 z dzdc
           z <- z^2 + C
           der <- 2 z der
-          k <- k + 1
-        until |z / dzdc| < tol or |z| > big or |der| < tiny or k = maxIters
+        until |z / dzdc| < tol or z escapes or der vanishes
 
-        if k = maxIters or |der| < tiny then
-          color <- interior_color
-        else if |z / dzdc| < tol then
-          color <- boundary_color
-        else
+        if z escaped:
           color <- exterior_color
+        else if |z / dzdc| < tol:
+          color <- boundary_color
+        else:
+          color <- interior_color
 
   - title: Dynamical plane
     style: complex-plane
@@ -37,6 +38,9 @@ viewers:
     resizable: true
     z-coord: z
     pixel-size: px
+    iteration-limit: maxIters
+    escape-radius: big
+    vanishing-radius: tiny
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
@@ -44,19 +48,17 @@ viewers:
         w : C <- z
         tol : R <- 2 px fatness
 
-        k : Z <- 0
-        repeat
+        repeat:
           dz <- 2 z dz
           z <- z^2 + C
-          k <- k + 1
-        until |z| > big or |z/dz - w/dz| < tol or |dz| < tiny or k = maxIters
+        until z escapes or |z/dz - w/dz| < tol or dz vanishes
 
-        if k = maxIters or |dz| < tiny then
-          color <- interior_color
-        else if |z/dz - w/dz| < tol then
-          color <- boundary_color
-        else
+        if z escaped:
           color <- exterior_color
+        else if |z/dz - w/dz| < tol:
+          color <- boundary_color
+        else:
+          color <- interior_color
 
 configuration:
   title: Configuration

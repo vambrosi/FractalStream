@@ -21,6 +21,7 @@ import Language.Environment
 import Language.Value.Evaluator (HaskellTypeOfBinding)
 import Language.Code
 import Language.Value.Parser
+import Language.Value.Typecheck (internalIterations)
 import Language.Code.Parser
 import Language.Code.InterpretIO
 import Language.Draw
@@ -105,9 +106,14 @@ toEventHandlers :: forall env
 toEventHandlers env viewerVars splices ParsedEventHandlers{..} = fmap swap $ flip runStateT Set.empty $ do
   let parse :: EnvironmentProxy e -> String -> StateT (Set String) (Either String) (Code e)
       parse e i = do
-        c <- lift $ first (`ppFullError` i) $ parseCode e splices i
-        modify' (execState (usedVarsInCode c))
-        pure c
+        SomeSymbol (it :: Proxy iterations) <- pure (someSymbolVal internalIterations)
+        case lookupEnv' it e of
+          Absent' pf -> withEnvironment e $ recallIsAbsent pf $ do
+            let e' = declare @iterations IntegerType e
+            c <- lift $ first (`ppFullError` i) $ parseCode e' splices i
+            modify' (execState (usedVarsInCode c))
+            pure (let_ 0 c)
+          Found'{} -> lift (Left "internal iteration count already defined")
 
       allUpdatesOk, noUpdatesToViewerVar :: Context (K Bool) env
       allUpdatesOk = envToContext env (\_ _ -> True)

@@ -1,0 +1,22 @@
+viewer:
+  title: Douady rabbit
+  style: complex-plane
+  size: 400x425
+  resizable: true
+  z-coord: z
+  iteration-limit: "100"
+  initial-center: 0
+  initial-pixel-size: 1/128
+  code: |
+    # Iterate until we escape or loop 100 times
+    while |z| < 10:
+      z ⭠ z² + -0.12256 …
+              + 0.74486 ...
+              𝑖
+
+    # If we didn't escape in 100 loops, draw a black
+    # point. Otherwise, draw a white point.
+    if iterations = 100:
+      color ⭠ black
+    else:
+      color ⭠ white

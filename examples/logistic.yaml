@@ -5,22 +5,21 @@ viewer:
   resizable: true
   z-coord: z
   pixel-size: px
+  iteration-limit: max_iters
+  vanishing-radius: tol
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
       x : R <- im(z)
       x0 : R <- x
       r : R <- re(z)
-      k : Z <- 0
       best : R <- outer
-      while k < warmup
+
+      iterate x -> r x (1 - x) while true up to warmup times
+
+      until x = x0:
         x <- r x (1 - x)
-        k <- k + 1
-      k <- 0
-      while k < max_iters and |x - x0| > tol
-        x <- r x (1 - x)
-        k <- k + 1
-        if |x - x0| < best then
+        if |x - x0| < best:
           best <- |x - x0|
       color <- blend(best / outer, white, black)
 

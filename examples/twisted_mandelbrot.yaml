@@ -4,25 +4,25 @@ viewers:
     size: 512x512
     resizable: true
     z-coord: C
+    iteration-limit: maxIters
+    escape-radius: maxRadius
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
         z : ℂ ⭠ 0
-        k : ℤ ⭠ 0
-        while k < maxIters and not stop
+        until stop:
           z ⭠ f
           d : ℝ ⭠ |z - twist_center|
-          if d > r0 and d < r1 then
+          if d > r0 and d < r1:
             theta : ℝ ⭠ 2 pi (d - r0) / (r1 - r0)
             z ⭠ 𝑒^(𝑖 theta) (z - twist_center) + twist_center
-          k ⭠ k + 1
 
-        if k = maxIters then
+        if stuck:
           color ⭠ black
-        else
+        else:
           c1 : Color ⭠ if im(z) > 0 then blue else yellow
           c2 : Color ⭠ if im(z) > 0 then green else red
-          s : ℝ ⭠ k + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
+          s : ℝ ⭠ iterations + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
           s ⭠ cos (s π / 10)²
           color ⭠ blend (s, c1, c2)
 
@@ -32,24 +32,24 @@ viewers:
     resizable: true
     z-coord: z
     pixel-size: px
+    iteration-limit: maxIters
+    escape-radius: maxRadius
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        k : ℤ ⭠ 0
-        while k < maxIters and not stop
+        until stop:
           z ⭠ f
           d : ℝ ⭠ |z - twist_center|
-          if d > r0 and d < r1 then
+          if d > r0 and d < r1:
             theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
             z ⭠ 𝑒^(𝑖 theta) (z - twist_center) + twist_center
-          k ⭠ k + 1
 
-        if k = maxIters then
+        if stuck:
           color ⭠ black
-        else
+        else:
           c1 : Color ⭠ if im(z) > 0 then blue else yellow
           c2 : Color ⭠ if im(z) > 0 then green else red
-          s : ℝ ⭠ k + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
+          s : ℝ ⭠ iterations + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
           s ⭠ cos (s π / 10)²
           color ⭠ blend (s, c1, c2)
 
@@ -65,16 +65,15 @@ viewers:
               prevZ : ℂ ⭠ z
               k : ℤ ⭠ 0
               erase
-              while k < 100
+              until stop up to 100 times:
                 prevZ ⭠ z
                 draw point at z
                 z ⭠ f
                 d : ℝ ⭠ |z - twist_center|
-                if d > r0 and d < r1 then
+                if d > r0 and d < r1:
                   theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
                   z ⭠ e^(𝑖 theta) (z - twist_center) + twist_center
                 draw line from z to prevZ
-                k ⭠ k + 1
 
 
       - name: Dehn twist
@@ -95,23 +94,23 @@ viewers:
             start: z0
             code: |
               eps : ℝ ⭠ 5 px
-              if drag_target = 0 then
-                if |z0 - twist_center| < eps then
+              if drag_target = 0:
+                if |z0 - twist_center| < eps:
                   drag_target ⭠ 1
 
-                else if |(|z0 - twist_center|) - r0| < eps then
+                else if |(|z0 - twist_center|) - r0| < eps:
                   drag_target ⭠ 2
 
-                else if |(|z0 - twist_center|) - r1| < eps then
+                else if |(|z0 - twist_center|) - r1| < eps:
                   drag_target ⭠ 3
 
-              if drag_target = 1 then
+              if drag_target = 1:
                 twist_center ⭠ z
-              if drag_target = 2 then
+              if drag_target = 2:
                 r0 ⭠ |z - twist_center|
-              if drag_target = 3 then
+              if drag_target = 3:
                 r1 ⭠ |z - twist_center|
-              if drag_target > 0 then
+              if drag_target > 0:
                 erase
                 use red for stroke
                 draw point at twist_center

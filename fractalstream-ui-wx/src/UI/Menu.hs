@@ -28,13 +28,13 @@ makeMenuBar ProjectActions{..} f addlMenus = do
 
   -- Build the project menu
   prj <- menuPane [ text := "&Project" ]
-  menuItem prj [ text := "&New project"
+  menuItem prj [ text := "New project\tCtrl+N"
                , help := "Create a new FractalStream project"
                , on command := projectNew ]
-  menuItem prj [ text := "&Open project"
+  menuItem prj [ text := "Open project\tCtrl+O"
                , help := "Open an existing FractalStream project"
                , on command := getProject "Open" projectOpen ]
-  menuItem prj [ text := "&Edit project"
+  menuItem prj [ text := "Edit project\tCtrl+E"
                , help := "Modify an existing FractalStream project"
                , on command := getProject "Edit" projectEdit ]
   menuLine prj
@@ -70,7 +70,7 @@ makeMenuBar ProjectActions{..} f addlMenus = do
       destroySessionMenuItems
       updateSessionMenuItems newSessions
 
-  _quit <- menuQuit prj [ text := "Quit FractalStream" ]
+  _quit <- menuQuit prj [] -- text := "Quit FractalStream" ]
 
   -- Build the help menu
   hlp   <- menuHelp      [ text := "&Help" ]

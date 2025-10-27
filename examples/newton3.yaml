@@ -4,28 +4,31 @@ viewer:
   size: 512x512
   resizable: true
   z-coord: z
+  iteration-limit: maxIters
+  vanishing-radius: tol
   pixel-size: px
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-        k : Z <- 0
         lastZ : C <- 0
-        repeat
+        repeat:
           lastZ <- z
           f : C <- (z - a) (z - b) (z - c)
           df : C <- (z - a) (z - b) + (z - a) (z - c) + (z - b) (z - c)
           z <- z - f / df
-          k <- k + 1
-        while k < maxIters and |z - lastZ| > tol
+        while z != lastZ
+
         col : Color <- yellow
-        if |z - a| < tol then
+        if z = a:
           col <- red
-        else if |z - b| < tol then
+        else if z = b:
           col <- green
-        else if |z - c| < tol then
+        else if z = c:
           col <- blue
-        s : R <- (cos (k pi / 10))^2
-        color <- if k = maxIters then black else blend (s, dark col, light col)
+        if z = lastZ:
+          color <- blend ((cos (iterations pi / 10))^2, dark col, light col)
+        else:
+          color <- black
 
   tools:
     - name: Trace
@@ -35,18 +38,16 @@ viewer:
           code: erase
         - event: click-or-drag
           code: |
-            k : Z <- 0
             lastZ : C <- 0
             erase
-            repeat
+            repeat:
               lastZ <- z
               f : C <- (z - a) (z - b) (z - c)
               df : C <- (z - a) (z - b) + (z - a) (z - c) + (z - b) (z - c)
               z <- z - f / df
               draw point at lastZ
               draw line from lastZ to z
-              k <- k + 1
-            while k < maxIters and |z - lastZ| > tol
+            while z != lastZ
 
             draw point at z
 
@@ -63,18 +64,18 @@ viewer:
         - event: drag
           start: z0
           code: |
-            if drag_target = 0 then
-              if |z0 - a| < rad px then
+            if drag_target = 0:
+              if |z0 - a| < rad px:
                 drag_target <- 1
-              else if |z0 - b| < rad px then
+              else if |z0 - b| < rad px:
                 drag_target <- 2
-              else if |z0 - c| < rad px then
+              else if |z0 - c| < rad px:
                 drag_target <- 3
-            else if drag_target = 1 then
+            else if drag_target = 1:
               a <- z
-            else if drag_target = 2 then
+            else if drag_target = 2:
               b <- z
-            else if drag_target = 3 then
+            else if drag_target = 3:
               c <- z
             erase
             draw point at a
