@@ -31,13 +31,6 @@ viewers:
         else
           color <- exterior_color
 
-    tools:
-      - name: "Select C"
-        shortcut: s
-        actions:
-          - event: click-or-drag
-            code: selectedC <- C
-
   - title: Dynamical plane
     style: complex-plane
     size: 512x512
@@ -47,7 +40,6 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        C : C <- selectedC
         dz : C <- 1
         w : C <- z
         tol : R <- 2 px fatness
@@ -74,7 +66,7 @@ configuration:
         label: "Selected value of C:"
         value: -0.1226 + 0.7449i
         type: C
-        variable: selectedC
+        variable: C
     - text-entry:
         label: "Max. iterations: "
         value: "100"

@@ -21,12 +21,6 @@ viewers:
           s <- cos (s pi / 10)
           s <- s s
           color <- blend (s, c1, c2)
-    tools:
-      - name: "Select C"
-        shortcut: s
-        actions:
-          - event: click-or-drag
-            code: selectedC <- C
 
   - title: Dynamical plane
     style: complex-plane
@@ -36,7 +30,6 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        C : C <- selectedC
         k : Z <- 0
         while k < maxIters and not stop
           z <- f
@@ -58,7 +51,6 @@ viewers:
 
           - event: click-or-drag
             code: |
-              C : C <- selectedC
               prevZ : C <- z
               k : Z <- 0
               erase
@@ -99,7 +91,7 @@ configuration:
         label: "Selected value of C:"
         value: -0.1226 + 0.7449i
         type: C
-        variable: selectedC
+        variable: C
     - text-entry:
         label: "Max. iterations: "
         value: "100"

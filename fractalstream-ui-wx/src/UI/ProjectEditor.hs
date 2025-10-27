@@ -144,7 +144,7 @@ editProject yamlFile = do
           i <- addItem t ("Tool configuration \"" ++ coTitle ++ "\"")
           tcFromLayout i "Expression" coContents
         let ParsedEventHandlers{..} = ptoolEventHandlers
-        whenJust pehOnClick $ \(xCoord, yCoord, code) -> do
+        whenJust pehOnClick $ \(xCoord, yCoord, _, code) -> do
           addItem' t "Click event handler" $ \_ p -> do
             cb <- checkBox p [ text := "Use viewer coordinate as click coordinate"
                              , checkable := True
@@ -160,7 +160,7 @@ editProject yamlFile = do
                     , fill $ row 5 [ widget teX, widget teY ]
                     , hglue
                     , fill (margin 10 $ widget ce) ]]
-        whenJust pehOnDoubleClick $ \(xCoord, yCoord, code) -> do
+        whenJust pehOnDoubleClick $ \(xCoord, yCoord, _, code) -> do
           addItem' t "Double click event handler" $ \_ p -> do
             cb <- checkBox p [ text := "Use viewer coordinate as double-click coordinate"
                              , checkable := True

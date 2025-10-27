@@ -37,6 +37,7 @@ main = withBackend $ \complexViewerCompiler -> start $ do
         let withRecoveryActions
               = (`catch` badProjectFile projectWindow yamlFile)
               . (`catch` errorCalled projectWindow)
+              . (`catch` badYaml projectWindow yamlFile)
 
         withRecoveryActions $ do
           ensemble <- YAML.decodeFileThrow yamlFile
@@ -74,6 +75,9 @@ main = withBackend $ \complexViewerCompiler -> start $ do
       editSession _ = putStrLn "TODO, editSession"
 
   welcome ProjectActions{..}
+
+badYaml :: Frame a -> FilePath -> YAML.ParseException -> IO ()
+badYaml w path e = badProjectFile w path (BadProject "Bad YAML file" (show e))
 
 badProjectFile :: Frame a -> FilePath -> BadProject -> IO ()
 badProjectFile projectWindow path (BadProject why wher) = do

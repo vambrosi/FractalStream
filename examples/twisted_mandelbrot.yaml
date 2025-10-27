@@ -26,13 +26,6 @@ viewers:
           s ⭠ cos (s π / 10)²
           color ⭠ blend (s, c1, c2)
 
-    tools:
-      - name: "Select C"
-        shortcut: s
-        actions:
-          - event: click-or-drag
-            code: selectedC ⭠ C
-
   - title: Twisted dynamical plane
     style: complex-plane
     size: 512x512
@@ -42,7 +35,6 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        C : ℂ ⭠ selectedC
         k : ℤ ⭠ 0
         while k < maxIters and not stop
           z ⭠ f
@@ -70,7 +62,6 @@ viewers:
 
           - event: click-or-drag
             code: |
-              C : ℂ ⭠ selectedC
               prevZ : ℂ ⭠ z
               k : ℤ ⭠ 0
               erase
@@ -159,7 +150,7 @@ configuration:
         label: "Selected value of C:"
         value: -0.1226 + 0.7449i
         type: ℂ
-        variable: selectedC
+        variable: C
     - panel:
         title: "Dehn twist"
         vertical-contents:

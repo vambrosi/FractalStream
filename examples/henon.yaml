@@ -8,7 +8,6 @@ viewers:
     initial-pixel-size: 1/128
     code: |
       z : C <- 0
-      b : C <- selectedB
       aa : C <- (a + 1) / 2
       disc : C <- aa^2 - b
       p : C <- sqrt(disc) + aa
@@ -27,13 +26,6 @@ viewers:
         color <- black
       else
         color <- cycle (k / 10, blue, white)
-    tools:
-      - name: Select value of a
-        shortcut: s
-        actions:
-        - event: click-or-drag
-          code: |
-            selectedA <- a
 
   - title: b-plane
     style: complex-plane
@@ -44,7 +36,6 @@ viewers:
     initial-pixel-size: 1/128
     code: |
       z : C <- 0
-      a : C <- selectedA
       aa : C <- (a + 1) / 2
       disc : C <- aa^2 - b
       p : C <- sqrt(disc) + aa
@@ -63,13 +54,6 @@ viewers:
         color <- black
       else
         color <- cycle (k / 10, blue, white)
-    tools:
-      - name: Select value of b
-        shortcut: s
-        actions:
-        - event: click-or-drag
-          code: |
-            selectedB <- b
 
   - title: Hénon dynamics
     style: complex-plane
@@ -79,8 +63,6 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-      a : C <- selectedA
-      b : C <- selectedB
       aa : C <- (a + 1) / 2
       disc : C <- aa^2 - b
       p : C <- sqrt(disc) + aa
@@ -107,8 +89,6 @@ viewers:
           - event: click-or-drag
             code: |
               erase
-              a : C <- selectedA
-              b : C <- selectedB
               aa : C <- (a + 1) / 2
               disc : C <- aa^2 - b
               p : C <- sqrt(disc) + aa
@@ -133,12 +113,12 @@ configuration:
         label: "a = "
         value: "0.3"
         type: C
-        variable: selectedA
+        variable: a
     - text-entry:
         label: "b = "
         value: "0.6 + 0.2i"
         type: C
-        variable: selectedB
+        variable: b
     - text-entry:
         label: "zoom = "
         value: "0.001"

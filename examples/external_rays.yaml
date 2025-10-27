@@ -6,7 +6,7 @@ configuration:
         label: "f(z) = z² +"
         value: "-0.11 + 0.78i"
         type: ℂ
-        variable: selectedC
+        variable: C
     - text-entry:
         label: "Max. iterations:"
         value: "100"
@@ -41,12 +41,6 @@ viewers:
         color ⭠ blend (cos (π m / 20)², base_color, light base_color)
 
     tools:
-      - name: Select parameter value
-        shortcut: s
-        actions:
-          - event: click-or-drag
-            code: selectedC ⭠ C
-
       - name: Parameter plane external rays
         shortcut: r
         configuration:
@@ -155,7 +149,6 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-      C : ℂ ⭠ selectedC
       k : ℤ ⭠ 0
       while k < max_iters and |z| < escape_radius
         z ⭠ z² + C
@@ -214,13 +207,12 @@ viewers:
                 erase
 
                 for each p in ps do
-                  C : ℂ ⭠ selectedC
 
                   D : ℤ ⭠ max_iters
                   R : ℝ ⭠ escape_radius
 
                   theta : ℝ ⭠ p / q
-                  z ⭠ R e^{2 π 𝑖 theta}
+                  z : ℂ ⭠ R e^{2 π 𝑖 theta}
 
                   dist : ℝ ⭠ error
 

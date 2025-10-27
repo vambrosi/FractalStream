@@ -5,6 +5,7 @@ module Actor.Tool
   , ToolInfo(..)
   , RealTool(..)
   , ComplexTool(..)
+  , defaultComplexSelectionTool
   ) where
 
 import FractalStream.Prelude
@@ -80,3 +81,21 @@ instance FromJSON (String -> Either String ComplexTool) where
       ptoolEventHandlers <-
         foldl' combineEventHandlers (Right noEventHandlers) handlers'
       pure (ComplexTool ParsedTool{..})
+
+defaultComplexSelectionTool :: String -> ParsedTool
+defaultComplexSelectionTool name = ParsedTool{..}
+  where
+    ptoolInfo = ToolInfo
+      { tiName = "Select " ++ name
+      , tiShortcut = Just 's'
+      , tiShortHelp = ""
+      , tiHelp = ""
+      }
+    ptoolDrawLayer = 100
+    ptoolRefreshOnActivate = False
+    ptoolConfig = Nothing
+    ptoolEventHandlers = convertComplexToRealEventHandlers $ noComplexEventHandlers
+      { cpehOnClick = Just (Left name, True, "pass")
+      , cpehOnDrag = Just (Left name, "INTERNAL__drag_start", True, "pass")
+      , cpehOnDragDone = Just (Left name, "INTERNAL__drag_start", True, "pass")
+      }

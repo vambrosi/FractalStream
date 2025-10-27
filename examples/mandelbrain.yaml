@@ -33,13 +33,6 @@ viewers:
         s <- (cos (s pi / 10))^2
         color <- if k = maxIters then black else blend (s, dark c, light c)
 
-    tools:
-      - name: "Select parameter"
-        shortcut: s
-        actions:
-          - event: click-or-drag
-            code: selectedA <- a
-
   - title: Newton's method dynamics
     style: complex-plane
     size: 512x512
@@ -51,8 +44,8 @@ viewers:
         k : Z <- 0
         lastZ : C <- 0
         r1 : C <- 1
-        r2 : C <- -0.5 + selectedA
-        r3 : C <- -0.5 - selectedA
+        r2 : C <- -0.5 + a
+        r3 : C <- -0.5 - a
 
         repeat
           lastZ <- z
@@ -84,8 +77,8 @@ viewers:
               k : Z <- 0
               lastZ : C <- 0
               r1 : C <- 1
-              r2 : C <- -0.5 + selectedA
-              r3 : C <- -0.5 - selectedA
+              r2 : C <- -0.5 + a
+              r3 : C <- -0.5 - a
               erase
               while k < maxIters and |z - lastZ| > tol
                 lastZ <- z
@@ -105,7 +98,7 @@ configuration:
         label: "a ="
         value: "0"
         type: C
-        variable: selectedA
+        variable: a
     - text-entry:
         label: "closeness"
         value: "0.01"

@@ -267,7 +267,7 @@ newtype NameIsPresent (name :: Symbol) (t :: FSType) (env :: Environment)
 -- Prevent coercion of the type parameters
 type role NameIsPresent nominal nominal nominal
 
--- | 'NameIsPresent' represents a proof that the name is absent in the
+-- | 'NameIsAbsent' represents a proof that the name is absent in the
 -- environment.
 newtype NameIsAbsent  (name :: Symbol) (env :: Environment)
   = NameIsAbsent TrustMe

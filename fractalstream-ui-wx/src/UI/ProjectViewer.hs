@@ -520,7 +520,8 @@ makeWxComplexViewer
 
     -- For each variable that the viewer code depends on, trigger a repaint whenever
     -- that variable changes.
-    let usedVars = execState (usedVarsInCode cvCode') Set.empty
+    let usedVars = Set.delete (symbolVal cvCoord')
+                 $ execState (usedVarsInCode cvCode') Set.empty
 
     fromContextM_ (\name _ v ->
                       when (symbolVal name `Set.member` usedVars)

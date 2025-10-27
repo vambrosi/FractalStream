@@ -11,6 +11,7 @@ module Actor.Event
   , type SomeEventHandler
   , handleEvent
   , toEventHandlers
+  , prependHandlerCode
   ) where
 
 import FractalStream.Prelude
@@ -57,10 +58,10 @@ data EventHandlers env = EventHandlers
   }
 
 data ParsedEventHandlers = ParsedEventHandlers
-  { pehOnClick :: Maybe (String, String, String)
-  , pehOnDoubleClick :: Maybe (String, String, String)
-  , pehOnDrag :: Maybe (String, String, String, String, String)
-  , pehOnDragDone :: Maybe (String, String, String, String, String)
+  { pehOnClick :: Maybe (String, String, Bool, String)
+  , pehOnDoubleClick :: Maybe (String, String, Bool, String)
+  , pehOnDrag :: Maybe (String, String, String, String, Bool, String)
+  , pehOnDragDone :: Maybe (String, String, String, String, Bool, String)
   , pehOnTimer :: Map String (Int, String)
   , pehOnRefresh :: Maybe String
   , pehOnActivated :: Maybe String
@@ -69,10 +70,10 @@ data ParsedEventHandlers = ParsedEventHandlers
   deriving Show
 
 data ComplexParsedEventHandlers = ComplexParsedEventHandlers
-  { cpehOnClick :: Maybe (Either String String, String)
-  , cpehOnDoubleClick :: Maybe (Either String String, String)
-  , cpehOnDrag :: Maybe (Either String String, String, String)
-  , cpehOnDragDone :: Maybe (Either String String, String, String)
+  { cpehOnClick :: Maybe (Either String String, Bool, String)
+  , cpehOnDoubleClick :: Maybe (Either String String, Bool, String)
+  , cpehOnDrag :: Maybe (Either String String, String, Bool, String)
+  , cpehOnDragDone :: Maybe (Either String String, String, Bool, String)
   , cpehOnTimer :: Map String (Int, String)
   , cpehOnRefresh :: Maybe String
   , cpehOnActivated :: Maybe String
@@ -80,20 +81,48 @@ data ComplexParsedEventHandlers = ComplexParsedEventHandlers
   }
   deriving Show
 
+prependHandlerCode :: String -> ParsedEventHandlers -> ParsedEventHandlers
+prependHandlerCode prefix p = ParsedEventHandlers
+  { pehOnClick = fmap (prefix ++) <$> pehOnClick p
+  , pehOnDoubleClick = fmap (prefix ++) <$> pehOnDoubleClick p
+  , pehOnDrag = fmap (prefix ++) <$> pehOnDrag p
+  , pehOnDragDone = fmap (prefix ++) <$> pehOnDragDone p
+  , pehOnTimer = fmap (prefix ++) <$> pehOnTimer p
+  , pehOnRefresh = (prefix ++) <$> pehOnRefresh p
+  , pehOnActivated = (prefix ++) <$> pehOnActivated p
+  , pehOnDeactivated = (prefix ++) <$> pehOnDeactivated p
+  }
+
 swap :: (a, b) -> (b, a)
 swap (x, y) = (y, x)
 
 toEventHandlers :: forall env
                  . EnvironmentProxy env
+                -> Set String
                 -> Splices
                 -> ParsedEventHandlers
                 -> Either String (Set String, EventHandlers env)
-toEventHandlers env splices ParsedEventHandlers{..} = fmap swap $ flip runStateT Set.empty $ do
+toEventHandlers env viewerVars splices ParsedEventHandlers{..} = fmap swap $ flip runStateT Set.empty $ do
   let parse :: EnvironmentProxy e -> String -> StateT (Set String) (Either String) (Code e)
       parse e i = do
         c <- lift $ first (`ppFullError` i) $ parseCode e splices i
         modify' (execState (usedVarsInCode c))
         pure c
+
+      allUpdatesOk, noUpdatesToViewerVar :: Context (K Bool) env
+      allUpdatesOk = envToContext env (\_ _ -> True)
+      noUpdatesToViewerVar = envToContext env (\n _ ->
+                                                 not $ symbolVal n `Set.member` viewerVars)
+
+      toHandler' :: forall args. (Bool, SomeEventHandler_ env args)
+                -> SomeEventHandler env args
+      toHandler' = \(canUpdate, h) ->
+        if canUpdate
+        then SomeEventHandler h allUpdatesOk
+        else SomeEventHandler h noUpdatesToViewerVar
+
+      toHandler :: forall args. SomeEventHandler_ env args -> SomeEventHandler env args
+      toHandler h = SomeEventHandler h allUpdatesOk
 
       mmaybe :: forall m a b
               . Applicative m
@@ -102,19 +131,19 @@ toEventHandlers env splices ParsedEventHandlers{..} = fmap swap $ flip runStateT
              -> m (Maybe b)
       mmaybe m f = maybe (pure Nothing) (fmap Just . f) m
 
-  ehOnClick <- mmaybe pehOnClick $ \(x, y, code) ->
+  ehOnClick <- mmaybe (pehOnClick) $ fmap toHandler' . \(x, y, allowUpdate, code) -> fmap (allowUpdate,) $
     bind y RealType env $ \env' ->
     bind x RealType env' $ \env'' ->
         ( WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
           <$> parse env'' code
 
-  ehOnDoubleClick <- mmaybe pehOnDoubleClick $ \(x, y, code) ->
+  ehOnDoubleClick <- mmaybe (pehOnDoubleClick) $ fmap toHandler' . \(x, y, allowUpdate, code) -> fmap (allowUpdate,) $
     bind y RealType env $ \env' ->
     bind x RealType env' $ \env'' ->
         ( WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
           <$> parse env'' code
 
-  ehOnDrag <- mmaybe pehOnDrag $ \(x1, y1, x2, y2, code) ->
+  ehOnDrag <- mmaybe (pehOnDrag) $ fmap toHandler' . \(x1, y1, x2, y2, allowUpdate, code) -> fmap (allowUpdate,) $
     bind y2 RealType env  $ \env1 ->
     bind x2 RealType env1 $ \env2 ->
     bind y1 RealType env2 $ \env3 ->
@@ -123,7 +152,7 @@ toEventHandlers env splices ParsedEventHandlers{..} = fmap swap $ flip runStateT
       . WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
           <$> parse env4 code
 
-  ehOnDragDone <- mmaybe pehOnDragDone $ \(x1, y1, x2, y2, code) ->
+  ehOnDragDone <- mmaybe (pehOnDragDone) $ fmap toHandler' . \(x1, y1, x2, y2, allowUpdate, code) -> fmap (allowUpdate,) $
     bind y2 RealType env  $ \env1 ->
     bind x2 RealType env1 $ \env2 ->
     bind y1 RealType env2 $ \env3 ->
@@ -132,13 +161,15 @@ toEventHandlers env splices ParsedEventHandlers{..} = fmap swap $ flip runStateT
       . WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
           <$> parse env4 code
 
-  ehOnTimer <- traverse (\(ms, code) -> (ms,) . WithNoArgs <$> parse env code) pehOnTimer
+  ehOnTimer <-
+    (traverse (\(ms, code) -> (ms,) . (toHandler . WithNoArgs) <$> parse env code)
+      pehOnTimer)
 
-  ehOnRefresh <- mmaybe pehOnRefresh (fmap WithNoArgs . parse env)
+  ehOnRefresh <- mmaybe (pehOnRefresh) (fmap (toHandler . WithNoArgs) . parse env)
 
-  ehOnActivated <- mmaybe pehOnActivated (fmap WithNoArgs . parse env)
+  ehOnActivated <- mmaybe (pehOnActivated) (fmap (toHandler . WithNoArgs) . parse env)
 
-  ehOnDeactivated <- mmaybe pehOnDeactivated (fmap WithNoArgs . parse env)
+  ehOnDeactivated <- mmaybe (pehOnDeactivated) (fmap (toHandler . WithNoArgs) . parse env)
 
   pure EventHandlers{..}
 
@@ -166,23 +197,25 @@ convertComplexToRealEventHandlers ::
 convertComplexToRealEventHandlers ComplexParsedEventHandlers{..}
     = ParsedEventHandlers{..}
   where
+
     initOrSet :: Either String String -> String -> String -> String
     initOrSet lr x y = concat $ case lr of
       Left  v -> [v, " <- ", x, " + i ", y, "\n"]
       Right v -> [v, " : C <- ", x, " + i ", y, "\n"]
-    cplx :: (Either String String, String)
-         -> (String, String, String)
-    cplx (z, code) =
+
+    cplx :: (Either String String, Bool, String)
+         -> (String, String, Bool, String)
+    cplx (z, mutable, code) =
       let zre = "INTERNAL__" ++ either id id z ++ "__re"
           zim = "INTERNAL__" ++ either id id z ++ "__im"
           code' = concat
             [ initOrSet z zre zim
             , code ]
-      in (zre, zim, code')
+      in (zre, zim, mutable, code')
 
-    cplx2 :: (Either String String, String, String)
-          -> (String, String, String, String, String)
-    cplx2 (z, w, code) =
+    cplx2 :: (Either String String, String, Bool, String)
+          -> (String, String, String, String, Bool, String)
+    cplx2 (z, w, mutable, code) =
       let zre = "INTERNAL__" ++ either id id z ++ "__re"
           zim = "INTERNAL__" ++ either id id z ++ "__im"
           wre = "INTERNAL__" ++ w ++ "__re"
@@ -191,7 +224,7 @@ convertComplexToRealEventHandlers ComplexParsedEventHandlers{..}
             [ initOrSet z zre zim
             , initOrSet (Right w) wre wim
             , code ]
-      in (zre, zim, wre, wim, code')
+      in (zre, zim, wre, wim, mutable, code')
 
     pehOnClick = cplx <$> cpehOnClick
     pehOnDoubleClick = cplx <$> cpehOnDoubleClick
@@ -211,40 +244,45 @@ instance FromJSON (String -> String -> ParsedEventHandlers) where
         xVar <- o .:? "x-coord"
         yVar <- o .:? "y-coord"
         code <- o .: "code"
-        pure (\x y -> handler { pehOnClick = Just (fromMaybe x xVar, fromMaybe y yVar, code) })
+        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
+        pure (\x y -> handler { pehOnClick = Just (fromMaybe x xVar, fromMaybe y yVar, allowUpdate, code) })
 
       "click-or-drag" -> do
         xVar <- o .:? "x-coord"
         yVar <- o .:? "y-coord"
         code <- o .: "code"
+        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
         let x0Var = "INTERNAL__drag_x_start"
             y0Var = "INTERNAL__drag_y_start"
-        pure (\x y -> handler { pehOnClick = Just (fromMaybe x xVar, fromMaybe y yVar, code)
-                              , pehOnDrag  = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, code)
-                              , pehOnDragDone = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, code)
+        pure (\x y -> handler { pehOnClick = Just (fromMaybe x xVar, fromMaybe y yVar, allowUpdate, code)
+                              , pehOnDrag  = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code)
+                              , pehOnDragDone = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code)
                               })
 
       "double-click" -> do
         xVar <- o .:? "x-coord"
         yVar <- o .:? "y-coord"
+        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
         code <- o .: "code"
-        pure (\x y -> handler { pehOnDoubleClick = Just (fromMaybe x xVar, fromMaybe y yVar, code) })
+        pure (\x y -> handler { pehOnDoubleClick = Just (fromMaybe x xVar, fromMaybe y yVar, allowUpdate, code) })
 
       "drag" -> do
         xVar <- o .:? "x-coord"
         yVar <- o .:? "y-coord"
         x0Var <- o .:? "x-start" .!= "INTERNAL__drag_x_start"
         y0Var <- o .:? "y-start" .!= "INTERNAL__drag_y_start"
+        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
         code <- o .: "code"
-        pure (\x y -> handler { pehOnDrag = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, code) })
+        pure (\x y -> handler { pehOnDrag = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code) })
 
       "drag-finished" -> do
         xVar <- o .:? "x-coord"
         yVar <- o .:? "y-coord"
         x0Var <- o .:? "x-start" .!= "INTERNAL__drag_x_start"
         y0Var <- o .:? "y-start" .!= "INTERNAL__drag_y_start"
+        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
         code <- o .: "code"
-        pure (\x y -> handler { pehOnDragDone = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, code) })
+        pure (\x y -> handler { pehOnDragDone = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code) })
 
       "timer" -> do
         name <- o .: "name"
@@ -276,33 +314,38 @@ instance FromJSON (String -> ComplexParsedEventHandlers) where
       "click" -> do
         zVar <- o .:? "coord"
         code <- o .: "code"
-        pure (\z -> handler { cpehOnClick = Just (lr z zVar, code) })
+        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
+        pure (\z -> handler { cpehOnClick = Just (lr z zVar, allowUpdate, code) })
 
       "click-or-drag" -> do
         zVar <- o .:? "coord"
         code <- o .: "code"
+        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
         let z0Var = "INTERNAL__drag_start"
-        pure (\z -> handler { cpehOnClick = Just (lr z zVar, code)
-                            , cpehOnDrag = Just (lr z zVar, z0Var, code)
-                            , cpehOnDragDone = Just (lr z zVar, z0Var, code)
+        pure (\z -> handler { cpehOnClick = Just (lr z zVar, allowUpdate, code)
+                            , cpehOnDrag = Just (lr z zVar, z0Var, allowUpdate, code)
+                            , cpehOnDragDone = Just (lr z zVar, z0Var, allowUpdate, code)
                             })
 
       "double-click" -> do
         zVar <- o .:? "coord"
         code <- o .: "code"
-        pure (\z -> handler { cpehOnDoubleClick = Just (lr z zVar, code) })
+        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
+        pure (\z -> handler { cpehOnDoubleClick = Just (lr z zVar, allowUpdate, code) })
 
       "drag" -> do
         zVar <- o .:? "coord"
         z0Var <- o .:? "start" .!= "INTERNAL__drag_start"
         code <- o .: "code"
-        pure (\z -> handler { cpehOnDrag = Just (lr z zVar, z0Var, code) })
+        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
+        pure (\z -> handler { cpehOnDrag = Just (lr z zVar, z0Var, allowUpdate, code) })
 
       "drag-finished" -> do
         zVar <- o .:? "coord"
         z0Var <- o .:? "start" .!= "INTERNAL__drag_start"
         code <- o .: "code"
-        pure (\z -> handler { cpehOnDragDone = Just (lr z zVar, z0Var, code) })
+        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
+        pure (\z -> handler { cpehOnDragDone = Just (lr z zVar, z0Var, allowUpdate, code) })
 
       "timer" -> do
         name <- o .: "name"
@@ -384,17 +427,21 @@ handleEvent ctx draw EventHandlers{..} =
     Activated -> run ehOnActivated EndOfArgs
     Deactivated -> run ehOnDeactivated EndOfArgs
 
-data SomeEventHandler env args where
+data SomeEventHandler_ env args where
   WithNoArgs :: forall env
               . Code env
-             -> SomeEventHandler env '[]
+             -> SomeEventHandler_ env '[]
 
   WithArg :: forall name ty env args
            . (KnownSymbol name, NotPresent name env)
           => Proxy name
           -> TypeProxy ty
-          -> SomeEventHandler ( '(name, ty) ': env) args
-          -> SomeEventHandler env (ty ': args)
+          -> SomeEventHandler_ ( '(name, ty) ': env) args
+          -> SomeEventHandler_ env (ty ': args)
+
+data SomeEventHandler env args = SomeEventHandler
+  { theEventHandler :: SomeEventHandler_ env args
+  , mutableArgs :: Context (K Bool) env }
 
 data ArgList (args :: [FSType]) where
   EndOfArgs :: ArgList '[]
@@ -410,7 +457,7 @@ data ArgList (args :: [FSType]) where
 --       -> IO ()
 runEvt :: DrawHandler ScalarIORefM
        -> Context IORefTypeOfBinding env
-       -> SomeEventHandler env args
+       -> SomeEventHandler_ env args
        -> ArgList args
        -> IO ()
 runEvt draw ctx eh args = case eh of
@@ -422,13 +469,15 @@ runEvt draw ctx eh args = case eh of
       let ctx' = Bind name ty ref ctx
       runEvt draw ctx' eh' args'
 
-runEventHandler :: Bool
+
+runEventHandler :: forall env args
+                 . Bool
                 -> Context DynamicValue env
                 -> DrawHandler ScalarIORefM
                 -> SomeEventHandler env args
                 -> ArgList args
                 -> IO ()
-runEventHandler allowUpdates ctx draw evth args = do
+runEventHandler allowUpdates ctx draw SomeEventHandler{..} args = do
 
   -- Copy the current environment into a bunch of IORefs
   iorefs :: Context IORefTypeOfBinding env <-
@@ -439,7 +488,7 @@ runEventHandler allowUpdates ctx draw evth args = do
     mapContextM (\_ _ -> readIORef) iorefs
 
   -- Run the code and then read values back from the `iorefs`
-  runEvt draw iorefs evth args
+  runEvt draw iorefs theEventHandler args
 
   outValues :: Context HaskellTypeOfBinding env <-
     mapContextM (\_ _ -> readIORef) iorefs
@@ -447,11 +496,14 @@ runEventHandler allowUpdates ctx draw evth args = do
   -- Find values that were updated by an output effect, and
   -- update the corresponding dynamic values
   when allowUpdates $ do
-    let finalCtx :: Context ((HaskellTypeOfBinding :**: HaskellTypeOfBinding)
+    let finalCtx :: Context ((HaskellTypeOfBinding :**: HaskellTypeOfBinding :**: K Bool)
                                 :**: DynamicValue) env
-        finalCtx = zipContext (zipContext inValues outValues) ctx
-    fromContextM_ (\_ ty ((old, new), v) ->
-                     if Scalar ty old == Scalar ty new
+        finalCtx = zipContext (zipContext (zipContext inValues outValues) mutableArgs) ctx
+    fromContextM_ (\_ ty (((old, new), canUpdate), v) ->
+                     if Scalar ty old == Scalar ty new || not canUpdate
                      then pure ()
                      else void (setDynamic v new))
                   finalCtx
+
+data K :: Type -> Symbol -> FSType -> Exp Type
+type instance Eval (K t _ _) = t
