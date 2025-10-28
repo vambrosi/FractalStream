@@ -118,18 +118,36 @@ k : Z ⭠ 0
 
 Common types you might want to use include `Z` for the integers, `R` for the
 real numbers, `C` for the complex numbers, `Color` for a color, and
-`Boolean` for a truth value. You can also use the unicode blackboard bold
-variants `ℤ`, `ℝ`, and `ℂ`, or the full names `Integer`, `Real`, and `Complex`.
+`Boolean` for a truth value, and `Text` for plain text. You can also use
+the unicode blackboard bold variants `ℤ`, `ℝ`, and `ℂ`, or the full names `Integer`, `Real`, and `Complex`.
+
+Lists of values of type `x` have the type `List of x`.
+
+### Line continuations
+
+If you have a very long command, it might be convenient to split it across
+several lines. You can do this with the `...` or `…` line continuation markers. For
+example,
+
+```
+z <- z^2 + 0.123456789 ...
+         + 0.987654321 i
+```
+
+means the same thing as
+
+```
+z <- z^2 + 0.123456789 + 0.987654321 i
+```
 
 ### Loops
 
-There are four looping constructs: `while...`, `until...`, `repeat...while`, and
-`repeat...until`. The body of the loop is given by an indented block of statements:
+There are six looping constructs: `while...`, `until...`, `repeat...while`, and
+`repeat...until`, `iterate...while`, and `iterate...until`. For the first four kinds of loops, the body of the loop is given by an indented block of statements:
 
 ```
-while |z| < escape_radius and k < max_iters
+while |z| < escape_radius:
   z ⭠ z^2 + C
-  k ⭠ k + 1
 ```
 
 
@@ -137,14 +155,14 @@ The `until` forms are just like the `while` forms but with
 the condition logically negated. So
 
 ```
-while n < 10
+while n < 10:
   n ⭠ n + k
 ```
 
 is the same as
 
 ```
-until n ≥ 10
+until n ≥ 10:
   n ⭠ n + k
 ```
 
@@ -152,7 +170,7 @@ The `repeat...` forms of the loop always executes the loop body at least once. A
 
 ```
 x ⭠ 0
-repeat
+repeat:
   x ⭠ x + 1
 while 1 = 2
 ```
@@ -161,21 +179,80 @@ the value of `x` will be `1`. But after running this code:
 
 ```
 x ⭠ 0
-while 1 = 2
+while 1 = 2:
   x ⭠ x + 1
 ```
 
 the value of `x` will still be `0`.
 
+The `iterate` forms are a special shorthand for `while` and `until` loops.
+They look like `iterate v -> e until c` or `iterate v -> e while c`,
+where `v` is a variable, `e` is an expression, and `until c` or `while c`
+determines the exit condition.
+
+You can use the unicode symbols `→`, `⭢`, `⟼`, or `↦` as synonyms for `->`.
+
+The code
+
+```
+iterate z ⟼ z² + C until |z| > 2
+```
+
+is equivalent to
+
+```
+until |z| > 2:
+  z ⭠ z² + C
+```
+
+Similarly, `iterate z ⟼ z² + C while |z| < 2` is equivalent to
+
+```
+while |z| < 2:
+  z ⭠ z² + C
+```
+
+### More about loops
+
+FractalStream enforces a limit on the number of times each loop will run.
+This limit is configured in the script and often is exposed to the script's
+user, so they can easily change the iteration limit while exploring.
+
+The special variable `iterations` always holds the number of iterations
+performed by the last loop that finished. There is also a special predicate
+`stuck` which is `true` if the last loop halted because it reached the
+iteration limit, or `false` if the last loop halted because its exit condition
+was successfully met.
+
+Here are two simple scripts that draw a Julia set for `z² - 1`. The first
+one re-checks the loop exit condition when deciding what color to use:
+
+```
+iterate z ⟼ z² - 1 until |z| > 10
+
+# NOTE: this recomputes the loop exit condition
+color ⭠ if |z| > 10 then white else black
+```
+
+The second one is equivalent, but just checks if the loop was "stuck" (hit
+the iteration limit) or not:
+```
+iterate z ⟼ z² - 1 until |z| > 10
+
+# NOTE: no need to recompute the exit condition,
+#       just check how the loop terminated
+color ⭠ if stuck then black else white
+```
+
 ### Conditionals
 
-You can conditionally execute code with `if/then` and `if/then/else` statements.
+You can conditionally execute code with `if` and `if/else` statements.
 
 After running this code:
 
 ```
 x ⭠ 0
-if 1 = 2 then
+if 1 = 2:
   x ⭠ 1
 ```
 
@@ -184,9 +261,9 @@ if 1 = 2 then
 
 ```
 x ⭠ 0
-if 1 = 2 then
+if 1 = 2:
   x ⭠ 1
-else
+else:
   x ⭠ 2
 ```
 
@@ -195,11 +272,11 @@ like so:
 
 ```
 x ⭠ 0
-if 1 = 2 then
+if 1 = 2:
   x ⭠ 1
-else if 3 = 4 then
+else if 3 = 4:
   x ⭠ 2
-else
+else:
   x ⭠ 3
 ```
 
@@ -220,18 +297,11 @@ where there is an input variable `z` of complex type, and an output
 variable `color` of color type.
 
 ```
-c : ℂ ⭠ -0.12256 + 0.74486 𝑖
-k : ℤ ⭠ 0
-
-while |z| < 10 and k < 100
-  z ⭠ z^2 + c
-  k ⭠ k + 1
-
-if k = 100 then
-  color ⭠ black
-else
-  color ⭠ white
+iterate z ⟼ z² - 0.12256 + 0.74486 𝑖 while |z| < 10
+color ⭠ if stuck then black else white
 ```
+
+### Inputs and outputs to scripts
 
 Different scripts may have different expected outputs.
 
@@ -330,3 +400,191 @@ draw filled circle at z with radius r
 The boundary of the circle will be drawn using the stroke color, and
 the circle will be filled with the fill color. The center can either
 be given by a complex number or by an ordered pair of real numbers.
+
+#### Drawing text
+
+To write a text annotation into the view at the point `z`, use the command
+
+```
+write "Hello, world" at z
+```
+
+The text will be drawn using the stroke color, with text centered at the given point.
+
+You can build up the text from smaller parts using the `text` function, which
+concatenates its arguments together:
+
+```
+write text("Here is ", z) at z
+```
+
+
+### Lists
+
+In some contexts, scripts can make use of lists of values instead of being
+limited to just scalar data. Lists are available everywhere *except for*
+in viewer scripts. In the future this limitation could be lifted; please
+ [open an issue](https://github.com/matt-noonan/FractalStream/issues) if you
+ have a use-case for lists in viewer scripts.
+
+ List values in FractalStream scripts are written as a `,`-separated sequence
+ of elements enclosed in square brackets `[` / `]`.
+ When entering or displaying a list in the user interface, the outer brackets are omitted. This lets users of your script write things like `1, 2, 3` in an input box instead of `[1, 2, 3]`.
+
+All lists in FractalStream are *homogeneous*, meaning that the elements of a list
+ must all have the same type. For example, you can have `[1, 2, 3]`
+ (a `List of ℤ`), or `[1, 2, i]` (a `List of ℂ`), or even `[ [1], [2,3] ]`
+ (a `List of (List of ℤ))` but not `[ 1, [2,3] ]` because it mixes elements
+ of different types.
+
+#### Length of a list
+
+The length of a list can be obtained through the `length` operator:
+
+```
+myList : List of Z <- [3, 1, 4, 1, 5, 9, 2]
+
+x : Z <- length(myList)
+# x is now 7
+```
+
+#### Indexing into a list
+
+To read a specific element out of a list, use the `@` operator. **NOTE:**
+lists in FractalStream use 1-based indexing!
+
+```
+fibs : List of Z <- [0, 1, 1, 2, 3, 5, 8]
+
+x : Z <- fibs @ 4
+# x is now equal to 2
+```
+
+Attempting to use a non-positive index or an index larger than the length of the list will cause your script to terminate.
+
+In addition to normal list indexing, you can also cyclically index into a
+list using the `@@` operator:
+
+```
+digits : List of Z <- [3, 1, 4, 1, 5, 9, 2]
+
+x : Z <- digits @@ 10
+# x is now equal to 4
+
+x <- digits @@ -1
+# x is now equal to 9
+```
+
+`@@` allows for negative indices, but will still cause your script to terminate
+if the list is empty.
+
+#### Appending, prepending, and joining lists
+
+Several lists can be concatenated together using the `join` operator, which
+can receive two or more lists:
+
+```
+myList1 : List of Z <- [1,2]
+myList2 : List of Z <- [3,4,5]
+myList3 : List of Z <- [6]
+
+myList1 <- join(myList1, myList2, myList3)
+# myList1 is now [1,2,3,4,5,6]
+```
+
+Two common special cases have been given their own names: `append(myList, x)`
+is equivalent to `join(myList, [x])`, and `prepend(myList, x)` is equivalent
+to `join([x], myList)`.
+
+#### Removing items from a list
+
+You can remove all items that match a certain predicate from a list using
+the `remove` command. It takes two arguments: the first is a list, and the
+second is a predicate used to determine which elements are removed.
+
+```
+myList : List of Z <- [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+myList <- remove(myList, item ⟼ mod(item, 2) = 0)
+
+# now myList is [1,3,5,7,9]
+```
+
+#### Transforming a list
+
+You can apply a function to all items in a list using the `transform`
+command. It takes two arguments: the first is a list, and the second is
+a transformation that will be applied to each list element.
+
+**NOTE:** Currently the function must be of the form `T -> T` for some type `T`.
+In the future this restriction could be lifted; please
+ [open an issue](https://github.com/matt-noonan/FractalStream/issues) if you
+ have a use-case for a type-changing transformation.
+
+```
+myList : List of Z <- [1, 2, 3, 4, 5]
+
+myList <- transform(myList, x ⟼ x^2)
+# now myList is [1, 4, 9, 16, 25]
+```
+
+#### Finding an element in a list
+
+The `find` function can be used to find the first element of a list
+that matches some predicate. You must supply a fallback value to use
+when no items in the list match your predicate.
+
+```
+myList : List of Z <- [1, 2, 3, 4, 5]
+
+x : Z <- find(myList, item ⟼ item^2 > 10, 17)
+# x is now 4
+
+x <- find(myList, item ⟼ item^2 > 100, 17)
+# x is now 17
+```
+
+For more complex situations, there is also the `with first ... matching`
+command that can be used to run some commands on the first value of a list
+that matches some predicate, and optionally run some other commands if no
+such value exists.
+
+```
+myList : List of Z <- [1, 2, 3, 4, 5]
+
+x : Z <- 0
+y : Z <- 0
+
+with first item matching item^2 > 10 in myList:
+  x <- item
+else:
+  y <- 1
+
+# x is now 4, y is still 0
+
+with first item matching item^2 > 100 in myList:
+  x <- item
+else:
+  y <- 1
+
+# x is still 4, but now y is 1
+```
+
+#### Iterating over items in a list
+
+To run some code for each item in a list, you can use the `for each ... in`
+command:
+
+```
+myList : List of Z <- [1, 2, 3, 4, 5]
+
+sum : Z <- 0
+for each x in myList:
+  sum <- sum + x
+
+# sum is now 15
+```
+
+**NOTE:** `for each` loops are not subject to the special iteration limits
+that apply to `while`, `until`, and `iterate`. The `for each` loop will
+always process each element of the list.

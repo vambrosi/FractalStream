@@ -94,16 +94,6 @@ data CodeF (code :: Environment -> Exp Type)
               -> CodeF code env
 
   -- | List commands
-  Insert :: forall name ty env code
-          . KnownSymbol name
-         => NameIsPresent name ('ListT ty) env
-         -> Proxy name
-         -> TypeProxy ('ListT ty)
-         -> EnvironmentProxy env
-         -> StartOrEnd
-         -> Value '(env, ty)
-         -> CodeF code env
-
   Lookup :: forall name ty env code item
           . (KnownSymbol name, KnownSymbol item)
          => NameIsPresent name ('ListT ty) env
@@ -119,25 +109,6 @@ data CodeF (code :: Environment -> Exp Type)
          -- ^ action to run on the first item matching the predicate
          -> Maybe (Eval (code env))
          -- ^ optional fallback action to run if there was no match
-         -> CodeF code env
-
-  ClearList :: forall name ty env code
-             . KnownSymbol name
-            => NameIsPresent name ('ListT ty) env
-            -> Proxy name
-            -> TypeProxy ('ListT ty)
-            -> EnvironmentProxy env
-            -> CodeF code env
-
-  Remove :: forall name ty env code item
-          . (KnownSymbol name, KnownSymbol item)
-         => NameIsPresent name ('ListT ty) env
-         -> Proxy name
-         -> TypeProxy ('ListT ty)
-         -> Proxy item
-         -> NameIsAbsent item env
-         -> EnvironmentProxy env
-         -> Value '( '(item, ty) ': env, 'BooleanT)
          -> CodeF code env
 
   ForEach :: forall name ty env code item
@@ -170,10 +141,7 @@ instance IFunctor CodeF where
     DoWhile {} -> envProxy Proxy
     IfThenElse {} -> envProxy Proxy
     DrawCommand {} -> envProxy Proxy
-    Insert _ _ _ env _ _ -> env
     Lookup _ _ _ _ _ _ env _ _ _ -> env
-    ClearList _ _ _ env -> env
-    Remove _ _ _ _ _ env _ -> env
     ForEach _ _ _ _ _ env _ _ -> env
 
   imap :: forall a b env
@@ -191,10 +159,7 @@ instance IFunctor CodeF where
       DoWhile cond body -> DoWhile cond (f env body)
       IfThenElse cond yes no -> IfThenElse cond (f env yes) (f env no)
       DrawCommand d -> DrawCommand d
-      Insert pf n t env' soe v -> Insert pf n t env' soe v
       Lookup pf n t i pf' env'' env' v body alt -> Lookup pf n t i pf' env'' env' v (f env'' body) (fmap (f env') alt)
-      ClearList pf n t env' -> ClearList pf n t env'
-      Remove pf n t i pf' env' v -> Remove pf n t i pf' env' v
       ForEach pf n t i pf' env' env'' body -> ForEach pf n t i pf' env' env'' (f env'' body)
 
 ---------------------------------------------------------------------------------
@@ -221,11 +186,8 @@ transformValuesM' f = \case
   Block cmds -> pure $ Block cmds
   NoOp -> pure NoOp
   DrawCommand d -> DrawCommand <$> transformDrawValuesM f d
-  Insert pf n t env soe v -> Insert pf n t env soe <$> f v
   Lookup pf n t i pf' env' env v body alt ->
     Lookup pf n t i pf' env' env <$> f v <*> pure body <*> pure alt
-  ClearList pf n t env -> pure $ ClearList pf n t env
-  Remove pf n t i pf' env v -> Remove pf n t i pf' env <$> f v
   ForEach pf n t i pf' env env' body -> pure (ForEach pf n t i pf' env env' body)
 
 transformValues :: forall env
@@ -247,11 +209,8 @@ instance ITraversable CodeF where
     DoWhile c body -> DoWhile c <$> body
     IfThenElse v yes no -> IfThenElse v <$> yes <*> no
     DrawCommand d -> pure (DrawCommand d)
-    Insert pf n t env soe v -> pure (Insert pf n t env soe v)
     Lookup pf n t i pf' env' env v body alt ->
       Lookup pf n t i pf' env' env v <$> body <*> sequenceA alt
-    ClearList pf n t env -> pure (ClearList pf n t env)
-    Remove pf n t i pf' env v -> pure (Remove pf n t i pf' env v)
     ForEach pf n t i pf' env env' body -> ForEach pf n t i pf' env env' <$> body
 
 ---------------------------------------------------------------------------------
@@ -300,16 +259,7 @@ gatherUsedVarsInCode = \case
   Let _ name v _ -> do
     usedVarsInValue v
     modify' (Set.delete (symbolVal name))
-  Insert _ name _ _ _ v -> do
-    usedVarsInValue v
-    modify' (Set.insert (symbolVal name))
   Lookup _ name _ item _ _ _ v _ _ -> do
-    usedVarsInValue v
-    modify' (Set.delete (symbolVal item) .
-             Set.insert (symbolVal name))
-  ClearList _ name _ _ -> do
-    modify' (Set.insert (symbolVal name))
-  Remove _ name _ item _ _ v -> do
     usedVarsInValue v
     modify' (Set.delete (symbolVal item) .
              Set.insert (symbolVal name))
@@ -325,6 +275,9 @@ usedVarsInValue = indexedFoldM @UnitET phi
     phi = \case
       Var name _ _ -> modify' (Set.insert (symbolVal name))
       LocalLet name _ _ _ _ _ -> modify' (Set.delete (symbolVal name))
+      Remove name _ _ _ _ -> modify' (Set.delete (symbolVal name))
+      Find name _ _ _ _ _ -> modify' (Set.delete (symbolVal name))
+      Transform name _ _ _ _ _ -> modify' (Set.delete (symbolVal name))
       _ -> pure ()
 
 usedVarsInCode :: Code env -> State (Set String) ()

@@ -2,7 +2,7 @@
 module Language.Value.Parser
   ( parseValue
   , parseParsedValue
-  , parseValueOrList
+  , parseInputValue
   , parseType
   , valueGrammar
   , valueGrammarWithNoSplices
@@ -49,11 +49,12 @@ parseParsedValue :: Map String ParsedValue
                  -> Either ParseError ParsedValue
 parseParsedValue splices = parse (valueGrammar splices) . tokenize
 
-parseValueOrList :: forall env ty. (KnownEnvironment env, KnownType ty)
-                 => Splices
-                 -> String
-                 -> Either (Either ParseError TCError) (Value '(env, ty))
-parseValueOrList splices input = case typeProxy @ty of
+parseInputValue :: forall env ty. (KnownEnvironment env, KnownType ty)
+                => Splices
+                -> String
+                -> Either (Either ParseError TCError) (Value '(env, ty))
+parseInputValue splices input = case typeProxy @ty of
+  TextType     -> parseValue splices (show input)
   ListType ity -> case filter (not . (`elem` " \t\n\r")) input of
     "" -> pure (List ity [])
     _  -> parseValue splices ("[" ++ input ++ "]")
@@ -240,6 +241,7 @@ valueGrammar splices = mdo
     , check (tcScalar "𝑖" ComplexType (0.0 :+ 1.0) <$ token I)
     , check (tcScalar "𝑒" RealType (exp 1.0) <$ token Euler)
     , check (tcScalar "π" RealType pi <$ token Pi)
+    , check (tcScalar "text" TextType <$> quoted)
     , check (tcIterations splices <$ token Iterations)
     , check (tcStuck splices <$ token Stuck)
     , check (
@@ -254,9 +256,13 @@ valueGrammar splices = mdo
         Identifier n -> Map.lookup n splices
         _ -> Nothing
 
+    , textConcat
     , var
     , color
+    , listOp
     ]
+
+  quoted <- rule $ tokenMatch (\case { Quoted txt -> Just txt; _ -> Nothing })
 
   var <- rule $ check (
     fmap tcVar . tokenMatch $ \case
@@ -287,6 +293,36 @@ valueGrammar splices = mdo
         tcRGB <$> (token (Identifier "rgb") *> (token OpenParen *> arith))
               <*> (token Comma *> arith)
               <*> (token Comma *> arith <* token CloseParen))
+    ]
+
+  textConcat <- rule $ check $
+    tcText <$> ((:) <$> (token TextKeyword *> token OpenParen *> toplevel)
+                    <*> (some (token Comma *> toplevel) <* token CloseParen))
+
+  listOp <- ruleChoice
+    [ check (tcJoin <$>
+             ((:) <$> (token JoinKeyword *> token OpenParen *> toplevel)
+                  <*> (some (token Comma *> toplevel) <* token CloseParen)))
+    , check (tcAppend <$> (token AppendKeyword *> token OpenParen *> toplevel)
+                      <*> (token Comma *> toplevel <* token CloseParen))
+    , check (tcPrepend <$> (token PrependKeyword *> token OpenParen *> toplevel)
+                       <*> (token Comma *> toplevel <* token CloseParen))
+    , check (tcRemove <$> (token RemoveKeyword *> token OpenParen *> toplevel)
+                      <*> (token Comma *> ident <* token RightArrow)
+                      <*> (toplevel <* token CloseParen))
+    , check (tcFind <$> (token FindKeyword *> token OpenParen *> toplevel)
+                    <*> (token Comma *> ident <* token RightArrow)
+                    <*> toplevel
+                    <*> (token Comma *> toplevel <* token CloseParen))
+    , check (tcTransform <$> (token TransformKeyword *> token OpenParen *> toplevel)
+                         <*> (token Comma *> ident <* token RightArrow)
+                         <*> (toplevel <* token CloseParen))
+    , check (tcRange <$> (token RangeKeyword *> token OpenParen *> toplevel)
+                     <*> (token Comma *> toplevel <* token CloseParen))
+    , check (tcLength <$>
+             (token LengthKeyword *> token OpenParen *> toplevel <* token CloseParen))
+    , check (tcIndex False <$> (toplevel <* token At) <*> toplevel)
+    , check (tcIndex True  <$> (toplevel <* token AtAt) <*> toplevel)
     ]
 
   typ <- typeGrammar

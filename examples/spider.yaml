@@ -1,0 +1,184 @@
+viewer:
+  title: Standard spider
+  style: complex-plane
+  size: 512x512
+  resizable: false
+  z-coord: z
+  initial-center: 0
+  iteration-limit: max_iters
+  initial-pixel-size: 1/128
+  code: "color <- white"
+
+  tools:
+    - name: Draw standard spider
+      shortcut: s
+      refresh-can-update: true
+      actions:
+        - event: refresh
+          code: |
+            # Save p and q to restore later, so we can manipulate
+            # them in the script without changing the user's input
+            savedP : Z <- p
+            savedQ : Z <- q
+
+            h2 : Z <- p
+            h1 : Z <- p + q
+            p <- 2 p
+            q <- 2 q
+
+            erase
+            use grey for line
+            draw circle at 0 with radius 1
+
+            star1 : C <- e^{2 pi i h1 / q}
+            star2 : C <- e^{2 pi i h2 / q}
+            draw line from star1 to star2
+            write "A" at i star2 / 2
+            write "B" at -i star2 / 2
+            use black for line
+
+            # Brent's cycle detection algorithm
+            power : Z <- 1
+            λ <- 1
+            tortoise : Z <- p
+            hare : Z <- mod (2 p, q)
+            while tortoise != hare:
+              if power = λ:
+                tortoise <- hare
+                power <- 2 power
+                λ <- 0
+              hare <- mod (2 hare, q)
+              λ <- λ + 1
+
+            tortoise <- p
+            hare <- p
+            iterate hare -> mod (2 hare, q) while true up to λ times
+            μ <- 0
+            while tortoise != hare:
+              tortoise <- mod (2 tortoise, q)
+              hare <- mod (2 hare, q)
+              μ <- μ + 1
+
+            # Now λ tells us the length of the periodic part,
+            # and μ tells us the length of the preperiodic part.
+            delta : R <- 1 / (λ + μ)
+            ci : R <- 0
+
+            t : Z <- p
+
+            # We'll track the kneading sequence in a computing-friendly
+            # form here, while also accumulating a human-friendly form
+            # into `kneading_seq`
+            iters : List of Z <- []
+            S1 : Z <- 0
+            S2 : Z <- 1
+            A  : Z <- 2
+            B  : Z <- 3
+
+            kneading_seq <- ""
+
+            t <- p
+            while true up to μ times:
+              omega : C <- e^{2 pi i t / q}
+              c : Color <- rainbow(ci)
+              ci <- ci + delta
+              use dark c for line
+              use light c for fill
+
+              if t = h1:
+                insert S1 at end of iters
+                kneading_seq <- text (kneading_seq, "★₁")
+              else if t = h2:
+                insert S2 at end of iters
+                kneading_seq <- text (kneading_seq, "★₂")
+              else if re (i star2 bar(omega)) > 0:
+                insert A at end of iters
+                kneading_seq <- text (kneading_seq, "A")
+              else:
+                insert B at end of iters
+                kneading_seq <- text (kneading_seq, "B")
+
+              draw line from omega to 10 omega
+              draw filled circle at omega with radius foot
+              t <- mod (2 t, q)
+
+            kneading_seq <- text (kneading_seq, "[")
+
+            while true up to λ times:
+              omega : C <- e^{2 pi i t / q}
+              if t = h1:
+                insert S1 at end of iters
+                kneading_seq <- text (kneading_seq, "★₁")
+              else if t = h2:
+                insert S2 at end of iters
+                kneading_seq <- text (kneading_seq, "★₂")
+              else if re (i star2 bar(omega)) > 0:
+                insert A at end of iters
+                kneading_seq <- text (kneading_seq, "A")
+              else:
+                insert B at end of iters
+                kneading_seq <- text (kneading_seq, "B")
+
+              c : Color <- rainbow(ci)
+              ci <- ci + delta
+              use dark c for line
+              use light c for fill
+
+              draw line from omega to 10 omega
+              draw filled circle at omega with radius foot
+              t <- mod (2 t, q)
+
+            kneading_seq <- text (kneading_seq, "]")
+
+            p <- savedP
+            q <- savedQ
+
+configuration:
+  title: Configuration
+  size: 400x200
+  vertical-contents:
+    - panel:
+        title: "Input θ = p / q for S_θ"
+        vertical-contents:
+          - horizontal-contents:
+              - text-entry:
+                  label: ""
+                  value: "9"
+                  type: Z
+                  variable: "p"
+              - text: /
+              - text-entry:
+                  label: ""
+                  value: "56"
+                  type: Z
+                  variable: "q"
+    - panel:
+        title: "Computed values"
+        vertical-contents:
+          - text-entry:
+              label: "Kneading sequence"
+              value: "42"
+              type: Text
+              variable: kneading_seq
+          - horizontal-contents:
+              - text-entry:
+                  label: Preperiod
+                  value: "0"
+                  type: Z
+                  variable: μ
+              - text-entry:
+                  label: Period
+                  value: "0"
+                  type: Z
+                  variable: λ
+
+    - text-entry:
+        label: "Max. iterations:"
+        value: "1000"
+        type: Z
+        variable: max_iters
+    - text-entry:
+        label: "Foot radius:"
+        value: "0.03"
+        type: R
+        variable: foot

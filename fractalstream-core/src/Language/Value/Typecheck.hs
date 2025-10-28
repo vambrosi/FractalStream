@@ -33,7 +33,13 @@ atType :: (KnownEnvironment env, KnownType ty)
        => ParsedValue
        -> TypeProxy ty
        -> TC (Value '(env, ty))
-atType v@(ParsedValue _ f) ty = case ty of
+atType v@(ParsedValue sr f) ty = case ty of
+  TextType    -> tryEach (Advice sr "I don't know how to turn this type of value into text.")
+    [ f TextType
+    , ToText IntegerType <$> atType v IntegerType
+    , ToText RealType    <$> atType v RealType
+    , ToText ComplexType <$> atType v ComplexType
+    ]
   RealType    -> catchError (I2R <$> atType v IntegerType) $ \_ -> f RealType
   ComplexType -> catchError (R2C <$> atType v RealType) $ \_ -> f ComplexType
   _           -> f ty
@@ -384,6 +390,92 @@ internalIterations =      "[internal] iteration count"
 type InternalIterations = "[internal] iteration count"
 internalIterationLimit = "[internal] iteration limit"
 
+tcText :: [ParsedValue] -> CheckedValue
+tcText args sr = \case
+  TextType -> do
+    let pv (ParsedValue sr' f) =
+          tryEach (Advice sr' "I don't know how to make this value into text.")
+          [ f TextType
+          , ToText IntegerType <$> f IntegerType
+          , ToText RealType <$> f RealType
+          , ToText ComplexType <$> f ComplexType
+          ]
+    ConcatText <$> mapM pv args
+  ty -> throwError (Surprise sr "the result of text concatentation" "some text" (Expected $ an ty))
+
+tcJoin :: [ParsedValue] -> CheckedValue
+tcJoin args sr = \case
+  ListType ty -> Join ty <$> mapM (`atType` ListType ty) args
+  ty -> throwError (Surprise sr "the result of a join operation" "some list type" (Expected $ an ty))
+
+tcAppend :: ParsedValue -> ParsedValue -> CheckedValue
+tcAppend plst px sr = \case
+  ListType ty -> do
+    lst <- plst `atType` ListType ty
+    x <- px `atType` ty
+    pure (Join ty [List ty [x], lst])
+  ty -> throwError (Surprise sr "the result of an append operation" "some list type" (Expected $ an ty))
+
+tcPrepend :: ParsedValue -> ParsedValue -> CheckedValue
+tcPrepend plst px sr = \case
+  ListType ty -> do
+    lst <- plst `atType` ListType ty
+    x <- px `atType` ty
+    pure (Join ty [lst, List ty [x]])
+  ty -> throwError (Surprise sr "the result of an prepend operation" "some list type" (Expected $ an ty))
+
+tcRemove :: ParsedValue -> String -> ParsedValue -> CheckedValue
+tcRemove lst n p sr = go
+  where
+    go :: forall env ty. (KnownEnvironment env, KnownType ty)
+       => TypeProxy ty -> TC (Value '(env, ty))
+    go = \case
+      ListType ty -> case someSymbolVal n of
+        SomeSymbol name -> do
+          DeclaredVar pf _ <- declareVar @_ @_ @env sr name ty (envProxy Proxy)
+          Remove name ty pf <$> atType lst (ListType ty) <*> atType p BooleanType
+      ty -> throwError (Surprise sr "the result of a remove operation" "some list type" (Expected $ an ty))
+
+tcFind :: ParsedValue -> String -> ParsedValue -> ParsedValue -> CheckedValue
+tcFind lst n p d sr = go
+  where
+    go :: forall env ty. (KnownEnvironment env, KnownType ty)
+       => TypeProxy ty -> TC (Value '(env, ty))
+    go ty = case someSymbolVal n of
+      SomeSymbol name -> do
+        DeclaredVar pf _ <- declareVar @_ @_ @env sr name ty (envProxy Proxy)
+        Find name ty pf <$> atType lst (ListType ty)
+                        <*> atType p BooleanType
+                        <*> atType d ty
+
+tcTransform :: ParsedValue -> String -> ParsedValue -> CheckedValue
+tcTransform lst n fun sr = go
+  where
+    go :: forall env ty. (KnownEnvironment env, KnownType ty)
+       => TypeProxy ty -> TC (Value '(env, ty))
+    go = \case
+      ListType ty -> case someSymbolVal n of
+        -- FIXME: right now we only have functions from A -> A here, because
+        -- there isn't a clean way to ask a ParsedValue "what type do you *want* to be?"
+        SomeSymbol name -> do
+          DeclaredVar pf _ <- declareVar @_ @_ @env sr name ty (envProxy Proxy)
+          Transform name ty ty pf <$> atType lst (ListType ty) <*> atType fun ty
+      ty -> throwError (Surprise sr "the result of a transform operation" "some list type" (Expected $ an ty))
+
+tcRange :: ParsedValue -> ParsedValue -> CheckedValue
+tcRange x y sr = \case
+  ListType IntegerType -> Range <$> atType x IntegerType <*> atType y IntegerType
+  ty -> throwError (Surprise sr "the result of a range operation" "a list of integers" (Expected $ an ty))
+
+tcLength :: ParsedValue -> CheckedValue
+tcLength _lst sr = \case
+  IntegerType -> throwError (internal $ Advice sr "`length` has not been implemented yet")
+  ty -> throwError (Surprise sr "the result of a length operation" "an integer" (Expected $ an ty))
+
+tcIndex :: Bool -> ParsedValue -> ParsedValue -> CheckedValue
+tcIndex cyc lst ix _sr ty =
+  Index ty cyc <$> atType lst (ListType ty) <*> atType ix IntegerType
+
 ------------------------------------------------------
 -- Various tables
 ------------------------------------------------------
@@ -392,7 +484,8 @@ colors :: Map String Color
 colors = Map.fromList
   [ ("red", red), ("green", green), ("blue", blue)
   , ("black", black), ("white", white), ("grey", grey), ("gray", grey)
-  , ("orange", orange), ("yellow", yellow), ("purple", purple), ("violet", violet) ]
+  , ("orange", orange), ("yellow", yellow), ("purple", purple), ("violet", violet)
+  , ("pink", pink)]
 
 realFunctions :: Map String RealFun
 realFunctions = Map.fromList
@@ -448,5 +541,5 @@ types = Map.fromList
   , ("Z", IntegerT), ("ℤ", IntegerT), ("Int", IntegerT), ("Integer", IntegerT)
   , ("C", ComplexT), ("ℂ", ComplexT), ("Complex", ComplexT)
   , ("Bool", BooleanT), ("Boolean", BooleanT)
-  , ("Color", ColorT)
+  , ("Color", ColorT), ("Text", TextT)
   ]

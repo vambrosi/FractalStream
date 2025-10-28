@@ -83,6 +83,15 @@ data Draw_ (value :: Environment -> FSType -> Exp Type)
          . EnvironmentProxy env
         -> Draw_ value env
 
+  -- | write TEXT at POINT
+  Write :: forall env value
+         . EnvironmentProxy env
+        -> Eval (value env 'TextT)
+        -> Eval (value env ('Pair 'RealT 'RealT))
+        -> Draw_ value env
+
+deriving instance Show DrawCommand
+
 transformDrawValues :: forall env
                      . (forall et. Value et -> Value et)
                     -> Draw env
@@ -102,3 +111,4 @@ transformDrawValuesM f = \case
   SetStroke env c -> SetStroke env <$> f c
   SetFill env c -> SetFill env <$> f c
   Clear env -> pure $ Clear env
+  Write env txt pt -> Write env <$> f txt <*> f pt

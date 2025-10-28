@@ -128,26 +128,8 @@ tcSetFill c _sr env = DrawCommand . SetFill env <$> atType c ColorType
 tcClear :: CheckedCode
 tcClear _sr env = pure (DrawCommand $ Clear env)
 
-tcListInsert :: ParsedValue -> StartOrEnd -> String -> CheckedCode
-tcListInsert item soe listName sr env = do
-  SomeSymbol list <- pure (someSymbolVal listName)
-  ListExists itemTy pfListPresent <- getListType sr list env
-  Insert pfListPresent list (ListType itemTy) env soe <$> atType item itemTy
-
-tcListRemoveSome :: String -> ParsedValue -> String -> CheckedCode
-tcListRemoveSome itemName predicate listName sr env = do
-  SomeSymbol item <- pure (someSymbolVal itemName)
-  SomeSymbol list <- pure (someSymbolVal listName)
-  ListExists itemTy pfListPresent <- getListType sr list env
-  DeclaredVar pfItemAbsent _ <- declareVar sr item itemTy env
-  Remove pfListPresent list (ListType itemTy) item pfItemAbsent env
-    <$> atType predicate BooleanType
-
-tcListRemoveAll :: String -> CheckedCode
-tcListRemoveAll listName sr env = do
-  SomeSymbol list <- pure (someSymbolVal listName)
-  ListExists itemTy pfListPresent <- getListType sr list env
-  pure (ClearList pfListPresent list (ListType itemTy) env)
+tcWrite :: ParsedValue -> ParsedValue -> CheckedCode
+tcWrite txt pt _sr env = DrawCommand <$> (Write env <$> atType txt TextType <*> tcPoint pt)
 
 tcListFor :: String -> String -> ParsedCode -> CheckedCode
 tcListFor itemName listName body sr env = do

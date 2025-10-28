@@ -368,7 +368,10 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
                     toolRefreshOnActivate = ptoolRefreshOnActivate
                     toolEventHandler = const Nothing -- to be replaced below
                     tool = Tool{..}
-                pure (tool { toolEventHandler = handleEvent cvToolContext (drawTo ptoolDrawLayer) h })
+                pure (tool { toolEventHandler = handleEvent
+                                                  cvToolContext
+                                                  ptoolRefreshCanUpdate
+                                                  (drawTo ptoolDrawLayer) h })
 
             action ViewerUIProperties{..} ComplexViewer'{..}
 
@@ -446,8 +449,12 @@ makeDrawCommandGetter = do
             emit (SetStroke EmptyEnvProxy c)
           SetFill _env cv -> do
             c <- eval cv
-            emit (SetStroke EmptyEnvProxy c)
+            emit (SetFill EmptyEnvProxy c)
           Clear _env -> emit (Clear EmptyEnvProxy)
+          Write _env txtv ptv -> do
+            txt <- eval txtv
+            pt <- eval ptv
+            emit (Write EmptyEnvProxy txt pt)
 
   let getDrawCommands = do
         tryTakeMVar dcChanged >>= \case

@@ -17,6 +17,7 @@ module Data.Color (
     , orange
     , violet
     , purple
+    , pink
     , yellow
 -- * Color modifiers and combinators
     , light
@@ -87,6 +88,10 @@ purple = rgbToColor (128,   0, 128)
 -- | Violet color.
 violet :: Color
 violet = rgbToColor (255,   0, 160)
+
+-- | Pink color.
+pink :: Color
+pink = rgbToColor (255, 70, 162)
 
 -- | Lighten the color
 light :: Color -> Color

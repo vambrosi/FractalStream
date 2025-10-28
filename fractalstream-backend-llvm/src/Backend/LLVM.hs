@@ -124,6 +124,7 @@ toFFIArg _ t v = case t of
     pokeArray c [r,g,b]
     pure (argPtr c, free c)
   ListType _ -> pure (argInt32 0, pure ())
+  TextType -> pure (argInt32 0, pure ())
   _ -> error ("todo: toFFIArg " ++ showType t)
 
 fromFFIRetArg :: TypeProxy ty

@@ -75,6 +75,15 @@ buildValue getExtern = indexedFold go'
         throwError ("The LLVM backend can not compile constants of type " ++ showType t)
 
       List {} -> throwError "The LLVM backend can not compile list values"
+      Join {} -> throwError "The LLVM backend can not compile list values"
+      Remove {} -> throwError "The LLVM backend can not compile list values"
+      Find {} -> throwError "The LLVM backend can not compile list values"
+      Transform {} -> throwError "The LLVM backend can not compile list values"
+      Range {} -> throwError "The LLVM backend can not compile list values"
+      Length {} -> throwError "The LLVM backend can not compile list values"
+      Index {} -> throwError "The LLVM backend can not compile list values"
+
+      ConcatText {} -> throwError "The LLVM backend can not compile text values"
 
       And x y -> ((,) <$> x <*> y) >>= \case
         (BooleanOp lhs, BooleanOp rhs) -> BooleanOp <$> I.and lhs rhs
@@ -85,6 +94,7 @@ buildValue getExtern = indexedFold go'
       R2C r -> r <&> \case { RealOp    x -> ComplexOp x (C.double 0.0) }
       I2R i -> i >>= \case { IntegerOp x -> RealOp <$> sitofp x AST.double }
       C2R2 z -> z <&> \case { ComplexOp x y -> PairOp (RealOp x) (RealOp y) }
+      ToText {} -> pure TextOp
 
       ReC z -> z <&> \case { ComplexOp x _ -> RealOp x }
       ImC z -> z <&> \case { ComplexOp _ y -> RealOp y }

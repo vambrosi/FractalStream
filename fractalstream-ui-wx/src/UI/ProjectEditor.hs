@@ -85,6 +85,10 @@ editProject yamlFile = do
                  void $ addItem r ("Checkbox for \"" ++ varVariable ++ "\"")
                ColorPicker _ (Dummy ConfigVar{..}) -> do
                  void $ addItem r ("Color picker for \"" ++ varVariable ++ "\"")
+               PlainText _ -> do
+                 void $ addItem r ("Plain text")
+               Button _ -> do
+                 void $ addItem r ("Button")
          in go r0
 
     whenJust ensembleSetup $ \Configuration{..} -> do

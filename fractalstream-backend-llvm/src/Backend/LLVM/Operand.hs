@@ -51,6 +51,7 @@ data Op (t :: FSType) where
   ColorOp   :: Operand -> Operand -> Operand -> Op 'ColorT
   PairOp    :: forall t1 t2. Op t1 -> Op t2 -> Op ('Pair t1 t2)
   ListOp    :: forall t. Op ('ListT t)
+  TextOp    :: Op 'TextT
 
 deriving instance (Show (Op t))
 
@@ -75,6 +76,7 @@ storeOperand op (PtrOp ptrOp) = case (op, ptrOp) of
     store ptrG 0 g
     store ptrB 0 b
   (ListOp, ListOp) -> pure ()
+  (TextOp, TextOp) -> pure ()
   _ -> throwError "TODO: Unhandled store type"
 
 detypeOperand :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m)
@@ -99,6 +101,7 @@ detypeOperand _t = \case
     insertValue c2 b [2]
   PairOp _op1 _op2 -> throwError "TODO: detypeOperand PairOp"
   ListOp -> throwError "TODO: detypeOperand ListOp"
+  TextOp -> throwError "TODO: detypeOperand TextOp"
 
 derefOperand :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m)
              => PtrOp t -> m (Op t)
@@ -117,6 +120,7 @@ derefOperand (PtrOp ptrOp) = case ptrOp of
   PairOp t1 t2 ->
     PairOp <$> derefOperand (PtrOp t1) <*> derefOperand (PtrOp t2)
   ListOp -> throwError "TODO: derefOperand ListOp"
+  TextOp -> throwError "TODO: derefOperand TextOp"
 
 -- | Get the LLVM function argument type corresponding to
 -- a FractalStream type.
@@ -133,6 +137,7 @@ toLLVMType = \case
   ColorType      -> AST.ptr (AST.ArrayType 3 AST.i8)
   ImageType      -> AST.i32
   ListType {}    -> AST.i32
+  TextType       -> AST.i32 -- fixme
 
 toLLVMPtrType :: forall t. TypeProxy t -> AST.Type
 toLLVMPtrType = \case
@@ -147,6 +152,7 @@ toLLVMPtrType = \case
   ColorType      -> AST.ptr (AST.ArrayType 3 AST.i8)
   ImageType      -> AST.ptr AST.i32
   ListType {}    -> AST.ptr AST.i32
+  TextType       -> AST.ptr AST.i32
 
 allocaOp :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m)
          => TypeProxy t
@@ -167,6 +173,8 @@ allocaOp = \case
     pure (PtrOp (PairOp ptr1 ptr2))
 
   ListType _ -> pure (PtrOp ListOp)
+
+  TextType -> pure (PtrOp TextOp)
 
   ty -> throwError ("Unhandled type in LLVM backend: " ++ showType ty)
 
@@ -190,6 +198,7 @@ typedOperandPtr t op = do
              PtrOp <$> (ColorOp <$> gep op[int32 0, int32 0]
                                 <*> gep op[int32 0, int32 1]
                                 <*> gep op[int32 0, int32 2])
+           TextType -> pure (PtrOp TextOp)
            _ -> throwError "TODO: typedOperandPtr"
 
 typedOperand :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m)
@@ -222,4 +231,5 @@ typedOperand t op = do
                     <*> typedOperand t2 x2
 
            ListType _ -> pure ListOp
+           TextType -> pure TextOp
            _ -> throwError ("TODO: missing case in typedOperand for type " ++ showType t)

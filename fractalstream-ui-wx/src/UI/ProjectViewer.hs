@@ -56,7 +56,7 @@ viewProject projectWindow addMenuBar = UI
       addMenuBar f []
       WX.windowOnClose f (set f [ visible := False ])
 
-      innerLayout <- generateWxLayout f setupUI
+      innerLayout <- generateWxLayout (\_ -> pure ()) f setupUI
       compileButton <- button f [ text := "Go!"
                                 , on command := do
                                     set f [ visible := False ]
@@ -75,7 +75,7 @@ viewProject projectWindow addMenuBar = UI
 
       addMenuBar f []
 
-      innerLayout <- generateWxLayout f ui
+      innerLayout <- generateWxLayout (\_ -> pure ()) f ui
       set f [ layout := fill . margin 5 . column 5 $ [ innerLayout ] ]
 
   , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar)
@@ -573,15 +573,8 @@ makeWxComplexViewer
     -- Tool menu
     tools <- menuPane [text := "&Tool"]
 
-    nav <- menuRadioItem tools [ text := "Navigate\tn"
-                               , help := "Move around or whatever"
-                               , on command := do
-                                   set toolStatus [text := "Navigate"]
-                                   set currentToolIndex [value := Nothing]
-                               ]
-
     -- Build the configuration window for each tool
-    showToolConfig <- forM theTools $ \Tool{..} -> case toolConfig of
+    showToolConfig <- forM (zip [0..] theTools) $ \(ix, Tool{..}) -> case toolConfig of
       Nothing  -> pure (\_ -> pure ())
       Just tcfg -> do
         tf <- frameTool [ text := tiName toolInfo
@@ -589,12 +582,30 @@ makeWxComplexViewer
                         , style := wxFRAME_TOOL_WINDOW .+. wxRESIZE_BORDER .+. wxCAPTION
                         ] f
         WX.windowOnClose tf (set tf [ visible := False ])
-        tlo <- generateWxLayout tf tcfg
+        let buttonPress txt = do
+              runToolEventHandler ix (ButtonPressed txt)
+              cvDrawCommandsChanged >>= \yn -> when yn triggerRepaint
+        tlo <- generateWxLayout buttonPress tf tcfg
         set tf [ layout := margin 10 $ fill $ tlo ]
         pure (\viz -> do
                  set tf [ visible := viz ]
                  -- Un-steal focus from the config window
                  when viz (set f [ visible := True ]))
+
+    nav <- menuRadioItem tools [ text := "Navigate\tn"
+                               , help := "Zoom and translate the view"
+                               , on command := do
+                                   set toolStatus [text := "Navigate"]
+                                   -- When the navigate tool is selected, send the
+                                   -- current tool a Deactivated event
+                                   get currentToolIndex value >>= \case
+                                     Nothing -> pure ()
+                                     Just i -> do
+                                       runToolEventHandler i Deactivated
+                                       (showToolConfig !! i) False
+                                       cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
+                                   set currentToolIndex [value := Nothing]
+                               ]
 
     -- Change tracking for variables used in each tool
     forM_ theTools $ \Tool{..} -> do
@@ -780,6 +791,8 @@ paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
     let withPen fil action = do
           curPen <- (`penColored` 2) <$> readIORef currentPen
           curBrush <- (if fil then brushSolid else const brushTransparent) <$> readIORef currentBrush
+          curText <- readIORef currentPen
+          dcSetTextForeground dc curText
           dcWithPenStyle dc curPen $ dcWithBrushStyle dc curBrush $ action []
         pxSz = sqrt(fst pxDim * snd pxDim)
 
@@ -819,6 +832,12 @@ paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
         SetStroke _ c -> writeIORef currentPen (fsColorToWxColor c)
 
         SetFill _ c -> writeIORef currentBrush (fsColorToWxColor c)
+
+        Write _ txt pt -> do
+          Point x0 y0 <- modelToView pt
+          Size tw th <- getTextExtent dc txt
+          let pt' = Point (x0 - tw `div` 2) (y0 - th `div` 2)
+          withPen False (drawText dc txt pt')
 
 -- | Convert a FractalStream color to a WxWidgets color
 fsColorToWxColor :: Color -> WX.Color

@@ -37,6 +37,7 @@ data FSType
   | ColorT
   | ImageT
   | ListT FSType
+  | TextT
   deriving (Eq, Ord, Show)
 
 -- | Constant values for scalar types
@@ -51,6 +52,7 @@ type family HaskellType (t :: FSType) :: Type where
   HaskellType 'VoidT      = ()
   HaskellType 'ImageT     = Int
   HaskellType ('ListT x)  = [HaskellType x]
+  HaskellType 'TextT      = String
 
 -- | Constant values for scalar types. Match on the
 -- first argument to make the type of the second argument
@@ -72,7 +74,8 @@ instance Eq (Scalar t) where
       in (Scalar t1 x1, Scalar t2 x2) == (Scalar t1 y1, Scalar t2 y2)
     VoidType     -> x == y
     ImageType    -> x == y
-    ListType it -> map (Scalar it) x == map (Scalar it) y
+    ListType it  -> map (Scalar it) x == map (Scalar it) y
+    TextType     -> x == y
 
 instance Ord (Scalar t) where
   compare (Scalar t x) (Scalar _ y) = case t of
@@ -88,7 +91,8 @@ instance Ord (Scalar t) where
       in compare (Scalar t1 x1, Scalar t2 x2) (Scalar t1 y1, Scalar t2 y2)
     VoidType     -> compare x y
     ImageType    -> compare x y
-    ListType it -> compare (map (Scalar it) x) (map (Scalar it) y)
+    ListType it  -> compare (map (Scalar it) x) (map (Scalar it) y)
+    TextType     -> compare x y
 
 sameHaskellType :: TypeProxy t1 -> TypeProxy t2 -> Maybe (t1 :~: t2)
 sameHaskellType v1 v2 = case v1 of
@@ -100,6 +104,7 @@ sameHaskellType v1 v2 = case v1 of
   ColorType    -> case v2 of { ColorType    -> Just Refl; _ -> Nothing }
   VoidType     -> case v2 of { VoidType     -> Just Refl; _ -> Nothing }
   ImageType    -> case v2 of { ImageType    -> Just Refl; _ -> Nothing }
+  TextType     -> case v2 of { TextType     -> Just Refl; _ -> Nothing }
   PairType x y -> case v2 of
     PairType x' y' -> case (,) <$> sameHaskellType x x' <*> sameHaskellType y y' of
       Just (Refl, Refl) -> Just Refl
@@ -123,6 +128,7 @@ data TypeProxy (t :: FSType) where
   VoidType     :: TypeProxy 'VoidT
   ImageType    :: TypeProxy 'ImageT
   ListType     :: KnownType x => TypeProxy x -> TypeProxy ('ListT x)
+  TextType     :: TypeProxy 'TextT
 
 data SomeType where
   SomeType :: forall t. TypeProxy t -> SomeType
@@ -142,6 +148,7 @@ instance KnownType 'RationalT where typeProxy = RationalType
 instance KnownType 'ColorT    where typeProxy = ColorType
 instance KnownType 'VoidT     where typeProxy = VoidType
 instance KnownType 'ImageT    where typeProxy = ImageType
+instance KnownType 'TextT     where typeProxy = TextType
 instance KnownType x => KnownType ('ListT x) where
   typeProxy = ListType (typeProxy @x)
 instance (KnownType x, KnownType y) => KnownType ('Pair x y) where
@@ -157,6 +164,7 @@ withKnownType ty k = case ty of
   ColorType    -> k
   VoidType     -> k
   ImageType    -> k
+  TextType     -> k
   PairType {}  -> k
   ListType {}  -> k
 
@@ -169,6 +177,7 @@ withType t k = case t of
   ComplexT -> k ComplexType
   ColorT   -> k ColorType
   ImageT   -> k ImageType
+  TextT    -> k TextType
   ListT lt -> withType lt $ \ty -> k (ListType ty)
   RationalT  -> k RationalType
   Pair t1 t2 -> withType t1 $ \ty1 -> withType t2 $ \ty2 -> k (PairType ty1 ty2)
@@ -203,6 +212,7 @@ showType = \case
   ColorType    -> "color"
   VoidType     -> "unit"
   ImageType    -> "image"
+  TextType     -> "text"
   PairType x y -> "(" <> showType x <> " x " <> showType y <> ")"
   ListType x   -> "list of " <> showType x
 
@@ -218,6 +228,7 @@ showValue ty v = case ty of
   ColorType    -> show (colorToRGB v)
   VoidType     -> "n/a"
   ImageType    -> "(image)"
+  TextType     -> v
   PairType xt yt -> let (x, y) = v
                      in showValue xt x <> " , " <> showValue yt y
   ListType xt -> "[" ++ intercalate ", " (map (showValue xt) v) ++ "]"

@@ -66,6 +66,18 @@ data Token
   | Iterations
   | TimesKeyword
   | Stuck
+  | Quoted String
+  | TextKeyword
+  | AppendKeyword
+  | PrependKeyword
+  | JoinKeyword
+  | RemoveKeyword
+  | FindKeyword
+  | TransformKeyword
+  | RangeKeyword
+  | At
+  | AtAt
+  | LengthKeyword
   deriving (Eq, Ord, Show)
 
 instance IsString Token where fromString = Identifier
@@ -108,6 +120,8 @@ tokenizeWithIndentation
     dropComments :: SRString -> SRString
     dropComments = \case
       []      -> []
+      (q0@('"',_):etc) -> let (quoted, cs) = skipString etc
+                       in (q0 : quoted) ++ dropComments cs
       (('#',_):_) -> []
       (c:cs)  -> c : dropComments cs
 
@@ -131,6 +145,15 @@ tokenizeWithIndentation
             let (is, ss') = extract n ss
             in Group (tokenize' s) is : block ss'
       _ -> error "bad indent"
+
+skipString :: SRString -> (SRString, SRString)
+skipString = go []
+  where go acc = \case
+          (c1@('\\',_) : c2 : etc) -> go (c2 : c1 : acc) etc
+          (q@('"',_) : etc) -> (reverse (q : acc), etc)
+          (c : etc) -> go (c : acc) etc
+          [] -> (reverse acc, [])
+
 
 ------------------------------------------------------
 -- Internals
@@ -158,6 +181,7 @@ opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
   , ("⭢", RightArrow), ("⭠", LeftArrow)
   , ("→", RightArrow), ("←", LeftArrow)
   , ("⟼", RightArrow), ("↦", RightArrow)
+  , ("@", At), ("@@", AtAt)
   ]
 
 longestMatchingOperator :: SRString -> Maybe (SRToken, SRString)
@@ -178,6 +202,11 @@ wordlikeTokens = Map.fromList
   , ("vanishes", Vanishes), ("vanished", Vanishes)
   , ("iterations", Iterations), ("times", TimesKeyword)
   , ("stuck", Stuck)
+  , ("text", TextKeyword)
+  , ("append", AppendKeyword), ("prepend", PrependKeyword)
+  , ("join", JoinKeyword), ("remove", RemoveKeyword)
+  , ("find", FindKeyword), ("transform", TransformKeyword)
+  , ("range", RangeKeyword), ("length", LengthKeyword)
   ]
 
 data TokenGroup
@@ -201,6 +230,13 @@ tokenize' = \case
 
   -- Skip comments
   (('#',_):_) -> []
+
+  -- Tokenize quotes
+  (('"', srq) : etc) ->
+    let (body, etc') = skipString etc
+        txt = map fst $ take (length body - 1) body
+        sr = mconcat (srq : map snd body)
+    in SRToken (Quoted txt) sr : tokenize' etc'
 
   -- Tokenize positive numbers
   cs@(d:_)

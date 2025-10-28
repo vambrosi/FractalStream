@@ -42,6 +42,7 @@ data Event
   | Drag Point Point -- drag from / to
   | DragDone Point Point -- dragged from / to
   | Timer String -- timer with given name
+  | ButtonPressed String -- button press with given name
   | Refresh
   | Activated
   | Deactivated
@@ -53,6 +54,7 @@ data EventHandlers env = EventHandlers
   , ehOnDrag        :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT, 'RealT, 'RealT ])
   , ehOnDragDone    :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT, 'RealT, 'RealT ])
   , ehOnTimer       :: Map String (Int, SomeEventHandler env '[])
+  , ehOnButton      :: Map String (SomeEventHandler env '[])
   , ehOnRefresh     :: Maybe (SomeEventHandler env '[])
   , ehOnActivated   :: Maybe (SomeEventHandler env '[])
   , ehOnDeactivated :: Maybe (SomeEventHandler env '[])
@@ -64,6 +66,7 @@ data ParsedEventHandlers = ParsedEventHandlers
   , pehOnDrag :: Maybe (String, String, String, String, Bool, String)
   , pehOnDragDone :: Maybe (String, String, String, String, Bool, String)
   , pehOnTimer :: Map String (Int, String)
+  , pehOnButton :: Map String String
   , pehOnRefresh :: Maybe String
   , pehOnActivated :: Maybe String
   , pehOnDeactivated :: Maybe String
@@ -76,6 +79,7 @@ data ComplexParsedEventHandlers = ComplexParsedEventHandlers
   , cpehOnDrag :: Maybe (Either String String, String, Bool, String)
   , cpehOnDragDone :: Maybe (Either String String, String, Bool, String)
   , cpehOnTimer :: Map String (Int, String)
+  , cpehOnButton :: Map String String
   , cpehOnRefresh :: Maybe String
   , cpehOnActivated :: Maybe String
   , cpehOnDeactivated :: Maybe String
@@ -89,6 +93,7 @@ prependHandlerCode prefix p = ParsedEventHandlers
   , pehOnDrag = fmap (prefix ++) <$> pehOnDrag p
   , pehOnDragDone = fmap (prefix ++) <$> pehOnDragDone p
   , pehOnTimer = fmap (prefix ++) <$> pehOnTimer p
+  , pehOnButton = (prefix ++) <$> pehOnButton p
   , pehOnRefresh = (prefix ++) <$> pehOnRefresh p
   , pehOnActivated = (prefix ++) <$> pehOnActivated p
   , pehOnDeactivated = (prefix ++) <$> pehOnDeactivated p
@@ -177,6 +182,8 @@ toEventHandlers env viewerVars splices ParsedEventHandlers{..} = fmap swap $ fli
 
   ehOnDeactivated <- mmaybe (pehOnDeactivated) (fmap (toHandler . WithNoArgs) . parse env)
 
+  ehOnButton <- traverse (fmap (toHandler . WithNoArgs) . parse env) pehOnButton
+
   pure EventHandlers{..}
 
 
@@ -192,10 +199,10 @@ bind nameStr ty env k = case someSymbolVal nameStr of
     _ -> lift $ Left (symbolVal name <> " is defined twice")
 
 noEventHandlers :: ParsedEventHandlers
-noEventHandlers = ParsedEventHandlers Nothing Nothing Nothing Nothing Map.empty Nothing Nothing Nothing
+noEventHandlers = ParsedEventHandlers Nothing Nothing Nothing Nothing Map.empty Map.empty Nothing Nothing Nothing
 
 noComplexEventHandlers :: ComplexParsedEventHandlers
-noComplexEventHandlers = ComplexParsedEventHandlers Nothing Nothing Nothing Nothing Map.empty Nothing Nothing Nothing
+noComplexEventHandlers = ComplexParsedEventHandlers Nothing Nothing Nothing Nothing Map.empty Map.empty Nothing Nothing Nothing
 
 convertComplexToRealEventHandlers ::
   ComplexParsedEventHandlers -> ParsedEventHandlers
@@ -240,6 +247,7 @@ convertComplexToRealEventHandlers ComplexParsedEventHandlers{..}
     pehOnRefresh = cpehOnRefresh
     pehOnActivated = cpehOnActivated
     pehOnDeactivated = cpehOnDeactivated
+    pehOnButton = cpehOnButton
 
 instance FromJSON (String -> String -> ParsedEventHandlers) where
   parseJSON = withObject "event handler" $ \o -> do
@@ -308,6 +316,11 @@ instance FromJSON (String -> String -> ParsedEventHandlers) where
         code <- o .: "code"
         pure (\_ _ -> handler { pehOnDeactivated = Just code })
 
+      "button" -> do
+        btn <- o .: "label"
+        code <- o .: "code"
+        pure (\_ _ -> handler { pehOnButton = Map.singleton btn code })
+
       etc -> fail ("unknown event `" ++ etc ++ "`")
 
 instance FromJSON (String -> ComplexParsedEventHandlers) where
@@ -371,6 +384,11 @@ instance FromJSON (String -> ComplexParsedEventHandlers) where
         code <- o .: "code"
         pure (\_ -> handler { cpehOnDeactivated = Just code })
 
+      "button" -> do
+        btn <- o .: "label"
+        code <- o .: "code"
+        pure (\_ -> handler { cpehOnButton = Map.singleton btn code })
+
       etc -> fail ("unknown event `" ++ etc ++ "`")
 
 combineEventHandlers :: Either String ParsedEventHandlers
@@ -395,23 +413,30 @@ combineEventHandlers (Right lhs) rhs = do
                                 (pure <$> pehOnTimer rhs))
       repeatedTimer = (\k _ _ -> bad ("timer " ++ k))
 
+      combineButtons = sequence (Map.unionWithKey repeatedButton
+                                (pure <$> pehOnButton lhs)
+                                (pure <$> pehOnButton rhs))
+      repeatedButton = (\k _ _ -> bad ("button " ++ k))
+
   ParsedEventHandlers
     <$> combine pehOnClick "click"
     <*> combine pehOnDoubleClick "double-click"
     <*> combine pehOnDrag "drag"
     <*> combine pehOnDragDone "drag-finished"
     <*> combineTimers
+    <*> combineButtons
     <*> combine pehOnRefresh "refresh"
     <*> combine pehOnActivated "activated"
     <*> combine pehOnDeactivated "deactivated"
 
 handleEvent :: forall env
              . Context DynamicValue env
+            -> Bool
             -> DrawHandler ScalarIORefM
             -> EventHandlers env
             -> Event
             -> Maybe (IO ())
-handleEvent ctx draw EventHandlers{..} =
+handleEvent ctx refreshCanUpdate draw EventHandlers{..} =
   let run :: forall args
            . Maybe (SomeEventHandler env args)
           -> ArgList args
@@ -429,9 +454,10 @@ handleEvent ctx draw EventHandlers{..} =
     Timer t ->
       run (snd <$> Map.lookup t ehOnTimer) EndOfArgs
     Refresh ->
-      runEventHandler False ctx draw <$> ehOnRefresh <*> pure EndOfArgs
+      runEventHandler refreshCanUpdate ctx draw <$> ehOnRefresh <*> pure EndOfArgs
     Activated -> run ehOnActivated EndOfArgs
     Deactivated -> run ehOnDeactivated EndOfArgs
+    ButtonPressed name -> run (Map.lookup name ehOnButton) EndOfArgs
 
 data SomeEventHandler_ env args where
   WithNoArgs :: forall env

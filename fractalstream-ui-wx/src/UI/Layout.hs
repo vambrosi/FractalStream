@@ -17,11 +17,12 @@ import           Graphics.UI.WXCore.WxcDefs
 import Graphics.UI.WXCore.Frame (windowGetScreenPosition)
 
 generateWxLayout :: Dynamic dyn
-                 => Window a
+                 => (String -> IO ())
+                 -> Window a
                  -> Layout dyn
                  -> IO WX.Layout
 
-generateWxLayout frame0 wLayout = do
+generateWxLayout buttonPress frame0 wLayout = do
   panel0 <- panel frame0 []
   computedLayout <- go panel0 wLayout
   pure (container panel0 computedLayout)
@@ -33,8 +34,9 @@ generateWxLayout frame0 wLayout = do
 
      Panel pTitle inner -> do
        p' <- panel p [ ]
-       go p' inner
-       pure (fill $ boxed pTitle (widget p'))
+       lo <- go p' inner
+       set p' [ layout := lo ]
+       pure (fill $ boxed pTitle (fill $ widget p'))
 
      Vertical parts -> do
        p' <- panel p []
@@ -61,6 +63,17 @@ generateWxLayout frame0 wLayout = do
          notebookAddPage nb c lab True (-1)
        notebookSetSelection nb 0
        pure (fill $ widget nb)
+
+     PlainText txt -> do
+       p' <- panel p []
+       lo <- fill . margin 5 . floatCentre . widget <$> staticText p' [ text := txt ]
+       set p' [layout := lo]
+       pure (fill $ widget p')
+
+     Button txt -> do
+       btn <- button p [ text := txt
+                       , on command := buttonPress txt ]
+       pure (margin 5 $ widget btn)
 
      ColorPicker (Label lab) v -> do
        (r0, g0, b0) <- colorToRGB <$> getDynamic v

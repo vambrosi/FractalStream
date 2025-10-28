@@ -87,14 +87,6 @@ interpretToIO draw = indexedFold @ScalarIORefM phi
 
       DrawCommand d -> runDrawHandler draw d
 
-      Insert pf listName listTy env soe ve -> do
-        v <- eval ve
-        lst <- eval (withEnvironment env $ Var listName listTy pf)
-        let lst' = case soe of
-              Start -> (v : lst)
-              End   -> lst ++ [v]
-        update pf listName listTy lst'
-
       Lookup pfList listName listTy@(ListType itemTy) itemName pfNoItem _ env predicate action fallback ->
         recallIsAbsent pfNoItem $ do
         ctxRef <- get
@@ -108,24 +100,6 @@ interpretToIO draw = indexedFold @ScalarIORefM phi
                   True -> lift (evalStateT action ctxRef')
                   False -> go items
         go =<< eval (withEnvironment env $ Var listName listTy pfList)
-
-      ClearList pfList listName listTy _ -> do
-        update pfList listName listTy []
-
-      Remove pfList listName listTy@(ListType itemTy) itemName pfNoItem env predicate ->
-        recallIsAbsent pfNoItem $ do
-        ctxRef <- get
-        let go = \case
-              [] -> pure []
-              (item : items) -> do
-                itemRef <- lift (newIORef item)
-                let ctxRef' = Bind itemName itemTy itemRef ctxRef
-                matched <- lift (evalStateT (eval predicate) ctxRef')
-                case matched of
-                  False -> (item :) <$> go items
-                  True  -> go items
-        lst' <- go =<< eval (withEnvironment env $ Var listName listTy pfList)
-        update pfList listName listTy lst'
 
       ForEach pfList listName listTy@(ListType itemTy) itemName pfNoItem env _ body ->
         recallIsAbsent pfNoItem $ do

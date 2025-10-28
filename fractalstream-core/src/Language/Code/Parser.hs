@@ -136,6 +136,7 @@ codeGrammar splices = mdo
     [ (tok "draw" *> drawCommand <* nl)
     , (tok "use" *> penCommand <* nl)
     , (tok "erase" *> eraseCommand <* nl)
+    , (tok "write" *> writeCommand <* nl)
     ]
 
   eraseCommand <- ruleChoice [check (pure tcClear)]
@@ -164,22 +165,11 @@ codeGrammar splices = mdo
     , check (tcSetStroke <$> (value <* (tok "for" *> strokeOrLine)))
     ]
 
-  startOrEnd <- ruleChoice
-    [ tok "start" $> Start
-    , tok "end" $> End ]
+  writeCommand <- rule $
+    check (tcWrite <$> value <*> (tok "at" *> value))
 
   listCommand <- ruleChoice
-    [ check (tcListInsert
-      <$> (tok "insert" *> value <* tok "at")
-      <*> (startOrEnd <* tok "of")
-      <*> (ident <* nl))
-    , check (tcListRemoveSome
-      <$> (tok "remove" *> tok "each" *> ident)
-      <*> (tok "matching" *> value)
-      <*> (tok "from" *> ident <* nl))
-    , check (tcListRemoveAll
-      <$> (tok "remove" *> tok "all" *> tok "items" *> tok "from" *> ident <* nl))
-    , check (tcListFor
+    [ check (tcListFor
       <$> (tok "for" *> tok "each" *> ident)
       <*> (tok "in" *> ident)
       <*> (colon *> nl *> block))

@@ -215,12 +215,21 @@ evaluator v0 ctx = case v0 of
     R2C x -> x ctx :+ 0
     C2R2 z -> let x :+ y = z ctx
               in (x, y)
+    ToText t x -> showValue t (x ctx)
 
     AddI x y -> x ctx + y ctx
     SubI x y -> x ctx - y ctx
     MulI x y -> x ctx * y ctx
-    DivI x y -> x ctx `div` y ctx
-    ModI x y -> x ctx `mod` y ctx
+    DivI x y ->
+      let yy = y ctx
+      in if yy == 0
+         then error "Integer division by 0"
+         else x ctx `div` yy
+    ModI x y ->
+      let yy = y ctx
+      in if yy == 0
+         then error "Integer modulo by 0"
+         else x ctx `mod` yy
     PowI x y -> case (x ctx, y ctx) of
       (_, 0) -> 1
       (1, _) -> 1
@@ -247,3 +256,40 @@ evaluator v0 ctx = case v0 of
 
     LTI x y -> x ctx < y ctx
     LTF x y -> x ctx < y ctx
+
+    ConcatText xs -> concatMap ($ ctx) xs
+
+    Join _ xss -> concatMap ($ ctx) xss
+
+    Remove n ty pf xs test ->
+      [ x | x <- xs ctx, not $ test (recallIsAbsent pf (Bind n ty x ctx)) ]
+
+    Find n ty pf xs test x0 -> fromMaybe (x0 ctx) . listToMaybe $
+      [ x | x <- xs ctx, test (recallIsAbsent pf (Bind n ty x ctx)) ]
+
+    Transform n t1 _ pf xs f ->
+      [ f (recallIsAbsent pf (Bind n t1 x ctx)) | x <- xs ctx ]
+
+    Range lo hi -> [lo ctx .. hi ctx]
+
+    Index _ False xs_ i_ ->
+      let xs = xs_ ctx
+          i  = fromIntegral $ i_ ctx
+      in case xs of
+        [] -> error "Attempted to index into an empty list"
+        _  -> if i <= 0
+              then error ("Attempted to use a non-positive list index " ++ show i)
+              else if i > length xs
+                   then error ("List index " ++ show i ++ " is out of range")
+                   else (xs !! (i - 1))
+
+    Index _ True xs_ i_ ->
+      let xs = xs_ ctx
+          len = length xs
+          i0 = fromIntegral (i_ ctx - 1) `mod` len
+          i = 1 + (if i0 < 0 then i0 + length xs else i0)
+      in case xs of
+        [] -> error "Attempted to cyclically index into an empty list"
+        _  -> xs !! (i - 1)
+
+    Length _ xs -> fromIntegral $ length (xs ctx)

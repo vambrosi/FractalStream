@@ -72,14 +72,6 @@ simulate draw = indexedFold @(HaskellTypeM s) $ \case
 
   DrawCommand d -> runDrawHandler draw d
 
-  Insert pf listName listTy env soe ve -> do
-    v <- eval ve
-    lst <- eval (withEnvironment env $ Var listName listTy pf)
-    let lst' = case soe of
-          Start -> (v : lst)
-          End   -> lst ++ [v]
-    update pf listName listTy lst'
-
   Lookup pfList listName listTy@(ListType itemTy) itemName pfNoItem _ env predicate action fallback ->
         recallIsAbsent pfNoItem $ do
         let go = \case
@@ -93,24 +85,6 @@ simulate draw = indexedFold @(HaskellTypeM s) $ \case
                   True -> lift (evalStateT action (ctx', s))
                   False -> go items
         go =<< eval (withEnvironment env $ Var listName listTy pfList)
-
-  ClearList pfList listName listTy _ -> do
-    update pfList listName listTy []
-
-  Remove pfList listName listTy@(ListType itemTy) itemName pfNoItem env predicate ->
-    recallIsAbsent pfNoItem $ do
-    let go = \case
-          [] -> pure []
-          (item : items) -> do
-            (ctx, s) <- get
-            let ctx' = Bind itemName itemTy item ctx
-                (matched, (Bind _ _ _ ctx'', s')) = runState (eval predicate) (ctx', s)
-            put (ctx'', s')
-            case matched of
-              False -> (item :) <$> go items
-              True  -> go items
-    lst' <- go =<< eval (withEnvironment env $ Var listName listTy pfList)
-    update pfList listName listTy lst'
 
   ForEach pfList listName listTy@(ListType itemTy) itemName pfNoItem env _ body ->
     recallIsAbsent pfNoItem $ do

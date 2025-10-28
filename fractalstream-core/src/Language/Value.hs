@@ -170,6 +170,7 @@ data ValueF (value :: (Environment, FSType) -> Exp Type) (et :: (Environment, FS
   I2R :: forall env value. KnownEnvironment env => Eval (value '(env, 'IntegerT)) -> ValueF value '(env, 'RealT)
   R2C :: forall env value. KnownEnvironment env => Eval (value '(env, 'RealT)) -> ValueF value '(env, 'ComplexT)
   C2R2 :: forall env value. KnownEnvironment env => Eval (value '(env, 'ComplexT)) -> ValueF value '(env, 'Pair 'RealT 'RealT)
+  ToText :: forall env ty value. KnownEnvironment env => TypeProxy ty -> Eval (value '(env, ty)) -> ValueF value '(env, 'TextT)
 
   -- Boolean operations
   Or  :: forall env value. KnownEnvironment env => Eval (value '(env, 'BooleanT)) -> Eval (value '(env, 'BooleanT)) -> ValueF value '(env, 'BooleanT)
@@ -222,6 +223,58 @@ data ValueF (value :: (Environment, FSType) -> Exp Type) (et :: (Environment, FS
       => Eval (value '(env, 'RealT))
       -> Eval (value '(env, 'RealT))
       -> ValueF value '(env, 'BooleanT)
+
+  -- Text operations
+  ConcatText :: forall env value. KnownEnvironment env => [Eval (value '(env, 'TextT))] -> ValueF value '(env, 'TextT)
+
+  -- List operations
+  Join :: forall env ty value. KnownEnvironment env
+       => TypeProxy ty
+       -> [Eval (value '(env, 'ListT ty))]
+       -> ValueF value '(env, 'ListT ty)
+
+  Remove :: forall env ty name value. (KnownEnvironment env, KnownSymbol name)
+         => Proxy name
+         -> TypeProxy ty
+         -> NameIsAbsent name env
+         -> Eval (value '(env, 'ListT ty))
+         -> Eval (value '( '(name, ty) ': env, 'BooleanT))
+         -> ValueF value '(env, 'ListT ty)
+
+  Find :: forall env ty name value. (KnownEnvironment env, KnownSymbol name)
+       => Proxy name
+       -> TypeProxy ty
+       -> NameIsAbsent name env
+       -> Eval (value '(env, 'ListT ty))
+       -> Eval (value '( '(name, ty) ': env, 'BooleanT))
+       -> Eval (value '(env, ty))
+       -> ValueF value '(env, ty)
+
+  Transform :: forall env ty1 ty2 name value. (KnownEnvironment env, KnownSymbol name)
+            => Proxy name
+            -> TypeProxy ty1
+            -> TypeProxy ty2
+            -> NameIsAbsent name env
+            -> Eval (value '(env, 'ListT ty1))
+            -> Eval (value '( '(name, ty1) ': env, ty2))
+            -> ValueF value '(env, 'ListT ty2)
+
+  Range :: forall env value. KnownEnvironment env
+        => Eval (value '(env, 'IntegerT))
+        -> Eval (value '(env, 'IntegerT))
+        -> ValueF value '(env, 'ListT 'IntegerT)
+
+  Length :: forall env ty value. KnownEnvironment env
+         => TypeProxy ty
+         -> Eval (value '(env, 'ListT ty))
+         -> ValueF value '(env, 'IntegerT)
+
+  Index :: forall env ty value. KnownEnvironment env
+        => TypeProxy ty
+        -> Bool -- use cyclic indexing?
+        -> Eval (value '(env, 'ListT ty))
+        -> Eval (value '(env, 'IntegerT))
+        -> ValueF value '(env, ty)
 
 instance KnownEnvironment env => Num (Value '(env, 'IntegerT)) where
   (+) = AddI
@@ -379,6 +432,7 @@ instance IFunctor ValueF where
     I2R {} -> EnvType RealType
     R2C {} -> EnvType ComplexType
     C2R2 {} -> EnvType (PairType RealType RealType)
+    ToText {} -> EnvType TextType
 
     Or {} -> EnvType BooleanType
     And {} -> EnvType BooleanType
@@ -395,6 +449,16 @@ instance IFunctor ValueF where
 
     LTI {} -> EnvType BooleanType
     LTF {} -> EnvType BooleanType
+
+    ConcatText {} -> EnvType TextType
+
+    Join t _ -> withKnownType t $ EnvType (ListType t)
+    Remove _ t _ _ _ -> withKnownType t $ EnvType (ListType t)
+    Find _ t _ _ _ _ -> withKnownType t $ EnvType t
+    Transform _ _ t _ _ _ -> withKnownType t $ EnvType (ListType t)
+    Range {} -> EnvType (ListType IntegerType)
+    Length {} -> EnvType IntegerType
+    Index t _ _ _ -> EnvType t
 
   imap :: forall a b i
         . (forall j. EnvTypeProxy j -> Eval (a j) -> Eval (b j))
@@ -480,6 +544,7 @@ instance IFunctor ValueF where
       I2R x -> I2R (f (withEnv IntegerType) x)
       R2C x -> R2C (f (withEnv RealType) x)
       C2R2 x -> C2R2 (f (withEnv ComplexType) x)
+      ToText t x -> ToText t (f (withEnv t) x)
 
       Or  x y -> Or  (f (withEnv BooleanType) x) (f (withEnv BooleanType) y)
       And x y -> And (f (withEnv BooleanType) x) (f (withEnv BooleanType) y)
@@ -496,6 +561,23 @@ instance IFunctor ValueF where
 
       LTI x y -> LTI (f (withEnv IntegerType) x) (f (withEnv IntegerType) y)
       LTF x y -> LTF (f (withEnv RealType)    x) (f (withEnv RealType)    y)
+
+      ConcatText xs -> ConcatText (map (f (withEnv TextType)) xs)
+
+      Join t xs -> withKnownType t $ Join t (map (f (withEnv (ListType t))) xs)
+      Remove n t pf lst test -> recallIsAbsent pf $ withKnownType t $
+        let innerEnv = envTypeProxy (BindingProxy n t env)
+        in Remove n t pf (f (withEnv (ListType t)) lst) (f (innerEnv BooleanType) test)
+      Find n t pf lst test x -> recallIsAbsent pf $ withKnownType t $
+        let innerEnv = envTypeProxy (BindingProxy n t env)
+        in Find n t pf (f (withEnv (ListType t)) lst) (f (innerEnv BooleanType) test) (f (withEnv t) x)
+      Transform n t1 t2 pf lst m -> recallIsAbsent pf $ withKnownType t1 $ withKnownType t2 $
+        let innerEnv = envTypeProxy (BindingProxy n t1 env)
+        in Transform n t1 t2 pf (f (withEnv (ListType t1)) lst) (f (innerEnv t2) m)
+      Range lo hi -> Range (f (withEnv IntegerType) lo) (f (withEnv IntegerType) hi)
+      Length t xs -> withKnownType t $ Length t (f (withEnv (ListType t)) xs)
+      Index t cyc xs i -> withKnownType t $
+        Index t cyc (f (withEnv (ListType t)) xs) (f (withEnv IntegerType) i)
 
 ---------------------------------------------------------------------------------
 -- Indexed traversable instance for values
@@ -579,6 +661,7 @@ instance ITraversable ValueF  where
     I2R mx -> I2R <$> mx
     R2C mx -> R2C <$> mx
     C2R2 mx -> C2R2 <$> mx
+    ToText t mx -> ToText t <$> mx
 
     Or  mx my -> Or  <$> mx <*> my
     And mx my -> And <$> mx <*> my
@@ -596,6 +679,15 @@ instance ITraversable ValueF  where
     LTI mx my -> LTI <$> mx <*> my
     LTF mx my -> LTF <$> mx <*> my
 
+    ConcatText mxs -> ConcatText <$> sequenceA mxs
+
+    Join t mxs -> Join t <$> sequenceA mxs
+    Remove n t pf mlst mtest -> Remove n t pf <$> mlst <*> mtest
+    Find n t pf mlst mtest md -> Find n t pf <$> mlst <*> mtest <*> md
+    Transform n t1 t2 pf mlst mf -> Transform n t1 t2 pf <$> mlst <*> mf
+    Range mlo mhi -> Range <$> mlo <*> mhi
+    Length t mlst -> Length t <$> mlst
+    Index t cyc mlst mi -> Index t cyc <$> mlst <*> mi
 
 instance Show (Value et) where show = pprint
 
@@ -616,6 +708,7 @@ pprint = indexedFold @PrecString @ValueF go
       ColorType -> show c
       VoidType  -> show c
       ImageType -> show c
+      TextType  -> show c
       PairType (t1 :: TypeProxy t1) (t2 :: TypeProxy t2) ->
         let (x,y) = c
         in concat [ "(", go @'(Env et', t1) (Const (Scalar t1 x)), ", "
@@ -640,6 +733,7 @@ pprint = indexedFold @PrecString @ValueF go
     I2R x    -> x ++ ":R"
     R2C x    -> x ++ ":C"
     C2R2 x   -> x ++ ":R^2"
+    ToText _ x -> x ++ ":Text"
     Or x y   -> binop "or" x y
     And x y  -> binop "and" x y
     Not x    -> "!" ++ x
@@ -695,6 +789,14 @@ pprint = indexedFold @PrecString @ValueF go
     ImC x -> fun "im" [x]
     ArgC x -> fun "arg" [x]
     ConjC x -> fun "bar" [x]
+    ConcatText xs -> fun "text" xs
+    Join _ xs -> fun "join" xs
+    Remove n _ _ lst p -> concat ["remove(", lst, ", ", symbolVal n, " ⟼ ", p, ")"]
+    Find n _ _ lst p d -> concat ["find(", lst, ", ", symbolVal n, " ⟼ ", p, ", ", d, ")"]
+    Transform n _ _ _ lst f -> concat ["transform(", lst, ", ", symbolVal n, " ⟼ ", f, ")"]
+    Range lo hi -> fun "range" [lo, hi]
+    Length _ x -> concat ["|", x, "|"]
+    Index _ cyc lst i -> concat ["(", lst, if cyc then "@@" else "@", i, ")"]
 
   fun f args = concat [f, "(", intercalate ", " args, ")"]
   binop op x y = concat ["(", x, " ", op, " ", y, ")"]

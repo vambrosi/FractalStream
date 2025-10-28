@@ -20,6 +20,7 @@ data ParsedTool = ParsedTool
   { ptoolInfo :: ToolInfo
   , ptoolDrawLayer :: Int
   , ptoolRefreshOnActivate :: Bool
+  , ptoolRefreshCanUpdate :: Bool
   , ptoolConfig :: Maybe Configuration
   , ptoolEventHandlers :: ParsedEventHandlers
   }
@@ -56,6 +57,7 @@ instance FromJSON (String -> String -> Either String RealTool) where
     tiHelp <- o .:? "help" .!= ""
     let ptoolInfo = ToolInfo{..}
     ptoolRefreshOnActivate <- o .:? "refresh-on-activation" .!= True
+    ptoolRefreshCanUpdate <- o .:? "refresh-can-update" .!= False
     ptoolConfig <- o .:? "configuration"
     ptoolDrawLayer <- o .:? "draw-to-layer" .!= 100
     handlers <- o .:? "actions" .!= []
@@ -73,6 +75,7 @@ instance FromJSON (String -> Either String ComplexTool) where
     tiHelp <- o .:? "help" .!= ""
     let ptoolInfo = ToolInfo{..}
     ptoolRefreshOnActivate <- o .:? "refresh-on-activation" .!= True
+    ptoolRefreshCanUpdate <- o .:? "refresh-can-update" .!= False
     ptoolConfig <- o .:? "configuration"
     ptoolDrawLayer <- o .:? "draw-to-layer" .!= 100
     handlers <- o .:? "actions" .!= []
@@ -93,6 +96,7 @@ defaultComplexSelectionTool name = ParsedTool{..}
       }
     ptoolDrawLayer = 100
     ptoolRefreshOnActivate = False
+    ptoolRefreshCanUpdate = False
     ptoolConfig = Nothing
     ptoolEventHandlers = convertComplexToRealEventHandlers $ noComplexEventHandlers
       { cpehOnClick = Just (Left name, True, "pass")
