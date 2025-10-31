@@ -252,9 +252,7 @@ valueGrammar splices = mdo
         <$> tokenMatch (\case { NumberF n -> Just n; _ -> Nothing }))
     , check (tcAbs <$> (token Bar *> arith <* token Bar))
 
-    , tokenMatch $ \case
-        Identifier n -> Map.lookup n splices
-        _ -> Nothing
+    , splicedValue
 
     , textConcat
     , var
@@ -263,6 +261,11 @@ valueGrammar splices = mdo
     ]
 
   quoted <- rule $ tokenMatch (\case { Quoted txt -> Just txt; _ -> Nothing })
+
+  splicedValue <- rule $
+    token OpenSplice *>
+    (tokenMatch $ \case { Identifier n -> Map.lookup n splices; _ -> Nothing })
+    <* token CloseSplice
 
   var <- rule $ check (
     fmap tcVar . tokenMatch $ \case

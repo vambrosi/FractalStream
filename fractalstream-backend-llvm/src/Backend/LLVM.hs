@@ -125,6 +125,7 @@ toFFIArg _ t v = case t of
     pure (argPtr c, free c)
   ListType _ -> pure (argInt32 0, pure ())
   TextType -> pure (argInt32 0, pure ())
+  BooleanType -> pure (argInt8 (if v then 1 else 0), pure ())
   _ -> error ("todo: toFFIArg " ++ showType t)
 
 fromFFIRetArg :: TypeProxy ty
@@ -139,7 +140,9 @@ fromFFIRetArg t ptr = case t of
   ColorType -> do
     [cr,cg,cb] <- peekArray 3 (castPtr ptr)
     pure (rgbToColor (cr, cg, cb))
-
+  BooleanType -> do
+    v <- peek (castPtr @_ @Int8 ptr)
+    pure (v /= 0)
   _ -> error ("todo: fromFFIRetArg " ++ showType t)
 
 withCompiledCode :: forall env
@@ -223,7 +226,18 @@ withViewerCode' (dylib, session, compileLayer, nextId) x y dx dy output c action
   m <- either error pure (compileRenderer' (fromString name) x y dx dy output optimizedCode)
   withContext $ \ctx ->
     withModuleFromAST ctx m $ \md -> do
-    let pm = defaultCuratedPassSetSpec
+    let pm = CuratedPassSetSpec
+             { optLevel = Just 2 -- "-O2"?
+             , sizeLevel = Nothing
+             , unitAtATime = Nothing
+             , simplifyLibCalls = Nothing
+             , loopVectorize = Nothing
+             , superwordLevelParallelismVectorize = Nothing
+             , useInlinerWithThreshold = Nothing
+             , dataLayout = Nothing
+             , targetLibraryInfo = Nothing
+             , targetMachine = Nothing
+             }
     withPassManager pm (`runPassManager` md)
     asm' <- BS.unpack <$> moduleLLVMAssembly md
 

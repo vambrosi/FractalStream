@@ -196,20 +196,15 @@ tcScalar name ty' v sr ty = case sameHaskellType ty ty' of
   Nothing   -> throwError (Surprise sr name (an $ SomeType ty') (Expected $ an ty))
 
 tcIterations :: Splices -> CheckedValue
-tcIterations splices sr = \case
-  IntegerType -> case Map.lookup internalIterations splices of
-      Nothing -> throwError $ internal (Advice sr "The script's internal iteration counter was not defined.")
-      Just r  -> atType r IntegerType
-  ty -> throwError (Surprise sr "the `iterations` counter" (an ty) (Expected "an integer"))
+tcIterations splices sr ty = case Map.lookup internalIterations splices of
+  Nothing -> throwError $ internal
+    (Advice sr "The script's internal iteration counter was not defined.")
+  Just r  -> atType r ty
 
 tcStuck :: Splices -> CheckedValue
-tcStuck splices sr = \case
-  BooleanType -> case Map.lookup internalIterations splices of
-    Just lhs -> case Map.lookup internalIterationLimit splices of
-      Just rhs -> tcAppxEql splices lhs rhs sr BooleanType
-      Nothing  -> throwError (Advice sr "The script's iteration limit was not defined.")
-    Nothing -> throwError (internal $ Advice sr "The script's internal iteration counter was not defined.")
-  ty -> throwError (Surprise sr "the `stuck` keyword" (an ty) (Expected "a truth value"))
+tcStuck splices sr ty = case Map.lookup internalStuck splices of
+  Just (ParsedValue _ stuck) -> ParsedValue sr stuck `atType` ty
+  Nothing -> throwError (internal $ Advice sr "The script's internal `stuck` status variable was not defined.")
 
 tcAbs :: ParsedValue -> CheckedValue
 tcAbs x sr = \case
@@ -383,12 +378,15 @@ tcVanishes splices pv sr = \case
       Just r  -> LTF p <$> atType r RealType
   ty -> throwError (Surprise sr "the result of `vanishes`" "a truth value" (Expected $ an (SomeType ty)))
 
-internalEscapeRadius, internalVanishingRadius, internalIterations, internalIterationLimit :: String
+internalEscapeRadius, internalVanishingRadius, internalIterations :: String
+internalStuck, internalIterationLimit :: String
 internalEscapeRadius    = "[internal] escape radius"
 internalVanishingRadius = "[internal] vanishing radius"
-internalIterations =      "[internal] iteration count"
+internalIterations      = "[internal] iteration count"
 type InternalIterations = "[internal] iteration count"
-internalIterationLimit = "[internal] iteration limit"
+internalIterationLimit  = "[internal] iteration limit"
+type InternalStuck      = "[internal] stuck"
+internalStuck           = "[internal] stuck"
 
 tcText :: [ParsedValue] -> CheckedValue
 tcText args sr = \case

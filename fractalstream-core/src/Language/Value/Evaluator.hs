@@ -162,7 +162,11 @@ evaluator v0 ctx = case v0 of
     SubF x y -> x ctx - y ctx
     MulF x y -> x ctx * y ctx
     DivF x y -> x ctx / y ctx
-    ModF x y -> fmod (x ctx) (y ctx)
+    ModF x y ->
+      let y' = y ctx
+          m = fmod (x ctx) (y ctx)
+      in if m < y' then m + y' else m
+
     PowF x n -> x ctx ** n ctx
     AbsF x   -> abs (x ctx)
     NegF x   -> negate (x ctx)

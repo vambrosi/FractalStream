@@ -1,5 +1,6 @@
 module UI.CodeEditor
   ( codeEditor
+  , frameIsLight
   ) where
 
 import FractalStream.Prelude hiding (get)
@@ -7,20 +8,23 @@ import FractalStream.Prelude hiding (get)
 import Graphics.UI.WX hiding (Vertical, Horizontal)
 import Graphics.UI.WXCore.WxcClasses
 
-codeEditor :: Frame () -> Window a -> String -> IO (StyledTextCtrl ())
-codeEditor ce cep code = do
+frameIsLight :: Window a -> IO Bool
+frameIsLight ce = do
+  col <- get ce bgcolor
+  let rc :: Float = colorRed col / 255
+      gc = colorGreen col / 255
+      bc = colorBlue col / 255
+  pure (0.299 * rc + 0.587 * gc + 0.114 * bc > 0.5)
+
+codeEditor :: Window a -> String -> IO (StyledTextCtrl ())
+codeEditor cep code = do
     stc <- styledTextCtrl cep [ clientSize := sz 100 100 ]
     styledTextCtrlSetMarginWidth stc 0 30
     styledTextCtrlSetMarginWidth stc 1 0
     styledTextCtrlSetMarginWidth stc 2 0
     -- see Style Definition at https://www.scintilla.org/ScintillaDoc.html#Styling
-    lum <- do
-      col <- get ce bgcolor
-      let rc :: Float = colorRed col / 255
-          gc = colorGreen col / 255
-          bc = colorBlue col / 255
-      pure (0.299 * rc + 0.587 * gc + 0.114 * bc)
-    if lum > 0.5
+    isLight <- frameIsLight cep
+    if isLight
       then do
         styledTextCtrlStyleSetSpec stc  0 "fore:#000000,back:#f8f8f8"
         styledTextCtrlStyleSetSpec stc 32 "fore:#000000,back:#f8f8f8"

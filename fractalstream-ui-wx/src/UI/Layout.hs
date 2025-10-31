@@ -7,6 +7,9 @@ import FractalStream.Prelude hiding (get)
 import Data.Color (colorToRGB, rgbToColor)
 import Data.DynamicValue
 import Actor.Layout
+import Data.IORef
+
+import UI.CodeEditor
 
 import Graphics.UI.WX hiding (pt, glue, when, tool, Object, Dimensions, Horizontal, Vertical, Layout, Color)
 import qualified Graphics.UI.WXCore.Events as WX
@@ -25,7 +28,7 @@ generateWxLayout :: Dynamic dyn
 generateWxLayout buttonPress frame0 wLayout = do
   panel0 <- panel frame0 []
   computedLayout <- go panel0 wLayout
-  pure (container panel0 computedLayout)
+  pure (container panel0 $ fill $ computedLayout)
 
  where
 
@@ -36,19 +39,19 @@ generateWxLayout buttonPress frame0 wLayout = do
        p' <- panel p [ ]
        lo <- go p' inner
        set p' [ layout := lo ]
-       pure (fill $ boxed pTitle (fill $ widget p'))
+       pure (hstretch $ expand $ boxed pTitle (fill $ widget p'))
 
      Vertical parts -> do
        p' <- panel p []
-       lo <- fill . column 5 <$> mapM (go p') parts
+       lo <- hstretch . expand . column 5 <$> mapM (go p') parts
        set p' [ layout := lo ]
-       pure (fill (widget p'))
+       pure (hstretch $ expand (widget p'))
 
      Horizontal parts -> do
        p' <- panel p []
-       lo <- fill . margin 10 . row 5 <$> mapM (go p') parts
+       lo <- fill . row 5 <$> mapM (go p') parts
        set p' [ layout := lo ]
-       pure (fill (widget p'))
+       pure (hstretch $ expand (widget p'))
 
      Tabbed ts -> do
        nb <- feed2 [ visible := True ] 0 $
@@ -68,12 +71,12 @@ generateWxLayout buttonPress frame0 wLayout = do
        p' <- panel p []
        lo <- fill . margin 5 . floatCentre . widget <$> staticText p' [ text := txt ]
        set p' [layout := lo]
-       pure (fill $ widget p')
+       pure (hstretch $ expand $ widget p')
 
      Button txt -> do
        btn <- button p [ text := txt
                        , on command := buttonPress txt ]
-       pure (margin 5 $ widget btn)
+       pure (floatRight $ margin 5 $ widget btn)
 
      ColorPicker (Label lab) v -> do
        (r0, g0, b0) <- colorToRGB <$> getDynamic v
@@ -89,7 +92,7 @@ generateWxLayout buttonPress frame0 wLayout = do
                  b = colorBlue c
              void (setDynamic v (rgbToColor (r, g, b)))
        WX.windowOnEvent picker [wxEVT_COMMAND_COLOURPICKER_CHANGED] newPick (const newPick)
-       pure (fill $ row 5 [ margin 3 (label lab), hfill (widget picker) ])
+       pure (hstretch $ expand $ row 5 [ margin 3 (label lab), hfill (widget picker) ])
 
      CheckBox (Label lab) v -> do
        initial <- getDynamic v
@@ -104,6 +107,24 @@ generateWxLayout buttonPress frame0 wLayout = do
               ]
        listenWith v (\_ isChecked -> set cb [ checked := isChecked ])
        pure (widget cb)
+
+     Multiline v -> do
+       txt <- getDynamic v
+       p' <- panel p []
+       ce <- codeEditor p' txt
+       lastText <- newIORef txt
+       set ce [ on focus := \tf -> do
+                  case tf of
+                    True -> styledTextCtrlGetText ce >>= writeIORef lastText
+                    False -> do
+                      new <- styledTextCtrlGetText ce
+                      old <- readIORef lastText
+                      when (new /= old) $ do
+                        writeIORef lastText new
+                        void (setDynamic v new)
+                  propagateEvent
+              ]
+       pure (container p' $ fill $ widget ce)
 
      TextBox (Label lab) v -> do
        initial <- getDynamic v
@@ -175,4 +196,4 @@ generateWxLayout buttonPress frame0 wLayout = do
                     propagateEvent
               ]
        listenWith v (\_ newText -> set te [ text := newText ])
-       pure (fill $ row 5 [ margin 3 (label lab), hfill (widget te) ])
+       pure (hstretch $ expand $ row 5 [ margin 3 (label lab), hfill (widget te) ])

@@ -33,6 +33,16 @@ import Data.DynamicValue
 import Language.Value.Evaluator (HaskellTypeOfBinding, evaluate)
 import Language.Value
 import Language.Value.Parser
+import Language.Code
+import Language.Code.Parser
+import Language.Value.Typecheck ( internalVanishingRadius
+                                , internalEscapeRadius
+                                , internalIterationLimit
+                                , internalIterations
+                                , internalStuck )
+import Language.Parser.SourceRange
+import Language.Typecheck
+
 
 import Data.Aeson hiding (Value)
 import qualified Data.Aeson.Types as JSON
@@ -41,7 +51,7 @@ import qualified Data.Text as Text
 import Text.Read (readMaybe)
 
 newtype Label = Label String
-  deriving Show
+  deriving (Show, IsString)
 
 instance FromJSON Label where
   parseJSON = withText "label" (pure . Label . Text.unpack)
@@ -56,6 +66,7 @@ data Layout f
   | ColorPicker Label (f Color)
   | PlainText String
   | Button String
+  | Multiline (f String)
 
 deriving instance (Show (f String), Show (f Bool), Show (f Color)) => Show (Layout f)
 
@@ -103,6 +114,7 @@ parseLayout o
   <|> (colorPickerLayout =<< (o .: "color-picker"))
   <|> (PlainText <$> (o .: "text"))
   <|> (Button <$> (o .: "button"))
+  <|> (multilineLayout =<< (o .: "code"))
   <|> fail "bad layout description"
  where
    titled p = (,) <$> (p .: "title") <*> parseLayout p
@@ -132,6 +144,13 @@ parseLayout o
          varEnv = Map.empty
      pure (ColorPicker lab (Dummy ConfigVar{..}))
 
+   multilineLayout p = do
+     varVariable <- p .: "variable"
+     varEnv <- Map.map getSomeType <$> (p .:? "environment" .!= Map.empty)
+     let varType = SomeType TextType
+     varValue <- p .: "value"
+     pure (Multiline (Dummy ConfigVar{..}))
+
 allBindings :: Layout Dummy -> [(String, SomeType)]
 allBindings = map (\ConfigVar{..} -> (varVariable, varType)) . allBindingVars
 
@@ -148,6 +167,7 @@ allBindingVars = go
       ColorPicker _ (Dummy x) -> [x]
       PlainText _ -> []
       Button {} -> []
+      Multiline (Dummy x) -> [x]
 
 extractAllBindings :: (forall t. f t -> a)
                    -> Layout f
@@ -164,6 +184,7 @@ extractAllBindings extractor = go
       ColorPicker _ x -> [extractor x]
       PlainText _ -> []
       Button {} -> []
+      Multiline x -> [extractor x]
 
 parseToHaskellValue :: forall env ty
                      . Context HaskellTypeOfBinding env
@@ -207,22 +228,38 @@ data Expression t where
              -> Expression String
   BoolExpression :: String -> UIValue Bool -> Expression Bool
   ColorExpression :: String -> UIValue Color -> Expression Color
+  ScriptExpression :: forall env
+                       . String
+                      -> EnvironmentProxy env
+                      -> UIValue (String, Code env)
+                      -> Expression String
 
 instance Dynamic Expression where
   getDynamic = \case
     BoolExpression _ b -> getDynamic b
     ColorExpression _ c -> getDynamic c
     Expression _ _ _ v -> fst <$> getDynamic v
+    ScriptExpression _ _ e -> do
+      x <- fst <$> getDynamic e
+      putStrLn ("Script expression:\n" ++ x)
+      return x
 
   setDynamic d new = case d of
     BoolExpression _ b -> setDynamic b new
     ColorExpression _ c -> setDynamic c new
+    ScriptExpression _ env e ->
+      withEnvironment env $ do
+        case parseCode env basicSplices new of
+          Left err -> pure (Just $ ppFullError err new)
+          Right newC -> do
+            setDynamic e (new, newC)
+            pure Nothing
     Expression _ (env :: EnvironmentProxy env) (ty :: TypeProxy ty) v ->
       withEnvironment env $ withKnownType ty $ do
         let new' = case ty of
               TextType -> show new
               _  -> new
-        case parseInputValue @env @ty Map.empty new' of
+        case parseInputValue @env @ty basicSplices new' of
           Left err   -> pure (Just $ ppFullError err new)
           Right newV -> do
             setDynamic v (new, newV)
@@ -231,6 +268,7 @@ instance Dynamic Expression where
   listenWith d action = case d of
     BoolExpression _ b -> listenWith b action
     ColorExpression _ c -> listenWith c action
+    ScriptExpression _ _ e -> listenWith e (\old new -> action (fst old) (fst new))
     Expression _ _ _ v ->
       listenWith v (\old new -> action (fst old) (fst new))
 
@@ -242,16 +280,19 @@ data ConstantExpression t where
                      -> ConstantExpression String
   ConstantBoolExpression :: String -> UIValue Bool -> ConstantExpression Bool
   ConstantColorExpression :: String -> UIValue Color -> ConstantExpression Color
+  ConstantScriptExpression :: String -> UIValue String -> ConstantExpression String
 
 instance Dynamic ConstantExpression where
   getDynamic = \case
     ConstantBoolExpression _ b -> getDynamic b
     ConstantColorExpression _ c -> getDynamic c
+    ConstantScriptExpression _ e -> getDynamic e
     ConstantExpression _ _ v -> fst <$> getDynamic v
 
   setDynamic d new = case d of
     ConstantBoolExpression _ b -> setDynamic b new
     ConstantColorExpression _ c -> setDynamic c new
+    ConstantScriptExpression _ e -> setDynamic e new
     ConstantExpression _ (ty :: TypeProxy ty) v ->
       withKnownType ty $ do
       let new' = case ty of
@@ -266,6 +307,7 @@ instance Dynamic ConstantExpression where
   listenWith d action = case d of
     ConstantBoolExpression _ b -> listenWith b action
     ConstantColorExpression _ c -> listenWith c action
+    ConstantScriptExpression _ e -> listenWith e action
     ConstantExpression _ _ v ->
       listenWith v (\old new -> action (fst old) (fst new))
 
@@ -287,20 +329,20 @@ allocateUIExpressions = go
         SomeType (ty :: TypeProxy ty) -> withKnownType ty $
           withEnvFromMap varEnv $ \(env :: EnvironmentProxy env) ->
             withEnvironment env $
-            case parseInputValue @env @ty Map.empty varValue of
+            case parseInputValue @env @ty basicSplices varValue of
               Left err -> throwError (ppFullError err varValue)
               Right v  ->
                 TextBox lab . Expression varVariable env ty
                 <$> newUIValue (varValue, v)
 
       CheckBox lab (Dummy ConfigVar{..}) ->
-        case parseInputValue @'[] @'BooleanT Map.empty varValue of
+        case parseInputValue @'[] @'BooleanT basicSplices varValue of
           Left err -> throwError (ppFullError err varValue)
           Right v  -> CheckBox lab . BoolExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
 
       ColorPicker lab (Dummy ConfigVar{..}) ->
-        case parseInputValue @'[] @'ColorT Map.empty varValue of
+        case parseInputValue @'[] @'ColorT basicSplices varValue of
           Left err -> throwError (ppFullError err varValue)
           Right v  -> ColorPicker lab . ColorExpression varVariable
                       <$> newUIValue (evaluate v EmptyContext)
@@ -308,6 +350,13 @@ allocateUIExpressions = go
       PlainText txt -> pure (PlainText txt)
 
       Button txt -> pure (Button txt)
+
+      Multiline (Dummy ConfigVar{..}) ->
+        withEnvFromMap varEnv $ \env -> withEnvironment env $
+          case parseCode env basicSplices varValue of
+            Left err -> throwError (ppFullError err varValue)
+            Right c -> Multiline . ScriptExpression varVariable env
+                       <$> newUIValue (varValue, c)
 
 allocateUIConstants :: Layout Dummy
                     -> ExceptT String IO (Layout ConstantExpression)
@@ -346,12 +395,14 @@ allocateUIConstants = go
 
       Button txt -> pure (Button txt)
 
+      Multiline _ -> error "TODO: allocateUIConstants for Multiline"
+
 withSplices :: forall t
              . Layout Expression
             -> (Splices -> IO t) --(forall splices. Context Splice splices -> IO t)
             -> IO t
 withSplices lo action =
-    go [] (extractAllBindings toSomeUIExpr lo)
+    go [] (catMaybes $ extractAllBindings toSomeUIExpr lo)
   where
     go :: [(String, ParsedValue)] -> [SomeUIExpr] -> IO t
     go splices = \case
@@ -365,20 +416,27 @@ withSplices lo action =
       Left{} -> error "Left"
       Right x -> x
 
-    toSomeUIExpr :: forall a. Expression a -> SomeUIExpr
+    toSomeUIExpr :: forall a. Expression a -> Maybe SomeUIExpr
     toSomeUIExpr = \case
-      Expression nameStr _ ty v ->
+      Expression nameStr _ ty v -> Just $
         case someSymbolVal nameStr of
           SomeSymbol name ->
-            SomeUIExpr name ty (unsafeFromRight . parseParsedValue Map.empty . fst <$> getDynamic v)
-      BoolExpression nameStr b ->
+            SomeUIExpr name ty (unsafeFromRight . parseParsedValue Map.empty . fst
+                                <$> getDynamic v)
+      BoolExpression nameStr b -> Just $
         case someSymbolVal nameStr of
           SomeSymbol name ->
-            SomeUIExpr name BooleanType (unsafeFromRight . parseParsedValue Map.empty . showValue BooleanType <$> getDynamic b)
-      ColorExpression nameStr b ->
+            SomeUIExpr name BooleanType
+            (unsafeFromRight . parseParsedValue Map.empty . showValue BooleanType <$>
+             getDynamic b)
+      ColorExpression nameStr b -> Just $
         case someSymbolVal nameStr of
           SomeSymbol name ->
-            SomeUIExpr name ColorType (unsafeFromRight . parseParsedValue Map.empty . showValue ColorType <$> getDynamic b)
+            SomeUIExpr name ColorType
+            (unsafeFromRight . parseParsedValue Map.empty . showValue ColorType <$>
+             getDynamic b)
+      ScriptExpression {} -> Nothing -- can't build a splice value from a script
+
 {-
 withSplices lo action = go EmptyContext (extractAllBindings toSomeUIExpr lo)
   where
@@ -442,6 +500,10 @@ withDynamicBindings lo action =
         case someSymbolVal nameStr of
           SomeSymbol name ->
             SomeUIValue name ColorType (SomeDynamic c)
+      ConstantScriptExpression nameStr b ->
+        case someSymbolVal nameStr of
+          SomeSymbol name ->
+            SomeUIValue name TextType (SomeDynamic b)
 
 data ConstantExpression' t where
   ConstantExpression' :: forall ty t
@@ -478,3 +540,28 @@ toSomeDynamic = \case
   ColorPicker lab x -> ColorPicker lab (SomeDynamic x)
   PlainText txt -> PlainText txt
   Button txt -> Button txt
+  Multiline txt -> Multiline (SomeDynamic txt)
+
+basicSplices :: Splices
+basicSplices = Map.fromList
+  [ (internalEscapeRadius, ParsedValue NoSourceRange $ \case
+        RealType -> pure 10.0
+        _ -> throwError $ Advice NoSourceRange "The escape radius should be a real number"
+    )
+  , (internalVanishingRadius, ParsedValue NoSourceRange $ \case
+        RealType -> pure 0.0001
+        _ -> throwError $ Advice NoSourceRange "The minimum radius should be a real number"
+    )
+  , (internalIterationLimit, ParsedValue NoSourceRange $ \case
+        IntegerType -> pure 100
+        _ -> throwError $ Advice NoSourceRange "The iteration limit should be an integer"
+    )
+  , (internalIterations, ParsedValue NoSourceRange $ \case
+        IntegerType -> pure 100
+        _ -> throwError $ Advice NoSourceRange "The iteration count should be an integer"
+    )
+  , (internalStuck, ParsedValue NoSourceRange $ \case
+        BooleanType -> pure $ Const (Scalar BooleanType True)
+        _ -> throwError $ Advice NoSourceRange "`stuck` should be a truth value"
+    )
+  ]

@@ -19,7 +19,7 @@ import qualified Data.Yaml as YAML
 import UI.Welcome
 
 import Backend
-import Graphics.UI.WX -- (start)
+import Graphics.UI.WX --(start)
 import Graphics.UI.WXCore.Draw (withFontStyle)
 import Graphics.UI.WXCore.Frame (windowChildren)
 import Graphics.UI.WXCore.WxcClasses (styledTextCtrlStyleSetFont, styledTextCtrlSetText)
@@ -41,17 +41,36 @@ main = withBackend $ \complexViewerCompiler -> start $ do
               . (`catch` errorCalled projectWindow)
               . (`catch` badYaml projectWindow yamlFile)
 
+
         withRecoveryActions $ do
-          ensemble <- YAML.decodeFileThrow yamlFile
+
+          prj <- either error id <$> parseTemplateFromFile yamlFile
+
           let si = SessionInfo
                 { sessionName = yamlFile
                 , sessionHandle = SessionHandle projectWindow
                 , sessionVisible = True
                 , sessionUnsaved = False }
           modifyUIValue sessions (si :)
-          runEnsemble complexViewerCompiler
+          runTemplate complexViewerCompiler
             (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}))
-            ensemble
+            prj
+
+      projectOpenTemplate = \name prj -> do
+        projectWindow <- frame [ visible := False ]
+        let withRecoveryActions
+              = (`catch` badProjectFile projectWindow name)
+              . (`catch` errorCalled projectWindow)
+        withRecoveryActions $ do
+          let si = SessionInfo
+                { sessionName = name
+                , sessionHandle = SessionHandle projectWindow
+                , sessionVisible = True
+                , sessionUnsaved = False }
+          modifyUIValue sessions (si :)
+          runTemplate complexViewerCompiler
+            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}))
+            prj
 
       projectEdit = editProject
 

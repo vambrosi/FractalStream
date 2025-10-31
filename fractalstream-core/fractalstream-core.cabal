@@ -109,6 +109,7 @@ library
   build-depends:       base >=4.8 && <5,
                        random,
                        aeson,
+                       yaml,
                        array,
                        async,
                        containers,

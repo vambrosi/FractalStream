@@ -10,8 +10,8 @@ viewers:
     initial-pixel-size: 1/128
     code: |
         z : ℂ ⭠ 0
-        until stop:
-          z ⭠ f
+        until $stop$:
+          z ⭠ $f$
           d : ℝ ⭠ |z - twist_center|
           if d > r0 and d < r1:
             theta : ℝ ⭠ 2 pi (d - r0) / (r1 - r0)
@@ -37,8 +37,8 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        until stop:
-          z ⭠ f
+        until $stop$:
+          z ⭠ $f$
           d : ℝ ⭠ |z - twist_center|
           if d > r0 and d < r1:
             theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
@@ -65,10 +65,10 @@ viewers:
               prevZ : ℂ ⭠ z
               k : ℤ ⭠ 0
               erase
-              until stop up to 100 times:
+              until $stop$ up to 100 times:
                 prevZ ⭠ z
                 draw point at z
-                z ⭠ f
+                z ⭠ $f$
                 d : ℝ ⭠ |z - twist_center|
                 if d > r0 and d < r1:
                   theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)

@@ -9,7 +9,7 @@ import Language.Value.Parser
 import Language.Code
 import Language.Draw
 import Language.Parser.SourceRange
-import Language.Value.Typecheck (internalIterationLimit, InternalIterations)
+import Language.Value.Typecheck (internalIterationLimit, InternalIterations, InternalStuck)
 
 import qualified Data.Map as Map
 
@@ -53,26 +53,35 @@ tcGenericLoop :: Bool
                     Value '(env, 'BooleanT) -> Code env -> Code env)
               -> Splices -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
 tcGenericLoop negateCondition mkLoop splices mlimit body cond sr (env :: EnvironmentProxy env) =
-  withFresh sr env IntegerType 0 $ \env' (counterName :: Proxy fresh) pf -> recallIsAbsent pf $ do
-    let counter :: Value '( '(fresh, IntegerT) ': env, 'IntegerT)
-        counter = Var counterName IntegerType (bindName counterName IntegerType pf)
+  withFresh sr env  IntegerType 0 $ \env' (counterName :: Proxy counterName) pf0 -> recallIsAbsent pf0 $ do
 
-    limit <- case mlimit of
-      Just (ParsedValue _ limitFun) -> limitFun IntegerType
-      Nothing -> case Map.lookup internalIterationLimit splices of
-        Just (ParsedValue _ limitFun)  -> limitFun IntegerType
-        Nothing -> throwError $ internal $
-          Advice sr "The script's iteration limit was not defined."
+  limitValue <- case mlimit of
+    Just (ParsedValue _ limitFun) -> limitFun IntegerType
+    Nothing -> case Map.lookup internalIterationLimit splices of
+      Just (ParsedValue _ limitFun)  -> limitFun IntegerType
+      Nothing -> throwError $ internal $
+               Advice sr "The script's iteration limit was not defined."
+
+  withFresh sr env' IntegerType limitValue $ \env'' (limitName :: Proxy limitName) pf' -> recallIsAbsent pf' $ do
+
+    pf <- findVarAtType sr counterName IntegerType env''
+    let counter, limit ::
+          Value '( '(limitName, 'IntegerT) ': '(counterName, 'IntegerT) ': env, 'IntegerT)
+        counter = Var counterName IntegerType pf
+        limit =   Var limitName IntegerType   (bindName limitName IntegerType pf')
 
     c <- atType cond BooleanType
-    b <- atEnv env' body
-    let b' = Block [ b, Set bindingEvidence counterName (counter + 1)]
+    b <- atEnv env'' body
+    let b' = Block [ b, Set pf counterName (counter + 1)]
         c' = And (if negateCondition then Not c else c) (counter `LTI` limit)
         iterations = Proxy @InternalIterations
-    ipf <- findVarAtType sr iterations IntegerType env'
+        stuck      = Proxy @InternalStuck
+    ipf <- findVarAtType sr iterations IntegerType env''
+    spf <- findVarAtType sr stuck      BooleanType env''
     pure $ Block
       [ mkLoop c' b'
-      , Set ipf iterations counter ]
+      , Set ipf iterations counter
+      , Set spf stuck (Eql IntegerType counter limit) ]
 
 tcWhile, tcUntil :: Splices -> ParsedValue -> Maybe ParsedValue -> ParsedCode -> CheckedCode
 tcDoWhile, tcDoUntil :: Splices -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode

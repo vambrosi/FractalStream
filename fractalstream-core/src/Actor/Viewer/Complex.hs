@@ -6,6 +6,7 @@ module Actor.Viewer.Complex
   , ComplexViewerCompiler(..)
   , withComplexViewer'
   , cloneComplexViewer
+  , StringOf(..)
   , BadProject(..)
   ) where
 
@@ -28,7 +29,8 @@ import Language.Value.Parser
 import Language.Value.Typecheck ( internalVanishingRadius
                                 , internalEscapeRadius
                                 , internalIterationLimit
-                                , internalIterations )
+                                , internalIterations
+                                , internalStuck )
 import Language.Code.Parser
 import Language.Parser.SourceRange
 import Language.Value.Evaluator
@@ -219,7 +221,6 @@ toRealViewerCode env envX envXX z px pfZ pfPx pfX pfY pfP code =
         , Set pf' px (Var Proxy RealType pfP)
         , code ]
 
-
 withComplexViewer' :: forall env
                     . ( NotPresent "[internal argument] #blockWidth" env
                       , NotPresent "[internal argument] #blockHeight" env
@@ -262,7 +263,15 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
           pf <- findVarAtType NoSourceRange it IntegerType (envProxy Proxy)
           pure (Var it IntegerType pf)
         ty -> throwError (Surprise NoSourceRange "the hidden iteration counter"
-                          (an ty) (Expected "an integer"))
+                          "an integer" (Expected $ an ty))
+
+  SomeSymbol stuckVar <- pure (someSymbolVal internalStuck)
+  let stuck = ParsedValue NoSourceRange $ \case
+        BooleanType -> do
+          pf <- findVarAtType NoSourceRange stuckVar BooleanType (envProxy Proxy)
+          pure (Var stuckVar BooleanType pf)
+        ty -> throwError (Surprise NoSourceRange "the `stuck` loop status"
+                          "a truth value" (Expected $ an ty))
 
   let cvPixelName = fromMaybe "#pixel" cvPixel
       argX = Proxy @InternalX
@@ -274,7 +283,8 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
                 [ [Map.singleton internalEscapeRadius x    | x <- maybeToList escapeRadius]
                 , [Map.singleton internalVanishingRadius x | x <- maybeToList vanishRadius]
                 , [Map.singleton internalIterationLimit x  | x <- maybeToList iterationLimit]
-                , [Map.singleton internalIterations iterations]
+                , [Map.fromList [ (internalIterations, iterations)
+                                , (internalStuck, stuck) ]]
                 , [splices0] ]
 
   case (someSymbolVal cvCoord, someSymbolVal cvPixelName) of
@@ -287,7 +297,9 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
        $ \env3 -> declareIO argX RealType env3
        $ \env -> declareOrGetIO cvCoord' ComplexType env
        $ \pfCoord' envX -> declareOrGetIO cvPixel' RealType envX
-       $ \pfPixel' envX' -> declareIO it IntegerType envX' $ \envX'' -> do
+       $ \pfPixel' envX' -> declareIO it IntegerType envX'
+       $ \envX'' -> declareIO stuckVar BooleanType envX''
+       $ \envX''' -> do
 
       cvCenter' <- case valueOf cvCenter of
         Right v  -> newUIValue v
@@ -300,14 +312,17 @@ withComplexViewer' jit cvConfig' splices0 ComplexViewer{..} action = withEnviron
           vpSize  = cvSize
           vpCanResize = cvCanResize
 
-      case parseCode envX'' splices cvCode of
+      case parseCode envX''' splices cvCode of
         Left err -> throwIO (BadProject "there was an error parsing the viewer's script" (ppFullError err cvCode))
         Right cvCode0 -> do
           Found pfX <- pure (lookupEnv argX RealType env)
           Found pfY <- pure (lookupEnv argY RealType env)
           Found pfPx <- pure (lookupEnv argPx RealType envX)
 
-          let cvCode1 = withEnvironment envX' $ let_ 0 cvCode0
+          let cvCode1 = withEnvironment envX'
+                      $ let_ 0
+                      $ let_ (Const (Scalar BooleanType False))
+                      $ cvCode0
               cvCode' = toRealViewerCode env envX envX' cvCoord' cvPixel' pfCoord' pfPixel' pfX pfY pfPx cvCode1
 
           withCompiledComplexViewer jit argX argY argPx argPx argOutput cvCode' $ \fun -> do

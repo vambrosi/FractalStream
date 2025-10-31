@@ -5,7 +5,6 @@ viewer:
   resizable: true
   z-coord: C
   escape-radius: escape_radius
-  vanishing-radius: epsilon
   iteration-limit: max_iters
   initial-center: 0
   initial-pixel-size: 1/128
@@ -22,19 +21,18 @@ viewer:
     - name: Bulb info
       shortcut: b
       configuration:
-        title: Period of bulb
+        title: Bulb period finder
         size: 400x200
         vertical-contents:
+          - text: |
+              Click on points of the Mandelbrot set to find the period of the attracting cycle.
+
+              Points outside of the Mandelbrot set will result in "X"
+
+              Cycles exceeding the maximum period will result in "?"
+
           - panel:
-              title: "Result"
-              vertical-contents:
-                - text-entry:
-                    label: "Period = "
-                    value: "0"
-                    type: Z
-                    variable: period
-          - panel:
-              title: "Settings"
+              title: Settings
               vertical-contents:
                 - text-entry:
                     label: "Warmup iterations"
@@ -46,8 +44,19 @@ viewer:
                     value: "1000"
                     type: Z
                     variable: max_period
+                - text-entry:
+                    label: "Tolerance when checking for cycles"
+                    value: "0.0001"
+                    type: R
+                    variable: tol
+
+          - button: "Erase annotations"
 
       actions:
+        - event: button
+          label: "Erase annotations"
+          code: erase
+
         - event: click
           code: |
             # Iterate z^2 + C many times so that we end up with
@@ -59,14 +68,17 @@ viewer:
             # count how many times we need to apply z^2 + C until we get
             # back to z again. Report the result in the `period` variable,
             # or report 0 if something went wrong.
-            period <- 0
             if not (z escaped):
               target : C <- z
               repeat up to max_period times:
                 z <- z^2 + C
-              until z = target
-              if z = target:
-                period <- iterations
+              until |z - target| < tol
+              if stuck:
+                write "?" at C
+              else:
+                write iterations at C
+            else:
+              write "X" at C
 
 configuration:
   title: Configuration
@@ -82,8 +94,3 @@ configuration:
         value: 10
         type: R
         variable: escape_radius
-    - text-entry:
-        label: "Minimum radius:"
-        value: "0.0001"
-        type: R
-        variable: epsilon

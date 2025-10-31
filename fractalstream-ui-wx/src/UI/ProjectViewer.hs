@@ -56,14 +56,15 @@ viewProject projectWindow addMenuBar = UI
       addMenuBar f []
       WX.windowOnClose f (set f [ visible := False ])
 
-      innerLayout <- generateWxLayout (\_ -> pure ()) f setupUI
-      compileButton <- button f [ text := "Go!"
+      p <- panel f []
+      innerLayout <- generateWxLayout (\_ -> pure ()) p setupUI
+      compileButton <- button p [ text := "Go!"
                                 , on command := do
                                     set f [ visible := False ]
                                     continue
                                 ]
-      set f [ layout := fill . margin 5 . column 5
-              $ [ innerLayout, widget compileButton ]
+      set f [ layout := margin 5 . container p $ fill $ column 5
+              $ [ innerLayout, hfloatRight $ widget compileButton ]
             ]
 
   , makeLayout = \_ title ui -> do

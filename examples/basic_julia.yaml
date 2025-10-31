@@ -4,17 +4,16 @@ viewer:
   size: 512x512
   resizable: true
   z-coord: z
+  iteration-limit: max_iters
+  escape-radius: escape_radius
   initial-center: 0
   initial-pixel-size: 1/128
   code: |
-      k : Z <- 0
-      while k < max_iters and |z| < escape_radius
-        z <- z^2 + C
-        k <- k + 1
-      if k = max_iters then
+      iterate z -> z^2 + C until z escapes
+      if stuck:
         color <- black
-      else
-        color <- blend ((k / max_iters)^p, dark blue, white)
+      else:
+        color <- blend ((iterations / max_iters)^p, dark blue, white)
 
   tools:
     - name: Trace
@@ -23,14 +22,12 @@ viewer:
         - event: click-or-drag
           code: |
             prevZ : C <- z
-            k : Z <- 0
             erase
-            while k < 100 and |z| < 10 escape_radius
+            until z escapes:
               prevZ <- z
               draw point at z
               z <- z^2 + C
               draw line from z to prevZ
-              k <- k + 1
 
 configuration:
   title: Configuration

@@ -89,6 +89,8 @@ editProject yamlFile = do
                  void $ addItem r ("Plain text")
                Button _ -> do
                  void $ addItem r ("Button")
+               Multiline _ -> do
+                 void $ addItem r "multiline"
          in go r0
 
     whenJust ensembleSetup $ \Configuration{..} -> do
@@ -132,7 +134,7 @@ editProject yamlFile = do
                    newText <- get te text
                    treeCtrlSetItemText tc this (title newText)
                ]
-        ce <- codeEditor f p cvCode
+        ce <- codeEditor p cvCode
         set p [ layout := hfill $ column 5 $
                 [ fill $ row 5
                   [ margin 3 (label "Title of complex viewer: ")
@@ -157,7 +159,7 @@ editProject yamlFile = do
                                , enabled := False ]
             teY <- textEntry p [ text := yCoord
                                , enabled := False ]
-            ce <- codeEditor f p code
+            ce <- codeEditor p code
             set p [ layout := fill $ column 5
                     [ fill (widget cb)
                     , hglue
@@ -173,7 +175,7 @@ editProject yamlFile = do
                                , enabled := False ]
             teY <- textEntry p [ text := yCoord
                                , enabled := False ]
-            ce <- codeEditor f p code
+            ce <- codeEditor p code
             set p [ color := rgb (0x80 :: Word8) 0 0
                   , layout := fill $ column 5
                     [ expand (widget cb)

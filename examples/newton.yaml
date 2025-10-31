@@ -1,6 +1,6 @@
 viewer:
   style: complex-plane
-  title: Roots of {f}
+  title: Roots of $f$
   size: 512x512
   resizable: true
   z-coord: z
@@ -13,7 +13,7 @@ viewer:
 
         while z != lastZ:
           lastZ <- z
-          z <- z - f / df
+          z <- z - $f$ / $df$
 
         if z = lastZ:
           c : Color <- if re(z) > 0 then red else if im(z) > 0 then yellow else blue
@@ -34,7 +34,7 @@ viewer:
             erase
             while z != lastZ:
               lastZ <- z
-              z <- z - f / df
+              z <- z - $f$ / $df$
               draw point at lastZ
               draw line from lastZ to z
             draw point at z

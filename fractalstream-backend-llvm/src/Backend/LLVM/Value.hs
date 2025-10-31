@@ -268,7 +268,11 @@ buildValue getExtern = indexedFold go'
       DivF x y -> ((,) <$> x <*> y) >>= \case
           (RealOp lhs, RealOp rhs) -> RealOp <$> fdiv lhs rhs
       ModF x y -> ((,) <$> x <*> y) >>= \case
-          (RealOp lhs, RealOp rhs) -> RealOp <$> frem lhs rhs
+          (RealOp lhs, RealOp rhs) -> do
+            m <- frem lhs rhs
+            cond <- fcmp P.OLT m (C.double 0.0)
+            m' <- fadd m rhs
+            RealOp <$> select cond m' m
       NegF r -> r >>= \case
           (RealOp x) -> RealOp <$> fsub (C.double 0.0) x
 

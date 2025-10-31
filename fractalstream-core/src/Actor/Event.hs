@@ -21,7 +21,7 @@ import Language.Environment
 import Language.Value.Evaluator (HaskellTypeOfBinding)
 import Language.Code
 import Language.Value.Parser
-import Language.Value.Typecheck (internalIterations)
+import Language.Value.Typecheck (internalIterations, internalStuck)
 import Language.Code.Parser
 import Language.Code.InterpretIO
 import Language.Draw
@@ -112,12 +112,17 @@ toEventHandlers env viewerVars splices ParsedEventHandlers{..} = fmap swap $ fli
   let parse :: EnvironmentProxy e -> String -> StateT (Set String) (Either String) (Code e)
       parse e i = do
         SomeSymbol (it :: Proxy iterations) <- pure (someSymbolVal internalIterations)
+        SomeSymbol (stuck :: Proxy stuck) <- pure (someSymbolVal internalStuck)
         case lookupEnv' it e of
           Absent' pf -> withEnvironment e $ recallIsAbsent pf $ do
             let e' = declare @iterations IntegerType e
-            c <- lift $ first (`ppFullError` i) $ parseCode e' splices i
-            modify' (execState (usedVarsInCode c))
-            pure (let_ 0 c)
+            case lookupEnv' stuck e' of
+              Absent' pf' -> withEnvironment e' $ recallIsAbsent pf' $ do
+                let e'' = declare @stuck BooleanType e'
+                c <- lift $ first (`ppFullError` i) $ parseCode e'' splices i
+                modify' (execState (usedVarsInCode c))
+                pure (let_ 0 $ let_ (Const (Scalar BooleanType False)) $ c)
+              Found'{} -> lift (Left "internal stuck status already defined")
           Found'{} -> lift (Left "internal iteration count already defined")
 
       allUpdatesOk, noUpdatesToViewerVar :: Context (K Bool) env

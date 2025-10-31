@@ -4,6 +4,8 @@ module UI.Welcome
 
 import Graphics.UI.WX
 
+import Actor.Ensemble (allTemplates)
+
 import UI.ProjectActions
 import UI.Menu
 
@@ -23,33 +25,31 @@ welcome ProjectActions{..} = do
                 [ ("FractalStream project files", ["*.yaml"])
                 , ("All files", ["*.*"])
                 ] "" ""
-        case mprj of
-          Nothing -> pure ()
-          Just prj -> do
-            --set f [ visible := False ]
-            action prj
+        maybe (pure ()) action mprj
 
-  -- TODO: verify that the code for each viewer, tool, etc works properly
-  --       with the splices declared by the setup config. e.g. all code
-  --       typechecks with the splice's types, each splice's environment
-  --       is contained in the actual code environment at each use, etc.
-  --
-  --       If the ensemble passes this verification, then the end-user
-  --       should not be able to cause a compilation failure via the
-  --       UI.
-  new  <- button p [ text := "New project"
-                   , on command := projectNew ]
+  template <- chooseTemplate ProjectActions{..} p
 
-  open <- button p [ text := "Open project"
+  open <- button p [ text := "Open existing project..."
                    , on command := getProject "Open" projectOpen
                    ]
   edit <- button p [ text := "Edit project"
                    , on command := getProject "Edit" projectEdit
+                   , enabled := False
                    ]
-  set f [ layout := margin 10 $ stretch $ container p $ floatCenter $ column 10
-                    [ widget new
+  set f [ layout := margin 10 $ fill $ container p $ floatCenter $ column 10
+                    [ widget template
                     , widget open
                     , widget edit
                     ]
-        , clientSize := sz 300 120
         ]
+
+chooseTemplate :: ProjectActions -> Window a -> IO (Choice ())
+chooseTemplate pa f = do
+  c <- choice f [ items := "New project from template..." : map fst allTemplates ]
+  set c [ on select := get c selection >>= \case
+            0 -> pure ()
+            ix -> do
+              set c [ selection := 0]
+              uncurry (projectOpenTemplate pa) (allTemplates !! (ix - 1))
+        ]
+  pure c
