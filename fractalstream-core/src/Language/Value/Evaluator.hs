@@ -281,11 +281,13 @@ evaluator v0 ctx = case v0 of
           i  = fromIntegral $ i_ ctx
       in case xs of
         [] -> error "Attempted to index into an empty list"
-        _  -> if i <= 0
-              then error ("Attempted to use a non-positive list index " ++ show i)
-              else if i > length xs
-                   then error ("List index " ++ show i ++ " is out of range")
-                   else (xs !! (i - 1))
+        _  | i == 0    -> error ("Attempted to access list index 0, but lists use 1-based indexing")
+           | i <= 0    -> if -i > length xs
+                          then error ("List index " ++ show i ++ " is out of range")
+                          else (xs !! (length xs + i))
+           | otherwise -> if i > length xs
+                          then error ("List index " ++ show i ++ " is out of range")
+                          else (xs !! (i - 1))
 
     Index _ True xs_ i_ ->
       let xs = xs_ ctx
