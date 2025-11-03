@@ -1,11 +1,7 @@
 {-# language OverloadedStrings #-}
 module Actor.Tool
   ( Tool(..)
-  , ParsedTool(..)
   , ToolInfo(..)
-  , RealTool(..)
-  , ComplexTool(..)
-  , defaultComplexSelectionTool
   ) where
 
 import FractalStream.Prelude
@@ -14,92 +10,50 @@ import Actor.Configuration
 import Actor.Event
 import Actor.Layout
 
-import Data.Aeson
-
-data ParsedTool = ParsedTool
-  { ptoolInfo :: ToolInfo
-  , ptoolDrawLayer :: Int
-  , ptoolRefreshOnActivate :: Bool
-  , ptoolRefreshCanUpdate :: Bool
-  , ptoolConfig :: Maybe Configuration
-  , ptoolEventHandlers :: ParsedEventHandlers
-  }
-  deriving Show
+import Data.Codec
+import Data.DynamicValue
+import qualified Data.Set as Set
 
 data Tool = Tool
   { toolInfo :: ToolInfo
-  , toolDrawLayer :: Int
-  , toolRefreshOnActivate :: Bool
-  , toolConfig :: Maybe (Layout ConstantExpression)
-  , toolEventHandler :: Event -> Maybe (IO ())
-  , toolVars :: Set String
+  , toolDrawLayer :: Variable Int
+  , toolRefreshOnActivate :: Variable Bool
+  , toolRefreshCanUpdate  :: Variable Bool
+  , toolConfig :: Variable (Maybe Configuration)
+  , toolShowConfig :: Variable (Bool -> IO ())
+  , toolEventHandlers :: Variable [SingleEventHandler]
+  , toolEventHandler :: Variable (Double -> Event -> Maybe (IO ()))
+  , toolVars :: Dynamic (Set String)
   }
 
 data ToolInfo = ToolInfo
-  { tiName :: String
-  , tiShortcut :: Maybe Char
-  , tiShortHelp :: String
-  , tiHelp :: String
+  { tiName      :: Parsed String
+  , tiShortcut  :: Variable String
+  , tiShortHelp :: Variable String
+  , tiHelp      :: Variable String
   }
-  deriving Show
 
-newtype RealTool = RealTool ParsedTool
-  deriving Show
+instance Codec ToolInfo where
+  codec = do
+    name      <-tiName-<      mapped (key "name") $ \_ -> pure nonEmptyString
+    shortcut  <-tiShortcut-<  keyWithDefaultValue "" "shortcut"
+    shortHelp <-tiShortHelp-< keyWithDefaultValue "" "short-help"
+    help      <-tiHelp-<      keyWithDefaultValue "" "help"
+    build ToolInfo name shortcut shortHelp help
 
-newtype ComplexTool = ComplexTool ParsedTool
-  deriving Show
-
-instance FromJSON (String -> String -> Either String RealTool) where
-  parseJSON = withObject "tool" $ \o -> do
-    tiName <- o .: "name"
-    tiShortcut <- o .:? "shortcut"
-    tiShortHelp <- o .:? "short-help" .!= ""
-    tiHelp <- o .:? "help" .!= ""
-    let ptoolInfo = ToolInfo{..}
-    ptoolRefreshOnActivate <- o .:? "refresh-on-activation" .!= True
-    ptoolRefreshCanUpdate <- o .:? "refresh-can-update" .!= False
-    ptoolConfig <- o .:? "configuration"
-    ptoolDrawLayer <- o .:? "draw-to-layer" .!= 100
-    handlers <- o .:? "actions" .!= []
-    pure $ \x y -> do
-      let handlers' = map (($ y) . ($ x)) handlers
-      ptoolEventHandlers <-
-        foldl' combineEventHandlers (Right noEventHandlers) handlers'
-      pure (RealTool ParsedTool{..})
-
-instance FromJSON (String -> Either String ComplexTool) where
-  parseJSON = withObject "tool" $ \o -> do
-    tiName <- o .: "name"
-    tiShortcut <- o .:? "shortcut"
-    tiShortHelp <- o .:? "short-help" .!= ""
-    tiHelp <- o .:? "help" .!= ""
-    let ptoolInfo = ToolInfo{..}
-    ptoolRefreshOnActivate <- o .:? "refresh-on-activation" .!= True
-    ptoolRefreshCanUpdate <- o .:? "refresh-can-update" .!= False
-    ptoolConfig <- o .:? "configuration"
-    ptoolDrawLayer <- o .:? "draw-to-layer" .!= 100
-    handlers <- o .:? "actions" .!= []
-    pure $ \z -> do
-      let handlers' = map (convertComplexToRealEventHandlers . ($ z)) handlers
-      ptoolEventHandlers <-
-        foldl' combineEventHandlers (Right noEventHandlers) handlers'
-      pure (ComplexTool ParsedTool{..})
-
-defaultComplexSelectionTool :: String -> ParsedTool
-defaultComplexSelectionTool name = ParsedTool{..}
-  where
-    ptoolInfo = ToolInfo
-      { tiName = "Select " ++ name
-      , tiShortcut = Just 's'
-      , tiShortHelp = ""
-      , tiHelp = ""
-      }
-    ptoolDrawLayer = 100
-    ptoolRefreshOnActivate = False
-    ptoolRefreshCanUpdate = False
-    ptoolConfig = Nothing
-    ptoolEventHandlers = convertComplexToRealEventHandlers $ noComplexEventHandlers
-      { cpehOnClick = Just (Left name, True, "pass")
-      , cpehOnDrag = Just (Left name, "INTERNAL__drag_start", True, "pass")
-      , cpehOnDragDone = Just (Left name, "INTERNAL__drag_start", True, "pass")
-      }
+instance CodecWith EventDependencies Tool where
+  codecWith_ ctx = do
+    ti <-toolInfo-< codec
+    layer <-toolDrawLayer-< keyWithDefaultValue 100 "draw-to-layer"
+    refreshOnActivate <-toolRefreshOnActivate-< keyWithDefaultValue True  "refresh-on-activation"
+    refreshCanUpdate  <-toolRefreshCanUpdate-<  keyWithDefaultValue False "refresh-can-update"
+    config <-toolConfig-< optionalField "configuration"
+      (newVariable Nothing) (fmap isNothing . getDynamic) (codecWith ((\(x,_,_) -> x) <$> ctx))
+    showConfig <-toolShowConfig-< newOf (pure $ pure $ const (pure ()))
+    handlers <-toolEventHandlers-< optionalField "actions"
+      (newVariable []) (fmap null . getDynamic) (codecWith ctx)
+    tvars <-toolVars-< purely $ \use -> Set.fromList <$> do
+      cfg <- dyn (use config)
+      maybe (pure []) (fmap (either (const []) (map fst)) . layoutBindings . coContents) cfg
+    handler <-toolEventHandler-< newOf (pure $ pure (\_ _ -> Nothing))
+    build Tool ti layer refreshOnActivate refreshCanUpdate config showConfig handlers handler tvars

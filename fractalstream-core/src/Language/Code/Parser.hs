@@ -1,10 +1,14 @@
 {-# language RecursiveDo, DataKinds, ImpredicativeTypes #-}
 module Language.Code.Parser
   ( parseCode
+  , parseParsedCode
+  , Splices(..)
+  , noSplices
   -- * Re-exports
   , TCError
   , ParseError
   , ppFullError
+  , ParsedCode(..)
   ) where
 
 import FractalStream.Prelude
@@ -17,9 +21,19 @@ import Language.Code
 import Language.Parser.Tokenizer
 import Language.Code.Typecheck
 
+import qualified Data.Map as Map
+
 ------------------------------------------------------
 -- Main function for parsing Code
 ------------------------------------------------------
+
+data Splices = Splices
+  { codeSplices  :: Map String ParsedCode
+  , valueSplices :: Map String ParsedValue
+  }
+
+noSplices :: Splices
+noSplices = Splices Map.empty Map.empty
 
 parseCode :: forall env
            . EnvironmentProxy env
@@ -27,8 +41,12 @@ parseCode :: forall env
           -> String
           -> Either (Either ParseError TCError) (Code env)
 parseCode env splices input = do
-  ParsedCode c <- first Left (parse (codeGrammar splices) (tokenizeWithIndentation input))
+  ParsedCode c <- parseParsedCode splices input
   case c env of TC x -> first Right x
+
+parseParsedCode :: Splices -> String -> Either (Either ParseError TCError) ParsedCode
+parseParsedCode splices input =
+  first Left (parse (codeGrammar splices) (tokenizeWithIndentation input))
 
 ------------------------------------------------------
 -- Code grammar
@@ -37,7 +55,7 @@ parseCode env splices input = do
 codeGrammar :: forall r
              . Splices
             -> Grammar r (Prod r ParsedCode)
-codeGrammar splices = mdo
+codeGrammar Splices{..} = mdo
 
   toplevel <- ruleChoice
     [ block
@@ -72,27 +90,28 @@ codeGrammar splices = mdo
 
   lineStatement <- ruleChoice
     [ simpleStatement <* nl
+    , spliced <* nl
     , check
       (tcIfThenElse <$> (token If *> value <* (colon <* nl))
                     <*> block
                     <*> elseIf) <?> "if statement"
     , check
-      (tcWhile splices
+      (tcWhile
         <$> (lit "while" *> value)
         <*> (optional upTo <* colon <* nl)
         <*> block) <?> "while loop"
     , check
-      (tcDoWhile splices
+      (tcDoWhile
         <$> (lit "repeat" *> optional upTo <* colon <* nl)
         <*> block
         <*> (lit "while" *> value <* nl)) <?> "repeat...while loop"
     , check
-      (tcUntil splices
+      (tcUntil
         <$> (lit "until" *> value)
         <*> (optional upTo <* colon <* nl)
         <*> block) <?> "until loop"
     , check
-      (tcDoUntil splices
+      (tcDoUntil
         <$> (lit "repeat" *> optional upTo <* colon <* nl)
         <*> block
         <*> (lit "until" *> value <* nl)) <?> "repeat...until loop"
@@ -116,7 +135,7 @@ codeGrammar splices = mdo
     [ check
       (tcSet <$> ident <*> (token LeftArrow *> value)) <?> "variable assignment"
     , check
-      (tcIterate splices
+      (tcIterate
         <$> (lit "iterate" *> ident <* token RightArrow)
         <*> value
         <*> ((lit "while" $> True) <|> (lit "until" $> False))
@@ -125,7 +144,12 @@ codeGrammar splices = mdo
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 
-  value <- valueGrammar splices
+  value <- valueGrammar valueSplices
+
+  spliced <- rule $
+    token OpenSplice *>
+    (tokenMatch $ \case { Identifier n -> Map.lookup n codeSplices; _ -> Nothing })
+    <* token CloseSplice
 
   effect <- ruleChoice
     [ toplevelDrawCommand

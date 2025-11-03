@@ -2,9 +2,9 @@ module Backend
   ( withBackend
   ) where
 
-import Actor.Viewer.Complex
+import Actor.Viewer
 import Backend.LLVM
 
-withBackend :: (ComplexViewerCompiler -> IO a) -> IO a
+withBackend :: (ViewerCompiler -> IO a) -> IO a
 withBackend action = withJIT $ \jit ->
-  action (ComplexViewerCompiler (withViewerCode' jit))
+  action (ViewerCompiler (withJittedViewer jit))

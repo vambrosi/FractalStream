@@ -5,15 +5,14 @@ Description  : Main entry point into FractalStream
 -}
 module Main where
 
-import Actor.Ensemble
-
 import UI.ProjectActions
 import UI.Menu
 import UI.ProjectViewer (viewProject)
 import UI.ProjectEditor (editProject)
+import UI.Session
 import Data.DynamicValue
-
-import Actor.Viewer.Complex (BadProject(..))
+import Data.Codec
+import Actor.Ensemble
 
 import qualified Data.Yaml as YAML
 
@@ -27,16 +26,26 @@ import Graphics.UI.WXCore.WxcClasses ( styledTextCtrlStyleSetFont
                                      , styledTextCtrlSetText
                                      , wxcAppSetAppName )
 
-import Control.Exception (catch, ErrorCall(..))
+import Control.Exception (Exception, catch, ErrorCall(..))
+import qualified Data.ByteString as BS
 
 main :: IO ()
 main = withBackend $ \complexViewerCompiler -> start $ do
 
   wxcAppSetAppName "FractalStream"
 
-  sessions <- newUIValue []
+  activeSessions <- newVariable []
 
   let projectNew = putStrLn "TODO"
+
+      save prj f isUnsaved = do
+        result <- fileSaveDialog f True True "Save FractalStream project"
+                  [ ("FractalStream project files",["*.fs"]), ("All files", ["*.*"])] "" ".fs"
+        case result of
+          Nothing -> pure ()
+          Just file -> do
+            serializeYAML prj >>= BS.writeFile file
+            setValue isUnsaved False
 
       projectOpen = \yamlFile -> do
         projectWindow <- frame [ visible := False ]
@@ -45,40 +54,36 @@ main = withBackend $ \complexViewerCompiler -> start $ do
               . (`catch` errorCalled projectWindow)
               . (`catch` badYaml projectWindow yamlFile)
 
-
         withRecoveryActions $ do
 
-          prj <- either error id <$> parseTemplateFromFile yamlFile
+          prj <- either error id <$> parseEnsembleFromFile yamlFile
 
-          let si = SessionInfo
-                { sessionName = yamlFile
-                , sessionHandle = SessionHandle projectWindow
-                , sessionVisible = True
-                , sessionUnsaved = False }
-          modifyUIValue sessions (si :)
-          runTemplate complexViewerCompiler
-            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}))
+          sessionName <- newVariable yamlFile
+          let sessionHandle = SessionHandle projectWindow
+          sessionVisible <- newVariable True
+          sessionUnsaved <- newVariable False
+          let sessionSave = save prj projectWindow sessionUnsaved
+          let si = SessionInfo{..}
+          modifyValue activeSessions (si :)
+          runEnsemble complexViewerCompiler
+            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
             prj
 
       projectOpenTemplate = \name prj -> do
         projectWindow <- frame [ visible := False ]
-        let withRecoveryActions
-              = (`catch` badProjectFile projectWindow name)
-              . (`catch` errorCalled projectWindow)
-        withRecoveryActions $ do
-          let si = SessionInfo
-                { sessionName = name
-                , sessionHandle = SessionHandle projectWindow
-                , sessionVisible = True
-                , sessionUnsaved = False }
-          modifyUIValue sessions (si :)
-          runTemplate complexViewerCompiler
-            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}))
+
+        sessionName <- newVariable name
+        let sessionHandle = SessionHandle projectWindow
+        sessionVisible <- newVariable True
+        sessionUnsaved <- newVariable False
+        let sessionSave = save prj projectWindow sessionUnsaved
+        let si = SessionInfo{..}
+        modifyValue activeSessions (si :)
+        runEnsembleFromSetup complexViewerCompiler
+            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
             prj
 
       projectEdit = editProject
-
-      activeSessions = SomeDynamic sessions
 
       closeSession SessionInfo{..} = case sessionHandle of
         SessionHandle f -> close f
@@ -86,20 +91,23 @@ main = withBackend $ \complexViewerCompiler -> start $ do
       hideSession SessionInfo{..} = case sessionHandle of
         SessionHandle f -> do
           windowChildren f >>= mapM_ (\child -> set child [visible := False])
-          modifyUIValue sessions (map $ markVisible sessionHandle False)
+          mapM_ (markVisible sessionHandle False) =<< getDynamic activeSessions
 
       showSession SessionInfo{..} = case sessionHandle of
         SessionHandle f -> do
           windowChildren f >>= mapM_ (\child -> set child [visible := True])
-          modifyUIValue sessions (map $ markVisible sessionHandle True)
+          mapM_ (markVisible sessionHandle True) =<< getDynamic activeSessions
 
       markVisible h yn s
-        | sessionHandle s == h = s { sessionVisible = yn }
-        | otherwise = s
+        | sessionHandle s == h = setValue (sessionVisible s) yn
+        | otherwise = pure ()
 
       editSession _ = putStrLn "TODO, editSession"
 
   welcome ProjectActions{..}
+
+runTemplate :: a -> b -> c -> IO ()
+runTemplate _ _ _ = putStrLn "TODO: runTemplate"
 
 badYaml :: Frame a -> FilePath -> YAML.ParseException -> IO ()
 badYaml w path e = badProjectFile w path (BadProject "Bad YAML file" (show e))
@@ -149,3 +157,6 @@ fatalErrorDialog projectWindow title mkContents = do
           column 5 (contents ++ [widget ok]) ]
   _ <- showModal d (\done -> set ok [on command := done Nothing ])
   close projectWindow
+
+data BadProject = BadProject String String deriving Show
+instance Exception BadProject

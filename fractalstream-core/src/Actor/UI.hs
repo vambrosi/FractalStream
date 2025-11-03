@@ -2,24 +2,29 @@ module Actor.UI
   ( UI(..)
   ) where
 
-import Data.DynamicValue
+
 import Actor.Layout
-import Actor.Viewer.Complex
+import Actor.Viewer
+import Actor.Event
+import Language.Environment
 
 data UI where
   UI :: forall ensembleHandle.
       { newEnsemble :: IO ensembleHandle
       , runSetup :: ensembleHandle
                  -> String
-                 -> Layout SomeDynamic
+                 -> Layout
                  -> IO ()
                  -> IO ()
       , makeLayout :: ensembleHandle
                    -> String
-                   -> Layout SomeDynamic
-                   -> IO ()
+                   -> Layout
+                   -> IO (IO ())
       , makeViewer :: ensembleHandle
-                   -> ViewerUIProperties
-                   -> ComplexViewer'
                    -> IO ()
+                   -> SomeContext EventArgument_
+                   -> IO ()
+                   -> IO ()
+                   -> Viewer
+                   -> IO (IO ())
       } -> UI

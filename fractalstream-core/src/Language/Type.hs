@@ -17,12 +17,15 @@ module Language.Type
   , pattern Color_
   , showType
   , showValue
+  , ppType
+  , toUserString
   , KnownType(..)
   , withKnownType
   , withType
   ) where
 
 import FractalStream.Prelude
+import Text.Printf
 
 import Data.Color (Color, colorToRGB)
 
@@ -201,7 +204,6 @@ pattern Rational_ pair = Scalar RationalType pair
 pattern Color_ :: forall (t :: FSType). () => (t ~ 'ColorT) => HaskellType t -> Scalar t
 pattern Color_ c = Scalar ColorType c
 
-
 showType :: TypeProxy t -> String
 showType = \case
   BooleanType  -> "truth value"
@@ -215,6 +217,20 @@ showType = \case
   TextType     -> "text"
   PairType x y -> "(" <> showType x <> " x " <> showType y <> ")"
   ListType x   -> "list of " <> showType x
+
+ppType :: TypeProxy t -> String
+ppType = \case
+  BooleanType  -> "Boolean"
+  IntegerType  -> "ℤ"
+  RealType     -> "ℝ"
+  ComplexType  -> "ℂ"
+  RationalType -> "Rational"
+  ColorType    -> "Color"
+  VoidType     -> "Unit"
+  ImageType    -> "Image"
+  TextType     -> "Text"
+  PairType{}   -> error "TODO"
+  ListType t   -> "List of " ++ ppType t
 
 showValue :: TypeProxy t -> HaskellType t -> String
 showValue ty v = case ty of
@@ -238,3 +254,28 @@ instance An SomeType where
 
 instance KnownType t => An (TypeProxy t) where
   an = an . SomeType
+
+toUserString :: TypeProxy t -> HaskellType t -> String
+toUserString ty0 = tidy . go ty0
+  where
+    tidy :: String -> String
+    tidy s = case ty0 of
+      ListType _ -> reverse . drop 1 . reverse . drop 1 $ s
+      _ -> s
+
+    go :: TypeProxy ty -> HaskellType ty -> String
+    go ty v = case ty of
+      RealType -> printf "%0.14f" v
+      ComplexType -> let x :+ y = v
+                     in if y == 0 then go RealType x
+                        else if x == 0 then go RealType y ++ "𝑖"
+                             else if y <0 then printf "%0.14f - %0.14f𝑖" x (-y)
+                                  else printf "%0.14f + %0.14f𝑖" x y
+      ColorType -> let (r,g,b) = colorToRGB v
+                   in printf "rgb(%0.3f, %0.3f, %0.3f)"
+                      (fromIntegral r / 255.0 :: Double)
+                      (fromIntegral g / 255.0 :: Double)
+                      (fromIntegral b / 255.0 :: Double)
+      PairType ty1 ty2 -> concat ["(", go ty1 (fst v), ", ", go ty2 (snd v), ")"]
+      ListType ity -> "[" ++ intercalate ", " (map (go ity) v) ++ "]"
+      _ -> showValue ty v

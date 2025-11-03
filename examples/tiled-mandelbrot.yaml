@@ -47,3 +47,8 @@ configuration:
         value: "2.5"
         type: ℝ
         variable: scale
+    - text-entry:
+        label: "Dummy"
+        value: "123"
+        type: ℝ
+        variable: dummy

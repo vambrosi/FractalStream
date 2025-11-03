@@ -5,10 +5,9 @@ module Backend.LLVM
   , type LLVMJit
   , invoke
   , invoke'
-  , withCompiledCode
---  , withViewerCode
+  -- , withCompiledCode
   , withJIT
-  , withViewerCode'
+  , withJittedViewer
   , runJX
   , type JX
   , mkKernelFun
@@ -36,13 +35,12 @@ import Foreign.C.Types
 import Backend.LLVM.Code
 
 import Language.Value
-import Language.Value.Evaluator (HaskellTypeOfBinding)
+import Language.Value.Evaluator (HaskellValue)
 import Language.Value.Transform
 import Language.Code
-import Language.Code.Parser
+import Actor.Viewer
 import Data.Color
 
-import qualified Data.Map as Map
 import Foreign hiding (void)
 
 import Text.Disassembler.X86Disassembler
@@ -59,9 +57,10 @@ runJX go outPtr blockSize subsamples (dx :+ dy) maxIters maxRadius (x :+ y) = do
       pokeArray dz [dx,dy]
       go outPtr blockSize subsamples dz maxIters maxRadius x y
 
+{-
 foreign import ccall "dynamic"
   mkJX :: JX -> Ptr Word8 -> Int32 -> Int32 -> Ptr Double -> Int32 -> Double -> Double -> Double -> IO ()
-
+-}
 
 type KernelFun =  Ptr Word8 -- output buffer of 8-bit / channel rgb triples
                -> Int32 -- width and height of block to generate
@@ -78,7 +77,7 @@ foreign import ccall "dynamic"
 
 class ToForeignFun (env :: Environment) (ret :: FSType) where
   type AsForeignFun env ret :: *
-  toForeignFun :: (Context HaskellTypeOfBinding env -> IO (HaskellType ret))
+  toForeignFun :: (Context HaskellValue env -> IO (HaskellType ret))
                -> AsForeignFun env ret
 
 instance ToForeignFun '[] ret where
@@ -90,7 +89,7 @@ instance (KnownSymbol name, KnownType t, ToForeignFun env ret, NotPresent name e
   type AsForeignFun ( '(name,t) ': env) ret = HaskellType t -> AsForeignFun env ret
   toForeignFun f x = toForeignFun @env @ret (f . Bind (Proxy @name) (typeProxy @t) x)
 
-invoke :: JITFun env ret -> Context HaskellTypeOfBinding env -> IO (HaskellType ret)
+invoke :: JITFun env ret -> Context HaskellValue env -> IO (HaskellType ret)
 invoke (JITFun _ rt f) ctx = do
   (args, frees) <- unzip <$> fromContextM toFFIArg ctx
   allocaArray @Double 2 $ \ret -> do   -- FIXME: allocate the correct type!
@@ -145,6 +144,73 @@ fromFFIRetArg t ptr = case t of
     pure (v /= 0)
   _ -> error ("todo: fromFFIRetArg " ++ showType t)
 
+withJittedViewer :: forall env t. (MissingViewerArgs env, KnownEnvironment env)
+                 => LLVMJit
+                 -> Code (ViewerEnv env)
+                 -> (ViewerFunction env -> IO t) -> IO t
+withJittedViewer (dylib, session, compileLayer, nextId) code0 action = do
+  -- Do some basic AST-level optimizations first
+  let code = transformValues (integerPowers . avoidSqrt) code0
+
+  name <- modifyMVar nextId (\n -> pure (n + 1, "kernel_" ++ show n))
+  m <- either error pure (compileRenderer' (fromString name) code)
+  withContext $ \ctx ->
+    withModuleFromAST ctx m $ \md -> do
+    let pm = CuratedPassSetSpec
+             { optLevel = Just 2 -- "-O2"?
+             , sizeLevel = Nothing
+             , unitAtATime = Nothing
+             , simplifyLibCalls = Just True
+             , loopVectorize = Just True
+             , superwordLevelParallelismVectorize = Nothing
+             , useInlinerWithThreshold = Nothing
+             , dataLayout = Nothing
+             , targetLibraryInfo = Nothing
+             , targetMachine = Nothing
+             }
+    withPassManager pm (`runPassManager` md)
+
+    let dumpLLVM = False
+        dumpAsm  = False
+    when dumpLLVM $ do
+      putStrLn "------------------------------------------------------------"
+      asm' <- BS.unpack <$> moduleLLVMAssembly md
+      putStrLn asm'
+
+    withClonedThreadSafeModule md $ \tsm -> do
+      addModule tsm dylib compileLayer
+      lookupSymbol session compileLayer dylib (fromString name) >>= \case
+        Left err -> error ("error JITing kernel: " ++ show err)
+        Right (JITSymbol kernelFn _) -> do
+          when dumpLLVM $
+            putStrLn "------------------------------------------------------------"
+
+          when dumpAsm $ do
+            let dcfg = defaultConfig { confIn64BitMode = True }
+            instrs <- disassembleBlockWithConfig dcfg (wordPtrToPtr kernelFn) 1024
+            case instrs of
+              Left err -> putStrLn ("disassembly error: " ++ show err)
+              Right is -> forM_ is (\i -> putStrLn ("  " ++ showIntel i))
+
+          let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
+          action $ ViewerFunction $ \ViewerArgs{..} -> do
+            (colorArg, colorFree) <- toFFIArg (Proxy @"color") ColorType grey
+            (args, frees) <- unzip <$> fromContextM toFFIArg vaArgs
+            let fullArgs = argPtr   vaBuffer
+                         : argInt32 vaWidth
+                         : argInt32 vaHeight
+                         : argInt32 vaSubsamples
+                         : argCDouble (CDouble $ fst vaPoint)
+                         : argCDouble (CDouble $ snd vaPoint)
+                         : argCDouble (CDouble $ fst vaStep)
+                         : argCDouble (CDouble $ snd vaStep)
+                         : colorArg
+                         : args
+            callFFI fn retVoid fullArgs
+            sequence_ (colorFree : frees)
+
+{-
+-- This is only used in tests
 withCompiledCode :: forall env
                   . ( KnownEnvironment env
                     , Required "x" env ~ 'RealT
@@ -188,85 +254,7 @@ withCompiledCode env code run = do
               Right (JITSymbol kernelFn _) -> do
                 let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
                 run (mkJX fn)
-
-withViewerCode' :: forall x y dx dy output env t
-                  . ( KnownEnvironment env
-                    , NotPresent "[internal argument] #blockWidth" env
-                    , NotPresent "[internal argument] #blockHeight" env
-                    , NotPresent "[internal argument] #subsamples" env
-                    , KnownSymbol x, KnownSymbol y
-                    , KnownSymbol dx, KnownSymbol dy
-                    , KnownSymbol output
-                    , Required x env ~ 'RealT
-                    , NotPresent x (env `Without` x)
-                    , Required y env ~ 'RealT
-                    , NotPresent y (env `Without` y)
-                    , Required dx env ~ 'RealT
-                    , NotPresent dx (env `Without` dx)
-                    , Required dy env ~ 'RealT
-                    , NotPresent dy (env `Without` dy)
-                    , Required output env ~ 'ColorT
-                    , NotPresent output (env `Without` output)
-                    )
-                 => LLVMJit
-                 -> Proxy x
-                 -> Proxy y
-                 -> Proxy dx
-                 -> Proxy dy
-                 -> Proxy output
-                 -> Code env
-                 -> ((Int32 -> Int32 -> Int32 -> Context HaskellTypeOfBinding env -> Ptr Word8 -> IO ())
-                      -> IO t)
-                 -> IO t
-withViewerCode' (dylib, session, compileLayer, nextId) x y dx dy output c action = do
-
-  let optimizedCode = transformValues (integerPowers . avoidSqrt) c
-
-  name <- modifyMVar nextId (\n -> pure (n + 1, "kernel_" ++ show n))
-  m <- either error pure (compileRenderer' (fromString name) x y dx dy output optimizedCode)
-  withContext $ \ctx ->
-    withModuleFromAST ctx m $ \md -> do
-    let pm = CuratedPassSetSpec
-             { optLevel = Just 2 -- "-O2"?
-             , sizeLevel = Nothing
-             , unitAtATime = Nothing
-             , simplifyLibCalls = Nothing
-             , loopVectorize = Nothing
-             , superwordLevelParallelismVectorize = Nothing
-             , useInlinerWithThreshold = Nothing
-             , dataLayout = Nothing
-             , targetLibraryInfo = Nothing
-             , targetMachine = Nothing
-             }
-    withPassManager pm (`runPassManager` md)
-    asm' <- BS.unpack <$> moduleLLVMAssembly md
-
-    putStrLn "------------------------------------------------------------"
-    putStrLn asm'
-
-    withClonedThreadSafeModule md $ \tsm -> do
-      addModule tsm dylib compileLayer
-      lookupSymbol session compileLayer dylib (fromString name) >>= \case
-        Left err -> error ("error JITing kernel: " ++ show err)
-        Right (JITSymbol kernelFn _) -> do
-          putStrLn "------------------------------------------------------------"
-          when False $ do
-            let dcfg = defaultConfig { confIn64BitMode = True }
-            instrs <- disassembleBlockWithConfig dcfg (wordPtrToPtr kernelFn) 1024
-            case instrs of
-              Left err -> putStrLn ("disassembly error: " ++ show err)
-              Right is -> forM_ is (\i -> putStrLn ("  " ++ showIntel i))
-
-          let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
-          action $ \blockwidth blockheight subsamples argCtx buf -> do
-            (args, frees) <- unzip <$> fromContextM toFFIArg argCtx
-            let fullArgs = argPtr buf
-                         : argInt32 blockwidth
-                         : argInt32 blockheight
-                         : argInt32 subsamples
-                         : args
-            callFFI fn retVoid fullArgs
-            sequence_ frees
+-}
 
 type LLVMJit = (JITDylib, ExecutionSession, IRCompileLayer, MVar Int)
 

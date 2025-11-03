@@ -1,12 +1,14 @@
 {-# language RecursiveDo, OverloadedStrings #-}
 {-# options_ghc -Wno-incomplete-uni-patterns #-}
 module Backend.LLVM.Code
-  ( compile
-  , compileRenderer
-  , compileRenderer'
+  ( --compile
+--  , compileRenderer
+   compileRenderer'
   ) where
 
 import FractalStream.Prelude
+
+import Actor.Viewer
 
 import Backend.LLVM.Operand
 import Backend.LLVM.Value
@@ -25,14 +27,13 @@ import Language.Type
 import Language.Code
 import Data.Indexed.Functor
 
-import Debug.Trace
-
 toParameterList :: EnvironmentProxy env -> [(AST.Type, ParameterName)]
 toParameterList = \case
   EmptyEnvProxy -> []
   BindingProxy name t env ->
     (toLLVMType t, ParameterName (fromString (symbolVal name))) : toParameterList env
 
+{-
 compile :: forall env output t
          . (KnownEnvironment env, KnownSymbol output, KnownType t
            , Required output env ~ t)
@@ -232,84 +233,78 @@ compileRenderer code = runExcept $
         -- } // end i/y loop
         exitPixelLoopY <- block `named` "exit i loop"
         retVoid
+-}
 
 type RenderEnv' env =
-  (  '("[internal argument] #blockWidth", 'IntegerT)
-  ': '("[internal argument] #blockHeight", 'IntegerT)
-  ': '("[internal argument] #subsamples", 'IntegerT)
-  ': env )
+  (  '(InternalBlockWidth,  'IntegerT)
+  ': '(InternalBlockHeight, 'IntegerT)
+  ': '(InternalSubsamples,  'IntegerT)
+  ': ViewerEnv env )
 
+type InternalBlockWidth  = "[llvm internal argument] #blockWidth"
+type InternalBlockHeight = "[llvm internal argument] #blockHeight"
+type InternalSubsamples  = "[llvm internal argument] #subsamples"
 
-compileRenderer' :: forall x y dx dy env output
-                 . ( KnownEnvironment env
-                   , NotPresent "[internal argument] #blockWidth" env
-                   , NotPresent "[internal argument] #blockHeight" env
-                   , NotPresent "[internal argument] #subsamples" env
-                   , KnownSymbol x, KnownSymbol y
-                   , KnownSymbol dx, KnownSymbol dy
-                   , KnownSymbol output
-                   , Required x env ~ 'RealT
-                   , NotPresent x (env `Without` x)
-                   , Required y env ~ 'RealT
-                   , NotPresent y (env `Without` y)
-                   , Required dx env ~ 'RealT
-                   , NotPresent dx (env `Without` dx)
-                   , Required dy env ~ 'RealT
-                   , NotPresent dy (env `Without` dy)
-                   , Required output env ~ 'ColorT
-                   , NotPresent output (env `Without` output)
-                   )
+assertAbsent :: forall name env a. (KnownSymbol name)
+             => Proxy name
+             -> EnvironmentProxy env
+             -> (NotPresent name env => Except String a)
+             -> Except String a
+assertAbsent name env action = case lookupEnv' name env of
+    Absent' pf -> recallIsAbsent pf action
+    _ -> throwError ("INTERNAL ERROR: llvm-internal argument `" ++ symbolVal name ++ "` re-defined.")
+
+compileRenderer' :: forall env
+                 . KnownEnvironment env
                 => AST.Name
-                -> Proxy x
-                -> Proxy y
-                -> Proxy dx
-                -> Proxy dy
-                -> Proxy output
-                -> Code env
+                -> Code (ViewerEnv env)
                 -> Either String AST.Module
-compileRenderer' name _ _ _ _ _ code = runExcept $
+compileRenderer' name code = runExcept $
+  assertAbsent (Proxy @InternalBlockWidth)  (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @InternalBlockHeight) (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @InternalSubsamples)  (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @InternalX)           (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @InternalY)           (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @InternalDX)          (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @InternalDY)          (envProxy (Proxy @env)) $
+  assertAbsent (Proxy @"color")             (envProxy (Proxy @env)) $
   buildModuleT "compiled rendering kernel" $ do
     let retParam = (toLLVMPtrType ColorType, NoParameterName)
         params   = toParameterList (envProxy (Proxy @(RenderEnv' env)))
-        pfX = bindingEvidence @x @'RealT @env
-        pfY = bindingEvidence @y @'RealT @env
-        pfdX = bindingEvidence @dx @'RealT @env
-        pfdY = bindingEvidence @dy @'RealT @env
-        pfOutput = bindingEvidence @output @'ColorT @env
+        pfX  = bindingEvidence @InternalX   @'RealT  @(ViewerEnv env)
+        pfY  = bindingEvidence @InternalY   @'RealT  @(ViewerEnv env)
+        pfdX = bindingEvidence @InternalDX  @'RealT  @(ViewerEnv env)
+        pfdY = bindingEvidence @InternalDY  @'RealT  @(ViewerEnv env)
+        pfOutput = bindingEvidence @"color" @'ColorT @(ViewerEnv env)
     function name (retParam : params) AST.void $ \(retPtr : blockWidthArg : blockHeightArg : subsamplesArg : rawArgs) -> do
       getExtern <- getGetExtern
-      traceM ("ok... retPtr = " ++ show retPtr)
-      blockWidthPtr <- allocaArg IntegerType blockWidthArg `named` "set up environment"
-      blockHeightPtr <- allocaArg IntegerType blockHeightArg `named` "set up environment"
-      subsamplesPtr <- allocaArg IntegerType subsamplesArg
-      args <- allocaArgs (envProxy (Proxy @env)) rawArgs
       mdo
 
-        x0 <- derefOperand (getBinding args pfX) >>= \case
-          RealOp v -> pure v
-        y0 <- derefOperand (getBinding args pfY) >>= \case
-          RealOp v -> pure v
-        dx <- derefOperand (getBinding args pfdX) >>= \case
-          RealOp v -> pure v
-        dy <- derefOperand (getBinding args pfdY) >>= \case
-          RealOp v -> pure v
-        blockWidth <- derefOperand blockWidthPtr >>= \case
-          IntegerOp v -> pure v
-        blockHeight <- derefOperand blockHeightPtr >>= \case
-          IntegerOp v -> pure v
-        subsamples <- derefOperand subsamplesPtr >>= \case
-          IntegerOp v -> pure v
+        _entry <- block `named` "set up environment"
+        blockWidthPtr  <- allocaArg IntegerType blockWidthArg
+        blockHeightPtr <- allocaArg IntegerType blockHeightArg
+        subsamplesPtr  <- allocaArg IntegerType subsamplesArg
+        args <- allocaArgs (envProxy (Proxy @(ViewerEnv env))) rawArgs
+        x0 <- derefOperand (getBinding args pfX)  >>= \case RealOp v -> pure v
+        y0 <- derefOperand (getBinding args pfY)  >>= \case RealOp v -> pure v
+        dx <- derefOperand (getBinding args pfdX) >>= \case RealOp v -> pure v
+        dy <- derefOperand (getBinding args pfdY) >>= \case RealOp v -> pure v
+        blockWidth  <- derefOperand blockWidthPtr  >>= \case IntegerOp v -> pure v
+        blockHeight <- derefOperand blockHeightPtr >>= \case IntegerOp v -> pure v
+        subsamples  <- derefOperand subsamplesPtr  >>= \case IntegerOp v -> pure v
         indexPtr <- alloca AST.i32 Nothing 0 `named` "set up loop indices"
         iPtr <- alloca AST.i32 Nothing 0
         jPtr <- alloca AST.i32 Nothing 0
         kPtr <- alloca AST.i32 Nothing 0
         xPtr <- alloca AST.double Nothing 0
         yPtr <- alloca AST.double Nothing 0
+        br beginLoops
 
         -- index = 0;
         -- y = 0;
         -- for (i = 0; i < blockSize; ++i) {
-        store indexPtr 0 (C.int32 0) `named` "begin i loop"
+        beginLoops <- block `named` "begin i loop"
+        store indexPtr 0 (C.int32 0)
         store yPtr 0 y0
         store iPtr 0 (C.int32 0)
         br pixelLoopY

@@ -46,6 +46,7 @@ common FractalStream-common
                      , PatternSynonyms
                      , RankNTypes
                      , RecordWildCards
+                     , RequiredTypeArguments
                      , ScopedTypeVariables
                      , StandaloneDeriving
                      , TupleSections
@@ -62,15 +63,13 @@ library
                        FractalStream.Prelude
                        FractalStream.Metadata
 
-                       UI
-
-                       Actor
                        Actor.Tool
-
                        Actor.Configuration
                        Actor.Ensemble
                        Actor.Layout
                        Actor.UI
+                       Actor.Viewer
+                       Actor.Viewer.Types
                        Actor.Viewer.Complex
                        Actor.Event
 
@@ -104,6 +103,8 @@ library
                        Data.Color
                        Data.Recursive
                        Data.DynamicValue
+                       Data.Codec
+                       Data.PNG
 
   c-sources: src/FractalStream/find_jemalloc.c
 
@@ -118,6 +119,7 @@ library
                        megaparsec >= 9.1,
                        parser-combinators,
                        mtl,
+                       transformers,
                        monad-parallel,
                        monad-par,
                        monad-par-extras,
@@ -131,7 +133,8 @@ library
                        Earley,
                        include-file,
                        utf8-string,
-                       githash
+                       githash,
+                       zlib,
   hs-source-dirs:      src
 
 test-suite spec

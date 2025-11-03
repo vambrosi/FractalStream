@@ -1,38 +1,47 @@
-{-# language OverloadedStrings #-}
 module Actor.Event
   ( Event(..)
-  , EventHandlers(..)
-  , ParsedEventHandlers(..)
-  , ComplexParsedEventHandlers(..)
-  , convertComplexToRealEventHandlers
-  , combineEventHandlers
-  , noEventHandlers
-  , noComplexEventHandlers
-  , type SomeEventHandler
-  , handleEvent
-  , toEventHandlers
-  , prependHandlerCode
+  , type EventDependencies
+
+  , SingleEventHandler(..)
+  , ClickHandler(..)
+  , DragHandler(..)
+  , TimerHandler(..)
+  , ButtonHandler(..)
+  , EventArgument_
+  , EventArgument(..)
+
+  , Coordinate(..)
+  , buildHandler
+  , makeEventHandler
+
+  , constArg
+  , mutableVar
+  , mutableArg
+  , toUserString
+
   ) where
 
 import FractalStream.Prelude
 
 import Language.Type
 import Language.Environment
-import Language.Value.Evaluator (HaskellTypeOfBinding)
 import Language.Code
-import Language.Value.Parser
-import Language.Value.Typecheck (internalIterations, internalStuck)
+import Language.Parser.SourceRange
+import Language.Value.Typecheck
 import Language.Code.Parser
-import Language.Code.InterpretIO
+import Language.Value.Evaluator (HaskellValue)
+import Language.Code.InterpretIO hiding (update)
 import Language.Draw
-
-import Data.DynamicValue
-
-import Data.IORef
 import qualified Data.Map as Map
 import qualified Data.Set as Set
+import Data.IORef
+--import Control.Monad.Trans.Maybe
 
-import Data.Aeson
+import Data.DynamicValue
+import Data.Codec
+import Actor.Viewer.Types
+import Actor.Layout (CodeString(..))
+--import Data.Typeable
 
 type Point = (Double, Double)
 
@@ -48,499 +57,640 @@ data Event
   | Deactivated
   deriving Show
 
-data EventHandlers env = EventHandlers
-  { ehOnClick       :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT ])
-  , ehOnDoubleClick :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT ])
-  , ehOnDrag        :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT, 'RealT, 'RealT ])
-  , ehOnDragDone    :: Maybe (SomeEventHandler env '[ 'RealT, 'RealT, 'RealT, 'RealT ])
-  , ehOnTimer       :: Map String (Int, SomeEventHandler env '[])
-  , ehOnButton      :: Map String (SomeEventHandler env '[])
-  , ehOnRefresh     :: Maybe (SomeEventHandler env '[])
-  , ehOnActivated   :: Maybe (SomeEventHandler env '[])
-  , ehOnDeactivated :: Maybe (SomeEventHandler env '[])
+data SingleEventHandler
+  = OnClick ClickHandler
+  | OnDoubleClick ClickHandler
+  | OnClickOrDrag (ClickHandler, DragHandler)
+  | OnDrag DragHandler
+  | OnDragDone DragHandler
+  | OnTimer TimerHandler
+  | OnButton ButtonHandler
+  | OnRefresh UnitHandler
+  | OnActivated UnitHandler
+  | OnDeactivated UnitHandler
+
+data CombinedEventHandler env = CombinedEventHandler
+  { onClick       :: Maybe (Code (ClickHandlerEnv env))
+  , onDoubleClick :: Maybe (Code (ClickHandlerEnv env))
+  , onDrag     :: Maybe (Code (DragHandlerEnv env))
+  , onDragDone :: Maybe (Code (DragHandlerEnv env))
+  , onTimer  :: Map String (Int, Code (UnitHandlerEnv env))
+  , onButton :: Map String (Code (UnitHandlerEnv env))
+  , onRefresh     :: Maybe (Code (UnitHandlerEnv env))
+  , onActivated   :: Maybe (Code (UnitHandlerEnv env))
+  , onDeactivated :: Maybe (Code (UnitHandlerEnv env))
   }
 
-data ParsedEventHandlers = ParsedEventHandlers
-  { pehOnClick :: Maybe (String, String, Bool, String)
-  , pehOnDoubleClick :: Maybe (String, String, Bool, String)
-  , pehOnDrag :: Maybe (String, String, String, String, Bool, String)
-  , pehOnDragDone :: Maybe (String, String, String, String, Bool, String)
-  , pehOnTimer :: Map String (Int, String)
-  , pehOnButton :: Map String String
-  , pehOnRefresh :: Maybe String
-  , pehOnActivated :: Maybe String
-  , pehOnDeactivated :: Maybe String
-  }
-  deriving Show
+data EventArgument_ :: Symbol -> FSType -> Exp Type
+type instance Eval (EventArgument_ _ t) = EventArgument t
 
-data ComplexParsedEventHandlers = ComplexParsedEventHandlers
-  { cpehOnClick :: Maybe (Either String String, Bool, String)
-  , cpehOnDoubleClick :: Maybe (Either String String, Bool, String)
-  , cpehOnDrag :: Maybe (Either String String, String, Bool, String)
-  , cpehOnDragDone :: Maybe (Either String String, String, Bool, String)
-  , cpehOnTimer :: Map String (Int, String)
-  , cpehOnButton :: Map String String
-  , cpehOnRefresh :: Maybe String
-  , cpehOnActivated :: Maybe String
-  , cpehOnDeactivated :: Maybe String
-  }
-  deriving Show
-
-prependHandlerCode :: String -> ParsedEventHandlers -> ParsedEventHandlers
-prependHandlerCode prefix p = ParsedEventHandlers
-  { pehOnClick = fmap (prefix ++) <$> pehOnClick p
-  , pehOnDoubleClick = fmap (prefix ++) <$> pehOnDoubleClick p
-  , pehOnDrag = fmap (prefix ++) <$> pehOnDrag p
-  , pehOnDragDone = fmap (prefix ++) <$> pehOnDragDone p
-  , pehOnTimer = fmap (prefix ++) <$> pehOnTimer p
-  , pehOnButton = (prefix ++) <$> pehOnButton p
-  , pehOnRefresh = (prefix ++) <$> pehOnRefresh p
-  , pehOnActivated = (prefix ++) <$> pehOnActivated p
-  , pehOnDeactivated = (prefix ++) <$> pehOnDeactivated p
+data EventArgument t = EventArgument
+  { argGetValue :: IO (Maybe (HaskellType t))
+  , argSetValue :: Maybe (TypeProxy t -> HaskellType t -> IO ())
   }
 
-swap :: (a, b) -> (b, a)
-swap (x, y) = (y, x)
+constArg :: HaskellType t -> EventArgument t
+constArg x = EventArgument (pure $ Just x) Nothing
 
-toEventHandlers :: forall env
-                 . EnvironmentProxy env
-                -> Set String
-                -> Splices
-                -> ParsedEventHandlers
-                -> Either String (Set String, EventHandlers env)
-toEventHandlers env viewerVars splices ParsedEventHandlers{..} = fmap swap $ flip runStateT Set.empty $ do
-  let parse :: EnvironmentProxy e -> String -> StateT (Set String) (Either String) (Code e)
-      parse e i = do
-        SomeSymbol (it :: Proxy iterations) <- pure (someSymbolVal internalIterations)
-        SomeSymbol (stuck :: Proxy stuck) <- pure (someSymbolVal internalStuck)
-        case lookupEnv' it e of
-          Absent' pf -> withEnvironment e $ recallIsAbsent pf $ do
-            let e' = declare @iterations IntegerType e
-            case lookupEnv' stuck e' of
-              Absent' pf' -> withEnvironment e' $ recallIsAbsent pf' $ do
-                let e'' = declare @stuck BooleanType e'
-                c <- lift $ first (`ppFullError` i) $ parseCode e'' splices i
-                modify' (execState (usedVarsInCode c))
-                pure (let_ 0 $ let_ (Const (Scalar BooleanType False)) $ c)
-              Found'{} -> lift (Left "internal stuck status already defined")
-          Found'{} -> lift (Left "internal iteration count already defined")
+mutableVar :: Eq (HaskellType t) => Variable (HaskellType t) -> EventArgument t
+mutableVar v = EventArgument
+  (Just <$> getDynamic (dyn v))
+  (Just $ \_ x -> setValue' v x)
 
-      allUpdatesOk, noUpdatesToViewerVar :: Context (K Bool) env
-      allUpdatesOk = envToContext env (\_ _ -> True)
-      noUpdatesToViewerVar = envToContext env (\n _ ->
-                                                 not $ symbolVal n `Set.member` viewerVars)
-
-      toHandler' :: forall args. (Bool, SomeEventHandler_ env args)
-                -> SomeEventHandler env args
-      toHandler' = \(canUpdate, h) ->
-        if canUpdate
-        then SomeEventHandler h allUpdatesOk
-        else SomeEventHandler h noUpdatesToViewerVar
-
-      toHandler :: forall args. SomeEventHandler_ env args -> SomeEventHandler env args
-      toHandler h = SomeEventHandler h allUpdatesOk
-
-      mmaybe :: forall m a b
-              . Applicative m
-             => Maybe a
-             -> (a -> m b)
-             -> m (Maybe b)
-      mmaybe m f = maybe (pure Nothing) (fmap Just . f) m
-
-  ehOnClick <- mmaybe (pehOnClick) $ fmap toHandler' . \(x, y, allowUpdate, code) -> fmap (allowUpdate,) $
-    bind y RealType env $ \env' ->
-    bind x RealType env' $ \env'' ->
-        ( WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
-          <$> parse env'' code
-
-  ehOnDoubleClick <- mmaybe (pehOnDoubleClick) $ fmap toHandler' . \(x, y, allowUpdate, code) -> fmap (allowUpdate,) $
-    bind y RealType env $ \env' ->
-    bind x RealType env' $ \env'' ->
-        ( WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
-          <$> parse env'' code
-
-  ehOnDrag <- mmaybe (pehOnDrag) $ fmap toHandler' . \(x1, y1, x2, y2, allowUpdate, code) -> fmap (allowUpdate,) $
-    bind y2 RealType env  $ \env1 ->
-    bind x2 RealType env1 $ \env2 ->
-    bind y1 RealType env2 $ \env3 ->
-    bind x1 RealType env3 $ \env4 ->
-    ( WithArg Proxy RealType . WithArg Proxy RealType
-      . WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
-          <$> parse env4 code
-
-  ehOnDragDone <- mmaybe (pehOnDragDone) $ fmap toHandler' . \(x1, y1, x2, y2, allowUpdate, code) -> fmap (allowUpdate,) $
-    bind y2 RealType env  $ \env1 ->
-    bind x2 RealType env1 $ \env2 ->
-    bind y1 RealType env2 $ \env3 ->
-    bind x1 RealType env3 $ \env4 ->
-    ( WithArg Proxy RealType . WithArg Proxy RealType
-      . WithArg Proxy RealType . WithArg Proxy RealType . WithNoArgs )
-          <$> parse env4 code
-
-  ehOnTimer <-
-    (traverse (\(ms, code) -> (ms,) . (toHandler . WithNoArgs) <$> parse env code)
-      pehOnTimer)
-
-  ehOnRefresh <- mmaybe (pehOnRefresh) (fmap (toHandler . WithNoArgs) . parse env)
-
-  ehOnActivated <- mmaybe (pehOnActivated) (fmap (toHandler . WithNoArgs) . parse env)
-
-  ehOnDeactivated <- mmaybe (pehOnDeactivated) (fmap (toHandler . WithNoArgs) . parse env)
-
-  ehOnButton <- traverse (fmap (toHandler . WithNoArgs) . parse env) pehOnButton
-
-  pure EventHandlers{..}
-
-
-bind :: String
-     -> TypeProxy ty
-     -> EnvironmentProxy env
-     -> (forall name. (KnownSymbol name, NotPresent name env)
-        => EnvironmentProxy ( '(name, ty) ': env) -> StateT s (Either String) t)
-     -> StateT s (Either String) t
-bind nameStr ty env k = case someSymbolVal nameStr of
-  SomeSymbol name -> case lookupEnv' name env of
-    Absent' proof -> recallIsAbsent proof (k (bindNameEnv name ty proof env))
-    _ -> lift $ Left (symbolVal name <> " is defined twice")
-
-noEventHandlers :: ParsedEventHandlers
-noEventHandlers = ParsedEventHandlers Nothing Nothing Nothing Nothing Map.empty Map.empty Nothing Nothing Nothing
-
-noComplexEventHandlers :: ComplexParsedEventHandlers
-noComplexEventHandlers = ComplexParsedEventHandlers Nothing Nothing Nothing Nothing Map.empty Map.empty Nothing Nothing Nothing
-
-convertComplexToRealEventHandlers ::
-  ComplexParsedEventHandlers -> ParsedEventHandlers
-
-convertComplexToRealEventHandlers ComplexParsedEventHandlers{..}
-    = ParsedEventHandlers{..}
+mutableArg :: Eq (HaskellType t) => Mapped String (Either err (HaskellType t)) -> EventArgument t
+mutableArg var = EventArgument getter setter
   where
+    getter = either (const Nothing) Just <$> getDynamic (dyn var)
+    setter = Just $ \t x -> getDynamic (dyn var) >>= \case
+      Right oldX | Scalar t oldX == Scalar t x -> pure ()
+      _ -> setValue' (source var) (toUserString t x)
 
-    initOrSet :: Either String String -> String -> String -> String
-    initOrSet lr x y = concat $ case lr of
-      Left  v -> [v, " <- ", x, " + i ", y, "\n"]
-      Right v -> [v, " : C <- ", x, " + i ", y, "\n"]
+data MaybeHaskellValue :: Symbol -> FSType -> Exp Type
+type instance Eval (MaybeHaskellValue _ t) = Maybe (HaskellType t)
 
-    cplx :: (Either String String, Bool, String)
-         -> (String, String, Bool, String)
-    cplx (z, mutable, code) =
-      let zre = "INTERNAL__" ++ either id id z ++ "__re"
-          zim = "INTERNAL__" ++ either id id z ++ "__im"
-          code' = concat
-            [ initOrSet z zre zim
-            , code ]
-      in (zre, zim, mutable, code')
+run :: forall env. DrawHandler ScalarIORefM -> Context EventArgument_ env -> Code env -> IO ()
+run draw ctx script = do
 
-    cplx2 :: (Either String String, String, Bool, String)
-          -> (String, String, String, String, Bool, String)
-    cplx2 (z, w, mutable, code) =
-      let zre = "INTERNAL__" ++ either id id z ++ "__re"
-          zim = "INTERNAL__" ++ either id id z ++ "__im"
-          wre = "INTERNAL__" ++ w ++ "__re"
-          wim = "INTERNAL__" ++ w ++ "__im"
-          code' = concat
-            [ initOrSet z zre zim
-            , initOrSet (Right w) wre wim
-            , code ]
-      in (zre, zim, wre, wim, mutable, code')
+  -- Snapshot the arguments
+  (mapContextM @MaybeHaskellValue @HaskellValue (\_ _ -> id) <$> mapContextM (\_ _ -> argGetValue) ctx) >>= \case
+    Nothing -> pure ()
+    Just (initialArgs :: Context HaskellValue env) -> do
+      args :: Context IORefTypeOfBinding env <- mapContextM (\_ _ -> newIORef) initialArgs
+      execStateT (interpretToIO draw script) args
+      finalArgs <- mapContextM @_ @HaskellValue (\_ _ -> readIORef) args
 
-    pehOnClick = cplx <$> cpehOnClick
-    pehOnDoubleClick = cplx <$> cpehOnDoubleClick
-    pehOnDrag = cplx2 <$> cpehOnDrag
-    pehOnDragDone = cplx2 <$> cpehOnDragDone
-    pehOnTimer = cpehOnTimer
-    pehOnRefresh = cpehOnRefresh
-    pehOnActivated = cpehOnActivated
-    pehOnDeactivated = cpehOnDeactivated
-    pehOnButton = cpehOnButton
+      -- Update any arguments that have been changed by the script
+      let ctx' = zipContext (zipContext initialArgs finalArgs) ctx
+      fromContextM_ (\_ ty ((old, new), arg) -> case argSetValue arg of
+                        Nothing -> pure ()
+                        Just setter -> when (Scalar ty old /= Scalar ty new) (setter ty new)
+                    ) ctx'
 
-instance FromJSON (String -> String -> ParsedEventHandlers) where
-  parseJSON = withObject "event handler" $ \o -> do
-    let handler = noEventHandlers
-    event :: String <- o .: "event"
-    case event of
-      "click" -> do
-        xVar <- o .:? "x-coord"
-        yVar <- o .:? "y-coord"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
-        pure (\x y -> handler { pehOnClick = Just (fromMaybe x xVar, fromMaybe y yVar, allowUpdate, code) })
+makeEventHandler :: forall env
+                  . (MissingClickArgs env, MissingDragArgs env, MissingUnitArgs env)
+                 => DrawHandler ScalarIORefM
+                 -> Context EventArgument_ env
+                 -> CombinedEventHandler env
+                 -> Double
+                 -> Event
+                 -> Maybe (IO ())
+makeEventHandler draw ctx CombinedEventHandler{..} = \px -> \case
+  Click (x, y) -> onClick <&> run draw (constArg x # constArg y # constArg px # ctx)
+  DoubleClick (x, y) -> onDoubleClick <&> run draw (constArg x # constArg y # constArg px # ctx)
+  Drag (x, y) (x', y') -> onDrag <&> run draw (constArg x # constArg y # constArg x' # constArg y' # constArg px # ctx)
+  DragDone (x, y) (x', y') -> onDragDone <&> run draw (constArg x # constArg y # constArg x' # constArg y' # constArg px # ctx)
+  Timer name -> Map.lookup name onTimer <&> run draw (constArg px # ctx) . snd
+  ButtonPressed name -> Map.lookup name onButton <&> run draw (constArg px # ctx)
+  Refresh -> onRefresh <&> run draw (constArg px # ctx)
+  Activated -> onActivated <&> run draw (constArg px # ctx)
+  Deactivated -> onDeactivated <&> run draw (constArg px # ctx)
 
-      "click-or-drag" -> do
-        xVar <- o .:? "x-coord"
-        yVar <- o .:? "y-coord"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
-        let x0Var = "INTERNAL__drag_x_start"
-            y0Var = "INTERNAL__drag_y_start"
-        pure (\x y -> handler { pehOnClick = Just (fromMaybe x xVar, fromMaybe y yVar, allowUpdate, code)
-                              , pehOnDrag  = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code)
-                              , pehOnDragDone = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code)
-                              })
+combineEventHandlers :: forall env
+                      . Either String (CombinedEventHandler env)
+                     -> Either String (CombinedEventHandler env)
+                     -> Either String (CombinedEventHandler env)
+combineEventHandlers err@(Left _) _ = err
+combineEventHandlers _ err@(Left _) = err
+combineEventHandlers (Right lhs) (Right rhs) = do
+    let atMostOne :: String -> (CombinedEventHandler env -> Maybe b) -> Either String (Maybe b)
+        atMostOne what how = case (how lhs, how rhs) of
+          (Just _, Just _) -> Left ("Duplicate definitions of the " ++ what ++ " event handler")
+          (Nothing, x)     -> Right x
+          (x, Nothing)     -> Right x
+        uniqueKey :: String -> (CombinedEventHandler env -> Map String v) -> Either String (Map String v)
+        uniqueKey what how =
+          case Set.toList $ Set.intersection (Map.keysSet $ how lhs) (Map.keysSet $ how rhs) of
+            [] -> Right (how lhs `Map.union` how rhs)
+            (k:_) -> Left ("Duplicate definitions of the " ++ what ++ " event handler named `" ++ k ++ "`")
+    CombinedEventHandler
+      <$> atMostOne "click"          onClick
+      <*> atMostOne "double-click"   onDoubleClick
+      <*> atMostOne "drag"           onDrag
+      <*> atMostOne "drag-completed" onDragDone
+      <*> uniqueKey "timer"          onTimer
+      <*> uniqueKey "button"         onButton
+      <*> atMostOne "refresh"        onRefresh
+      <*> atMostOne "activated"      onActivated
+      <*> atMostOne "deactivated"    onDeactivated
 
-      "double-click" -> do
-        xVar <- o .:? "x-coord"
-        yVar <- o .:? "y-coord"
-        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
-        code <- o .: "code"
-        pure (\x y -> handler { pehOnDoubleClick = Just (fromMaybe x xVar, fromMaybe y yVar, allowUpdate, code) })
+noHandlers :: CombinedEventHandler env
+noHandlers = CombinedEventHandler Nothing Nothing Nothing Nothing Map.empty Map.empty Nothing Nothing Nothing
 
-      "drag" -> do
-        xVar <- o .:? "x-coord"
-        yVar <- o .:? "y-coord"
-        x0Var <- o .:? "x-start" .!= "INTERNAL__drag_x_start"
-        y0Var <- o .:? "y-start" .!= "INTERNAL__drag_y_start"
-        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
-        code <- o .: "code"
-        pure (\x y -> handler { pehOnDrag = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code) })
+singleToCombined :: EnvironmentProxy env -> SingleEventHandler -> IO (Either String (CombinedEventHandler env))
+singleToCombined env = \case
+  OnClick ClickHandler{..} -> getDynamic (dyn chScript) <&> \(SomeClickHandler script) ->
+    bimap snd (\h -> noHandlers { onClick = Just h }) (script env)
+  OnDoubleClick ClickHandler{..} -> getDynamic (dyn chScript) <&> \(SomeClickHandler script) ->
+    bimap snd (\h -> noHandlers { onDoubleClick = Just h }) (script env)
+  OnDrag DragHandler{..} -> getDynamic (dyn dhScript) <&> \(SomeDragHandler script) ->
+    bimap snd (\h -> noHandlers { onDrag = Just h }) (script env)
+  OnDragDone DragHandler{..} -> getDynamic (dyn dhScript) <&> \(SomeDragHandler script) ->
+    bimap snd (\h -> noHandlers { onDragDone = Just h }) (script env)
+  OnClickOrDrag (ClickHandler{..}, DragHandler{..}) ->
+    ((,) <$> getDynamic (dyn chScript) <*> getDynamic (dyn dhScript)) <&>
+      \(SomeClickHandler cscript, SomeDragHandler dscript) ->
+        bimap snd (\(ch, dh) -> noHandlers { onClick = Just ch
+                                           , onDrag  = Just dh
+                                           }) ((,) <$> cscript env <*> dscript env)
+  OnTimer TimerHandler{..} -> do
+    name <- getDynamic (dyn thName)
+    interval <- getDynamic (dyn thInterval)
+    SomeUnitHandler script <- getDynamic (dyn thScript)
+    pure $ bimap snd (\h -> noHandlers { onTimer = Map.singleton name (interval, h) }) (script env)
+  OnButton ButtonHandler{..} -> do
+    name <- getDynamic (dyn bhName)
+    SomeUnitHandler script <- getDynamic (dyn bhScript)
+    pure $ bimap snd (\h -> noHandlers { onButton = Map.singleton name h }) (script env)
+  OnRefresh (UnitHandler code) -> do
+    SomeUnitHandler script <- getDynamic (dyn code)
+    pure $ bimap snd (\h -> noHandlers { onRefresh = Just h }) (script env)
+  OnActivated (UnitHandler code) -> do
+    SomeUnitHandler script <- getDynamic (dyn code)
+    pure $ bimap snd (\h -> noHandlers { onActivated = Just h }) (script env)
+  OnDeactivated (UnitHandler code) -> do
+    SomeUnitHandler script <- getDynamic (dyn code)
+    pure $ bimap snd (\h -> noHandlers { onDeactivated = Just h }) (script env)
 
-      "drag-finished" -> do
-        xVar <- o .:? "x-coord"
-        yVar <- o .:? "y-coord"
-        x0Var <- o .:? "x-start" .!= "INTERNAL__drag_x_start"
-        y0Var <- o .:? "y-start" .!= "INTERNAL__drag_y_start"
-        allowUpdate <- o .:? "can-update-viewer-coords" .!= False
-        code <- o .: "code"
-        pure (\x y -> handler { pehOnDragDone = Just (fromMaybe x xVar, fromMaybe y yVar, x0Var, y0Var, allowUpdate, code) })
+buildHandler :: DrawHandler ScalarIORefM
+             -> SomeContext EventArgument_
+             -> [SingleEventHandler]
+             -> IO (Either String (Double -> Event -> Maybe (IO ())))
+buildHandler draw (SomeContext ctx) handlers = do
+  let env = contextToEnv ctx
+  ecombined <- foldl' combineEventHandlers (Right noHandlers) <$> mapM (singleToCombined env) handlers
+  case ecombined of
+    Left err -> pure (Left err)
+    Right combined0 ->
+      assertMissingClickArgs env $
+      assertMissingDragArgs env $
+      assertMissingUnitArgs env $
+      let combined = case (onDrag combined0, onDragDone combined0) of
+            (Just _, Nothing) -> combined0 { onDragDone = Just NoOp }
+            _ -> combined0
+      in pure (pure $ makeEventHandler draw ctx combined)
 
-      "timer" -> do
-        name <- o .: "name"
-        interval <- o .: "interval"
-        code <- o .: "code"
-        pure (\_ _ -> handler { pehOnTimer = Map.singleton name (interval, code) })
+type EventDependencies =
+  (Dynamic (Either String Splices),
+   Dynamic (Either String Coordinate),
+   Dynamic (Either String (Maybe String))
+  )
 
-      "refresh" -> do
-        code <- o .: "code"
-        pure (\_ _ -> handler { pehOnRefresh = Just code })
+instance CodecWith EventDependencies SingleEventHandler where
+  codecWith_ ctx = match
+    [ Fragment OnClick (\case { OnClick h -> Just h; _ -> Nothing}) $
+        "event" `mustBe` "click" $ codecWith ctx
+    , Fragment OnDoubleClick (\case { OnDoubleClick h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "double-click" $ codecWith ctx
+    , Fragment OnClickOrDrag (\case { OnClickOrDrag h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "click-or-drag" $ codecWith ctx
+    , Fragment OnDrag (\case { OnDrag h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "drag" $ codecWith ctx
+    , Fragment OnDragDone (\case { OnDragDone h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "drag-finished" $ codecWith ctx
+    , Fragment OnTimer (\case { OnTimer h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "timer" $ codecWith ctx
+    , Fragment OnButton (\case { OnButton h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "button" $ codecWith ctx
+    , Fragment OnRefresh (\case { OnRefresh h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "refresh" $ codecWith ctx
+    , Fragment OnActivated (\case { OnActivated h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "activated" $ codecWith ctx
+    , Fragment OnDeactivated (\case { OnDeactivated h -> Just h; _ -> Nothing}) $ do
+        "event" `mustBe` "deactivated" $ codecWith ctx
+    ]
 
-      "activated" -> do
-        code <- o .: "code"
-        pure (\_ _ -> handler { pehOnActivated = Just code })
+declareE :: forall n -> forall t e. KnownSymbol n => TypeProxy t -> EnvironmentProxy e
+         -> Either (SourceRange, String) (EnvironmentProxy ( '(n,t) ': e ))
+declareE n t e = case lookupEnv' (Proxy @n) e of
+  Found'{} -> throwError (NoSourceRange, "Internal error: duplicate definition of `" ++
+                           symbolVal (Proxy @n) ++ "`.")
+  Absent' pf -> pure (recallIsAbsent pf $ declare t e)
 
-      "deactivated" -> do
-        code <- o .: "code"
-        pure (\_ _ -> handler { pehOnDeactivated = Just code })
+getVar :: forall n -> forall t e.  KnownSymbol n
+       => TypeProxy t -> EnvironmentProxy e -> Either (SourceRange, String) (Value '(e, t))
+getVar n t e = withEnvironment e $ case lookupEnv (Proxy @n) t e of
+  Found pf -> pure (Var (Proxy @n) t pf)
+  _ -> throwError (NoSourceRange,
+                    "INTERNAL ERROR, there was a problem locating `" ++ symbolVal (Proxy @n) ++ "`")
 
-      "button" -> do
-        btn <- o .: "label"
-        code <- o .: "code"
-        pure (\_ _ -> handler { pehOnButton = Map.singleton btn code })
+------------------------------------------------------------
+-- Click-type event handler
+------------------------------------------------------------
 
-      etc -> fail ("unknown event `" ++ etc ++ "`")
+type InternalPx  = "[internal] px"
 
-instance FromJSON (String -> ComplexParsedEventHandlers) where
-  parseJSON = withObject "event handler" $ \o -> do
-    let handler = noComplexEventHandlers
-        lr x Nothing  = Left x
-        lr _ (Just y) = Right y
-    event <- o .: "event"
-    case event of
-      "click" -> do
-        zVar <- o .:? "coord"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
-        pure (\z -> handler { cpehOnClick = Just (lr z zVar, allowUpdate, code) })
+data ClickHandler = ClickHandler
+  { chCoord  :: Variable (Maybe Coordinate)
+  , chCanUpdateViewer :: Variable Bool
+  , chScript :: Mapped CodeString SomeClickHandler }
 
-      "click-or-drag" -> do
-        zVar <- o .:? "coord"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
-        let z0Var = "INTERNAL__drag_start"
-        pure (\z -> handler { cpehOnClick = Just (lr z zVar, allowUpdate, code)
-                            , cpehOnDrag = Just (lr z zVar, z0Var, allowUpdate, code)
-                            , cpehOnDragDone = Just (lr z zVar, z0Var, allowUpdate, code)
-                            })
+instance CodecWith EventDependencies ClickHandler where
+  codecWith_ ctx = do
+    coord  <-coerce . chCoord-< fmap coerce <$> codec @(Variable MCoordinate)
+    update <-chCanUpdateViewer-< keyWithDefaultValue False "can-update-viewer-coords"
+    script <-chScript-< mapped (key "code") $ \use -> do
+      let (dsplices, dvc, dmpx) = use ctx
+          complain err = pure (\_ -> SomeClickHandler (\_ -> Left (NoSourceRange, err)))
+      dvc >>= \case
+        Left err -> complain err
+        Right vc -> dsplices >>= \case
+          Left err -> complain err
+          Right splices -> dmpx >>= \case
+            Left err -> complain err
+            Right mpx -> do
+              pt <- fromMaybe vc <$> dyn (use coord)
+              pure (fmap SomeClickHandler $ parseClickScript splices pt mpx)
+    build ClickHandler coord update script
 
-      "double-click" -> do
-        zVar <- o .:? "coord"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
-        pure (\z -> handler { cpehOnDoubleClick = Just (lr z zVar, allowUpdate, code) })
+newtype SomeClickHandler = SomeClickHandler (forall env. EnvironmentProxy env -> Either (SourceRange, String) (Code (ClickHandlerEnv env)))
 
-      "drag" -> do
-        zVar <- o .:? "coord"
-        z0Var <- o .:? "start" .!= "INTERNAL__drag_start"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
-        pure (\z -> handler { cpehOnDrag = Just (lr z zVar, z0Var, allowUpdate, code) })
+type ClickHandlerEnv env =
+  ( '(InternalX, 'RealT) ': '(InternalY, 'RealT) ':
+    '(InternalPx, 'RealT) ': env )
 
-      "drag-finished" -> do
-        zVar <- o .:? "coord"
-        z0Var <- o .:? "start" .!= "INTERNAL__drag_start"
-        code <- o .: "code"
-        allowUpdate <- o .:? "can-update-viewer-coord" .!= False
-        pure (\z -> handler { cpehOnDragDone = Just (lr z zVar, z0Var, allowUpdate, code) })
+type MissingClickArgs env =
+  ( NotPresent InternalX  env, NotPresent InternalY  env
+  , NotPresent InternalPx env )
 
-      "timer" -> do
-        name <- o .: "name"
-        interval <- o .: "interval"
-        code <- o .: "code"
-        pure (\_ -> handler { cpehOnTimer = Map.singleton name (interval, code) })
+assertMissingClickArgs :: forall env a
+                       . EnvironmentProxy env
+                      -> (MissingClickArgs env => a)
+                      -> a
+assertMissingClickArgs env k =
+  assertAbsent (Proxy @InternalX)    RealType env $
+  assertAbsent (Proxy @InternalY)    RealType env $
+  assertAbsent (Proxy @InternalPx)   RealType env k
 
-      "refresh" -> do
-        code <- o .: "code"
-        pure (\_ -> handler { cpehOnRefresh = Just code })
+type Bookkeeping env =
+    ( '(InternalIterationLimit, 'IntegerT) ': '(InternalIterations, 'IntegerT) ':
+      '(InternalEscapeRadius, 'RealT) ': '(InternalVanishingRadius, 'RealT) ':
+      '(InternalStuck, 'BooleanT) ': env)
 
-      "activated" -> do
-        code <- o .: "code"
-        pure (\_ -> handler { cpehOnActivated = Just code })
+withBookkeeping :: forall env
+                 . EnvironmentProxy env
+                -> Splices
+                -> (KnownEnvironment (Bookkeeping env) =>
+                    EnvironmentProxy (Bookkeeping env) ->
+                    Splices ->
+                    Either (SourceRange, String) (Code (Bookkeeping env)))
+                -> Either (SourceRange, String) (Code env)
+withBookkeeping env splices action = withEnvironment env $ do
+  env' :: EnvironmentProxy (Bookkeeping env) <-
+      (     declareE InternalIterationLimit  IntegerType
+        <=< declareE InternalIterations      IntegerType
+        <=< declareE InternalEscapeRadius    RealType
+        <=< declareE InternalVanishingRadius RealType
+        <=< declareE InternalStuck           BooleanType
+      ) env
+  withEnvironment env' $ do
+    code <- action env' splices
+    -- Now bind all of the bookkeeping variables
+    let (_, code') = (env', code)
+          & letInEnv (Const (Scalar typeProxy 100))
+          & letInEnv (Const (Scalar typeProxy 0))
+          & letInEnv (Const (Scalar typeProxy 10.0))
+          & letInEnv (Const (Scalar typeProxy 0.0001))
+          & letInEnv (Const (Scalar typeProxy False))
+    pure code'
 
-      "deactivated" -> do
-        code <- o .: "code"
-        pure (\_ -> handler { cpehOnDeactivated = Just code })
+parseClickScript :: Splices
+                 -> Coordinate
+                 -> Maybe String
+                 -> CodeString
+                 -> (forall env. EnvironmentProxy env
+                     -> Either (SourceRange, String) (Code (ClickHandlerEnv env)))
+parseClickScript splices0 clickCoord mpixel (CodeString src) (env0 :: EnvironmentProxy env) = do
+  env1 <- (declareE InternalX  RealType
+       <=< declareE InternalY  RealType
+       <=< declareE InternalPx RealType) env0
 
-      "button" -> do
-        btn <- o .: "label"
-        code <- o .: "code"
-        pure (\_ -> handler { cpehOnButton = Map.singleton btn code })
+  case clickCoord of
+    RealCoordinates p q -> case (someSymbolVal p, someSymbolVal q) of
+      (SomeSymbol xcoord, SomeSymbol ycoord) -> do
+        withBookkeeping env1 splices0 $ \env splices -> do
+          x <- getVar InternalX RealType env
+          bindOrDeclare xcoord RealType x env $ \env' -> do
+            y <- getVar InternalY RealType env'
+            bindOrDeclare ycoord RealType y env' $ \env'' -> do
+              SomeSymbol (px :: Proxy px) <- pure (someSymbolVal $ fromMaybe "[unused] pixel size" mpixel)
+              case lookupEnv px RealType env'' of
+                Absent pf -> recallIsAbsent pf $ do
+                  let env3 = BindingProxy px RealType env''
+                  ip <- getVar InternalPx RealType env''
+                  code <- left (errorLocation &&& unlines . pp) (parseCode env3 splices src)
+                  pure (Let (bindName px RealType pf) px ip code)
+                _ -> Left (NoSourceRange, "The pixel size variable `" ++ symbolVal px ++ "` was redefined.")
 
-      etc -> fail ("unknown event `" ++ etc ++ "`")
+    ComplexCoordinate c -> case someSymbolVal c of
+      SomeSymbol coord -> do
 
-combineEventHandlers :: Either String ParsedEventHandlers
-                     -> ParsedEventHandlers
-                     -> Either String ParsedEventHandlers
-combineEventHandlers e@(Left _) _ = e
-combineEventHandlers (Right lhs) rhs = do
-  let bad name = Left ("more than one handler for the `"
-                      ++ name ++ "` event")
-      combine :: forall a
-               . (ParsedEventHandlers -> Maybe a)
-              -> String
-              -> Either String (Maybe a)
-      combine getter name = case (getter rhs, getter lhs) of
-        (Nothing, Nothing) -> Right Nothing
-        (Nothing, x)       -> Right x
-        (x, Nothing)       -> Right x
-        (Just _, Just _)   -> bad name
+        withBookkeeping env1 splices0 $ \env splices -> do
+          let i = Const (Scalar ComplexType (0 :+ 1))
+          x <- getVar InternalX RealType env
+          y <- getVar InternalY RealType env
+          bindOrDeclare coord ComplexType (R2C x + i * R2C y) env $ \env' -> do
+              SomeSymbol (px :: Proxy px) <- pure (someSymbolVal $ fromMaybe "[unused] pixel size" mpixel)
+              case lookupEnv px RealType env' of
+                Absent pf -> recallIsAbsent pf $ do
+                  let env2 = BindingProxy px RealType env'
+                  ip <- getVar InternalPx RealType env'
+                  code <- left (errorLocation &&& unlines . pp) (parseCode env2 splices src)
+                  pure (Let (bindName px RealType pf) px ip code)
+                _ -> Left (NoSourceRange, "The pixel size variable `" ++ symbolVal px ++ "` was redefined.")
 
-      combineTimers = sequence (Map.unionWithKey repeatedTimer
-                                (pure <$> pehOnTimer lhs)
-                                (pure <$> pehOnTimer rhs))
-      repeatedTimer = (\k _ _ -> bad ("timer " ++ k))
+------------------------------------------------------------
+-- Drag-type event handler
+------------------------------------------------------------
 
-      combineButtons = sequence (Map.unionWithKey repeatedButton
-                                (pure <$> pehOnButton lhs)
-                                (pure <$> pehOnButton rhs))
-      repeatedButton = (\k _ _ -> bad ("button " ++ k))
+type InternalOldX  = "[internal] oldx"
+type InternalOldY  = "[internal] oldy"
 
-  ParsedEventHandlers
-    <$> combine pehOnClick "click"
-    <*> combine pehOnDoubleClick "double-click"
-    <*> combine pehOnDrag "drag"
-    <*> combine pehOnDragDone "drag-finished"
-    <*> combineTimers
-    <*> combineButtons
-    <*> combine pehOnRefresh "refresh"
-    <*> combine pehOnActivated "activated"
-    <*> combine pehOnDeactivated "deactivated"
+data DragHandler = DragHandler
+  { dhCoord  :: Variable (Maybe Coordinate)
+  , dhStart  :: Variable (Maybe Coordinate)
+  , dhCanUpdateViewer :: Variable Bool
+  , dhScript :: Mapped CodeString SomeDragHandler }
 
-handleEvent :: forall env
-             . Context DynamicValue env
-            -> Bool
-            -> DrawHandler ScalarIORefM
-            -> EventHandlers env
-            -> Event
-            -> Maybe (IO ())
-handleEvent ctx refreshCanUpdate draw EventHandlers{..} =
-  let run :: forall args
-           . Maybe (SomeEventHandler env args)
-          -> ArgList args
-          -> Maybe (IO ())
-      run mh args = runEventHandler True ctx draw <$> mh <*> pure args
-  in \case
-    Click (x, y) ->
-      run ehOnClick (Arg y $ Arg x $ EndOfArgs)
-    DoubleClick (x, y) ->
-      run ehOnDoubleClick (Arg y $ Arg x $ EndOfArgs)
-    Drag (x1,y1) (x2, y2) ->
-      run ehOnDrag (Arg y2 $ Arg x2 $ Arg y1 $ Arg x1 $ EndOfArgs)
-    DragDone (x1,y1) (x2, y2) ->
-      run ehOnDragDone (Arg y2 $ Arg x2 $ Arg y1 $ Arg x1 $ EndOfArgs)
-    Timer t ->
-      run (snd <$> Map.lookup t ehOnTimer) EndOfArgs
-    Refresh ->
-      runEventHandler refreshCanUpdate ctx draw <$> ehOnRefresh <*> pure EndOfArgs
-    Activated -> run ehOnActivated EndOfArgs
-    Deactivated -> run ehOnDeactivated EndOfArgs
-    ButtonPressed name -> run (Map.lookup name ehOnButton) EndOfArgs
+instance CodecWith EventDependencies DragHandler where
+  codecWith_ ctx = do
+    coord  <-coerce . dhCoord-< fmap coerce <$> codec @(Variable MCoordinate)
+    start  <-coerce . dhStart-< fmap coerce <$> codec @(Variable SCoordinate)
+    update <-dhCanUpdateViewer-< keyWithDefaultValue False "can-update-viewer-coords"
+    script <-dhScript-< mapped (key "code") $ \use -> do
+      let (dsplices, dvc, dmpx) = use ctx
+          complain err = pure (\_ -> SomeDragHandler (\_ -> Left (NoSourceRange, err)))
+      dvc >>= \case
+        Left err -> complain err
+        Right vc -> dsplices >>= \case
+          Left err -> complain err
+          Right splices -> dmpx >>= \case
+            Left err -> complain err
+            Right mpx -> do
+              pt  <- fromMaybe vc <$> dyn (use coord)
+              pt' <- fromMaybe (ComplexCoordinate "[unused] start") <$> dyn (use start)
+              pure (fmap SomeDragHandler $ parseDragScript splices pt pt' mpx)
+    build DragHandler coord start update script
 
-data SomeEventHandler_ env args where
-  WithNoArgs :: forall env
-              . Code env
-             -> SomeEventHandler_ env '[]
+newtype SomeDragHandler = SomeDragHandler (forall env. EnvironmentProxy env -> Either (SourceRange, String) (Code (DragHandlerEnv env)))
 
-  WithArg :: forall name ty env args
-           . (KnownSymbol name, NotPresent name env)
-          => Proxy name
-          -> TypeProxy ty
-          -> SomeEventHandler_ ( '(name, ty) ': env) args
-          -> SomeEventHandler_ env (ty ': args)
+type MissingDragArgs env =
+  ( NotPresent InternalX  env, NotPresent InternalY  env
+  , NotPresent InternalOldX env, NotPresent InternalOldY  env
+  , NotPresent InternalPx env )
 
-data SomeEventHandler env args = SomeEventHandler
-  { theEventHandler :: SomeEventHandler_ env args
-  , mutableArgs :: Context (K Bool) env }
+assertMissingDragArgs :: forall env a
+                       . EnvironmentProxy env
+                      -> (MissingDragArgs env => a)
+                      -> a
+assertMissingDragArgs env k =
+  assertAbsent (Proxy @InternalX)    RealType env $
+  assertAbsent (Proxy @InternalY)    RealType env $
+  assertAbsent (Proxy @InternalOldX) RealType env $
+  assertAbsent (Proxy @InternalOldY) RealType env $
+  assertAbsent (Proxy @InternalPx)   RealType env k
 
-data ArgList (args :: [FSType]) where
-  EndOfArgs :: ArgList '[]
-  Arg :: forall ty args
-       . HaskellType ty
-      -> ArgList args
-      -> ArgList (ty ': args)
+type DragHandlerEnv env =
+  ( '(InternalX, 'RealT) ': '(InternalY, 'RealT) ':
+    '(InternalOldX, 'RealT) ': '(InternalOldY, 'RealT) ':
+    '(InternalPx, 'RealT) ': env )
 
--- runEvt :: Handlers (HandlerEffects env0) ScalarIORefM
---        -> Context IORefTypeOfBinding env
---        -> SomeEventHandler env0 env args
---        -> ArgList args
---       -> IO ()
-runEvt :: DrawHandler ScalarIORefM
-       -> Context IORefTypeOfBinding env
-       -> SomeEventHandler_ env args
-       -> ArgList args
-       -> IO ()
-runEvt draw ctx eh args = case eh of
-  WithNoArgs code ->
-    void (runStateT (interpretToIO draw code) ctx)
-  WithArg name ty eh' -> case args of
-    Arg arg args' -> do
-      ref <- newIORef arg
-      let ctx' = Bind name ty ref ctx
-      runEvt draw ctx' eh' args'
+type InternalDragHandlerEnv env =
+  ( '(InternalIterationLimit, 'IntegerT) ': '(InternalIterations, 'IntegerT) ':
+    '(InternalEscapeRadius, 'RealT) ': '(InternalVanishingRadius, 'RealT) ':
+    '(InternalStuck, 'BooleanT) ':
+    DragHandlerEnv env)
+
+bindOrDeclare :: forall name ty env
+               . KnownSymbol name
+              => Proxy name
+              -> TypeProxy ty
+              -> Value '(env, ty)
+              -> EnvironmentProxy env
+              -> (forall e. KnownEnvironment e => EnvironmentProxy e -> Either (SourceRange, String) (Code e))
+              -> Either (SourceRange, String) (Code env)
+bindOrDeclare name ty v env action = case lookupEnv name ty env of
+  WrongType ty' -> withKnownType ty $
+    throwError (NoSourceRange,
+                 "Expected variable `" ++ "` should be " ++ an ty ++ ", not " ++ an ty')
+
+  Found pf -> withEnvironment env $ do
+    code <- action env
+    pure $ Block [ Set pf name v, code ]
+
+  Absent pf -> withKnownType ty $ do
+    let env' = recallIsAbsent pf $ BindingProxy name ty env
+    code <- withEnvironment env' $ action env'
+    pure (snd $ letInEnv @name v (env', code))
+
+parseDragScript :: Splices
+                -> Coordinate
+                -> Coordinate
+                -> Maybe String
+                -> CodeString
+                -> (forall env. EnvironmentProxy env
+                    -> Either (SourceRange, String) (Code (DragHandlerEnv env)))
+parseDragScript splices curCoord oldCoord mpixel (CodeString src) (env :: EnvironmentProxy env) = do
+  withEnvironment env $ do
+    -- Bind all of the internal bookkeeping variables
+    env' :: EnvironmentProxy (InternalDragHandlerEnv env) <-
+      (     declareE InternalIterationLimit  IntegerType
+        <=< declareE InternalIterations      IntegerType
+        <=< declareE InternalEscapeRadius    RealType
+        <=< declareE InternalVanishingRadius RealType
+        <=< declareE InternalStuck           BooleanType
+        <=< declareE InternalX               RealType
+        <=< declareE InternalY               RealType
+        <=< declareE InternalOldX            RealType
+        <=< declareE InternalOldY            RealType
+        <=< declareE InternalPx              RealType
+      ) env
+
+    withEnvironment env' $ do
+
+      SomeSymbol (coord1 :: Proxy coordT1) <- pure $ case curCoord of
+        ComplexCoordinate c -> someSymbolVal c
+        RealCoordinates{}   -> error "INTERNAL ERROR: Non-complex event coordinates are not yet implemented."
+      SomeSymbol (coord2 :: Proxy coordT2) <- pure $ case oldCoord of
+        ComplexCoordinate c -> someSymbolVal c
+        RealCoordinates{}   -> error "INTERNAL ERROR: Non-complex event coordinates are not yet implemented."
+
+      let i :: forall e. KnownEnvironment e => Value '(e, ComplexT)
+          i = Const (Scalar ComplexType (0 :+ 1))
+      x  <- getVar InternalX    RealType env'
+      y  <- getVar InternalY    RealType env'
+
+      code :: Code (InternalDragHandlerEnv env) <-
+        bindOrDeclare coord1 ComplexType (R2C x  + i * R2C y ) env' $ \env1 -> do
+          x' <- getVar InternalOldX RealType env1
+          y' <- getVar InternalOldY RealType env1
+          bindOrDeclare coord2 ComplexType (R2C x' + i * R2C y') env1 $ \env2 ->
+            case someSymbolVal <$> mpixel of
+              Nothing -> left (errorLocation &&& unlines . pp) (parseCode env2 splices src)
+              Just (SomeSymbol (px :: Proxy px)) -> do
+                case lookupEnv px RealType env2 of
+                  Absent pf -> recallIsAbsent pf $ do
+                    let env3 = BindingProxy px RealType env2
+                    p <- getVar InternalPx RealType env2
+                    c <- left (errorLocation &&& unlines . pp) (parseCode env3 splices src)
+                    pure (snd $ letInEnv @px p (env3, c))
+                  _ -> Left (NoSourceRange, "The pixel size variable `" ++ symbolVal px ++ "` was redefined.")
+
+      -- Now bind all of the bookkeeping variables
+      -- FIXME TODO are these hardcoded values correct?!
+      let (_, code') = (env', code)
+                     & letInEnv (Const (Scalar typeProxy 100))
+                     & letInEnv (Const (Scalar typeProxy 0))
+                     & letInEnv (Const (Scalar typeProxy 10.0))
+                     & letInEnv (Const (Scalar typeProxy 0.0001))
+                     & letInEnv (Const (Scalar typeProxy False))
+      pure code'
+
+------------------------------------------------------------
+-- Nullary event handlers
+------------------------------------------------------------
+
+newtype SomeUnitHandler = SomeUnitHandler (forall env. EnvironmentProxy env -> Either (SourceRange, String) (Code (UnitHandlerEnv env)))
+
+newtype UnitHandler = UnitHandler (Mapped CodeString SomeUnitHandler)
+
+type UnitHandlerEnv env = '(InternalPx, 'RealT) ': env
+
+type InternalUnitHandlerEnv env =
+  ( '(InternalIterationLimit, 'IntegerT) ': '(InternalIterations, 'IntegerT) ':
+    '(InternalEscapeRadius, 'RealT) ': '(InternalVanishingRadius, 'RealT) ':
+    '(InternalStuck, 'BooleanT) ':
+    UnitHandlerEnv env)
+
+type MissingUnitArgs env = ( NotPresent InternalPx env )
+
+assertAbsent :: KnownSymbol name
+             => Proxy name
+             -> TypeProxy t
+             -> EnvironmentProxy env
+             -> (NotPresent name env => k)
+             -> k
+assertAbsent name ty env k =
+  case assertAbsentInEnv name ty env "" of
+    Nothing -> error ("Internal error in `assertAbsent` on " ++ symbolVal name)
+    Just ProofNameIsAbsent -> k
+
+assertMissingUnitArgs :: forall env a
+                       . EnvironmentProxy env
+                      -> (MissingUnitArgs env => a)
+                      -> a
+assertMissingUnitArgs = assertAbsent (Proxy @InternalPx) RealType
+
+instance CodecWith EventDependencies (Mapped CodeString SomeUnitHandler) where
+  codecWith_ ctx = mapped (key "code") $ \use -> do
+    let (dsplices, _, dpx) = use ctx
+    dsplices >>= \case
+      Left err -> pure (\_ -> SomeUnitHandler $ \_ -> Left (NoSourceRange, err))
+      Right splices -> dpx >>= \case
+        Left err -> pure (\_ -> SomeUnitHandler $ \_ -> Left (NoSourceRange, err))
+        Right px -> pure (fmap SomeUnitHandler $ parseUnitScript splices px)
+
+instance CodecWith EventDependencies UnitHandler where
+  codecWith_ ctx = do
+    script <-coerce-< fmap coerce <$> codecWith @(Mapped CodeString SomeUnitHandler) ctx
+    build UnitHandler script
+
+data TimerHandler = TimerHandler
+  { thName     :: Variable String
+  , thInterval :: Variable Int
+  , thScript   :: Mapped CodeString SomeUnitHandler }
+
+instance CodecWith EventDependencies TimerHandler where
+  codecWith_ ctx = do
+    name     <-thName-<     key "name"
+    interval <-thInterval-< key "interval"
+    script   <-thScript-<   codecWith ctx
+    build TimerHandler name interval script
+
+data ButtonHandler = ButtonHandler
+  { bhName   :: Variable String
+  , bhScript :: Mapped CodeString SomeUnitHandler }
+
+instance CodecWith EventDependencies ButtonHandler where
+  codecWith_ ctx = do
+    name   <-bhName-<   key "label"
+    script <-bhScript-< codecWith ctx
+    build ButtonHandler name script
+
+parseUnitScript :: Splices
+                -> Maybe String
+                -> CodeString
+                -> (forall env. EnvironmentProxy env
+                    -> Either (SourceRange, String) (Code (UnitHandlerEnv env)))
+parseUnitScript splices mpx (CodeString src) (env :: EnvironmentProxy env) = do
+  withEnvironment env $ do
+    -- Bind all of the internal bookkeeping variables
+    env' :: EnvironmentProxy (InternalUnitHandlerEnv env) <-
+      (     declareE InternalIterationLimit  IntegerType
+        <=< declareE InternalIterations      IntegerType
+        <=< declareE InternalEscapeRadius    RealType
+        <=< declareE InternalVanishingRadius RealType
+        <=< declareE InternalStuck           BooleanType
+        <=< declareE InternalPx              RealType
+      ) env
+
+    withEnvironment env' $ case someSymbolVal <$> mpx of
+      Nothing -> do
+        code <- left (errorLocation &&& unlines . pp) (parseCode env' splices src)
+        let (_, code') = (env', code)
+                         & letInEnv (Const (Scalar typeProxy 100))
+                         & letInEnv (Const (Scalar typeProxy 0))
+                         & letInEnv (Const (Scalar typeProxy 10.0))
+                         & letInEnv (Const (Scalar typeProxy 0.0001))
+                         & letInEnv (Const (Scalar typeProxy False))
+        pure code'
+      Just (SomeSymbol px) -> do
+        case lookupEnv px RealType env' of
+          Absent pf -> do
+            let env'' = recallIsAbsent pf $ BindingProxy px RealType env'
+            code0 <- left (errorLocation &&& unlines . pp) (parseCode env'' splices src)
+            let code = Let bindingEvidence px (Var (Proxy @InternalPx) RealType bindingEvidence) code0
+            let (_, code') = (env', code)
+                             & letInEnv (Const (Scalar typeProxy 100))
+                             & letInEnv (Const (Scalar typeProxy 0))
+                             & letInEnv (Const (Scalar typeProxy 10.0))
+                             & letInEnv (Const (Scalar typeProxy 0.0001))
+                             & letInEnv (Const (Scalar typeProxy False))
+            pure code'
+          _ -> Left (NoSourceRange, "Pixel variable `" ++ symbolVal px ++ "` was redefined.")
 
 
-runEventHandler :: forall env args
-                 . Bool
-                -> Context DynamicValue env
-                -> DrawHandler ScalarIORefM
-                -> SomeEventHandler env args
-                -> ArgList args
-                -> IO ()
-runEventHandler allowUpdates ctx draw SomeEventHandler{..} args = do
+------------------------------------------------------------
+-- Helpers
+------------------------------------------------------------
 
-  -- Copy the current environment into a bunch of IORefs
-  iorefs :: Context IORefTypeOfBinding env <-
-    mapContextM (\_ _ d -> getDynamic d >>= newIORef) ctx
+data Coordinate = ComplexCoordinate String | RealCoordinates String String
 
-  -- Create the initial variable bindings
-  inValues :: Context HaskellTypeOfBinding env <-
-    mapContextM (\_ _ -> readIORef) iorefs
+newtype MCoordinate = MC (Maybe Coordinate)
 
-  -- Run the code and then read values back from the `iorefs`
-  runEvt draw iorefs theEventHandler args
+instance Codec MCoordinate where
+  codec = match
+    [ Fragment (MC . Just . ComplexCoordinate)
+               (\case { MC (Just (ComplexCoordinate z)) -> Just z; _ -> Nothing }) $
+      (key "coord")
+    , Fragment (MC . Just . uncurry RealCoordinates)
+               (\case { MC (Just (RealCoordinates x y)) -> Just (x, y); _ -> Nothing }) $ do
+        x <-fst-< key "x-coord"
+        y <-snd-< key "y-coord"
+        build (,) x y
+    , Fragment (\_ -> MC Nothing) (\case { MC Nothing -> Just (); _ -> Nothing }) (build ())
+    ]
 
-  outValues :: Context HaskellTypeOfBinding env <-
-    mapContextM (\_ _ -> readIORef) iorefs
+newtype SCoordinate = SC (Maybe Coordinate)
 
-  -- Find values that were updated by an output effect, and
-  -- update the corresponding dynamic values
-  when allowUpdates $ do
-    let finalCtx :: Context ((HaskellTypeOfBinding :**: HaskellTypeOfBinding :**: K Bool)
-                                :**: DynamicValue) env
-        finalCtx = zipContext (zipContext (zipContext inValues outValues) mutableArgs) ctx
-    fromContextM_ (\_ ty (((old, new), canUpdate), v) ->
-                     if Scalar ty old == Scalar ty new || not canUpdate
-                     then pure ()
-                     else void (setDynamic v new))
-                  finalCtx
-
-data K :: Type -> Symbol -> FSType -> Exp Type
-type instance Eval (K t _ _) = t
+instance Codec SCoordinate where
+  codec = match
+    [ Fragment (SC . Just . ComplexCoordinate)
+               (\case { SC (Just (ComplexCoordinate z)) -> Just z; _ -> Nothing }) $
+      (key "start")
+    , Fragment (SC . Just . uncurry RealCoordinates)
+               (\case { SC (Just (RealCoordinates x y)) -> Just (x, y); _ -> Nothing }) $ do
+        x <-fst-< key "x-start"
+        y <-snd-< key "y-start"
+        build (,) x y
+    , Fragment (\_ -> SC Nothing) (\case { SC Nothing -> Just (); _ -> Nothing }) (build ())
+    ]

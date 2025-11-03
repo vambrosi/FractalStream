@@ -50,7 +50,8 @@ chooseTemplate pa f = do
   set c [ on select := get c selection >>= \case
             0 -> pure ()
             ix -> do
-              set c [ selection := 0]
-              uncurry (projectOpenTemplate pa) (allTemplates !! (ix - 1))
+              set c [ selection := 0 ]
+              let (name, make) = allTemplates !! (ix - 1)
+              make >>= projectOpenTemplate pa name
         ]
   pure c

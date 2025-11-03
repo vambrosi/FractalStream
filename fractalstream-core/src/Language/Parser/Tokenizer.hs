@@ -3,6 +3,7 @@ module Language.Parser.Tokenizer
   , SRToken(..)
   , tokenize
   , tokenizeWithIndentation
+  , commentRanges
   ) where
 
 import FractalStream.Prelude
@@ -103,6 +104,17 @@ tokenize :: String -> [SRToken]
 tokenize = tokenize' .
   zipWith (\i c -> let p = Pos 0 i in (c, SourceRange p p)) [0..]
 
+commentRanges :: String -> [(Int, Int)]
+commentRanges = comments . zip [0..]
+  where
+    comments :: [(Int, Char)] -> [(Int, Int)]
+    comments = \case
+      ((i, '#') : etc) ->
+        let comment = takeWhile ((/= '\n') . snd) etc
+        in (i, i + length comment) : comments (dropWhile ((/= '\n') . snd) etc)
+      (_ : etc) -> comments etc
+      [] -> []
+
 tokenizeWithIndentation :: String -> [SRToken]
 tokenizeWithIndentation
          = ([SRToken Indent NoSourceRange] ++)
@@ -185,6 +197,7 @@ opTokens = sortOn (\x -> (Down (length (fst x)), x)) $
   , ("⟼", RightArrow), ("↦", RightArrow)
   , ("@", At), ("@@", AtAt)
   , ("<<", OpenSplice), (">>", CloseSplice)
+  , ("«", OpenSplice), ("»", CloseSplice)
   ]
 
 longestMatchingOperator :: SRString -> Maybe (SRToken, SRString)

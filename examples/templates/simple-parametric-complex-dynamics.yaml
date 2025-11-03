@@ -11,7 +11,7 @@ setup:
   vertical-contents:
     - text-entry:
         label: "Title:"
-        value: "Quadratic dynamics"
+        value: "Parametric complex dynamics"
         type: Text
         variable: title
     - panel:
@@ -66,7 +66,7 @@ setup:
               variable: "on_failure"
 
 viewers:
-  - title: "$title$ parameter plane"
+  - title: "«title» parameter plane"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -77,11 +77,11 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        z : C <- $initialZ$
-        iterate z -> $expression$ until $exit_condition$
-        color <- if stuck then $on_failure$ else $on_success$
+        z : C <- «initialZ»
+        iterate z -> «expression» until «exit_condition»
+        color <- if stuck then «on_failure» else «on_success»
 
-  - title: "$title$"
+  - title: "«title»"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -92,8 +92,8 @@ viewers:
     initial-center: 0
     initial-pixel-size: 1/128
     code: |
-        iterate z -> $expression$ until $exit_condition$
-        color <- if stuck then $on_failure$ else $on_success$
+        iterate z -> «expression» until «exit_condition»
+        color <- if stuck then «on_failure» else «on_success»
 
     tools:
      - name: Trace
@@ -110,10 +110,10 @@ viewers:
               use white for line
               erase
               prevZ : C <- z
-              until $exit_condition$:
+              until «exit_condition»:
                 prevZ <- z
                 draw point at z
-                z <- $expression$
+                z <- «expression»
                 draw line from z to prevZ
 
 configuration:

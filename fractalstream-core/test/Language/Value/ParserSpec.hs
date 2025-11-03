@@ -236,40 +236,35 @@ spec = do
       parses4 2 0 0 `shouldBe` Right True
       parses4 3 0 0 `shouldBe` Right True
 
-  describe "when using keywords that require splices" $ do
+  describe "when using keywords that require special variables" $ do
 
     let ctx :: Complex Double -> Double -> Double -> Double
-            -> Context HaskellTypeOfBinding VanishEscapeEnv
+            -> Context HaskellValue VanishEscapeEnv
         ctx z x big tiny
             = Bind (Proxy @"z") ComplexType z
             $ Bind (Proxy @"x") RealType    x
-            $ Bind (Proxy @"R") RealType    big
-            $ Bind (Proxy @"epsilon") RealType tiny
+            $ Bind (Proxy @"[internal] escape radius") RealType big
+            $ Bind (Proxy @"[internal] vanishing radius") RealType tiny
             $ EmptyContext
-        splices = Map.fromList
-            [ ("[internal] escape radius",
-               either (error . show) id (P.parseParsedValue Map.empty "R"))
-            , ("[internal] vanishing radius",
-               either (error . show) id (P.parseParsedValue Map.empty "epsilon"))
-            ]
+        splices = Map.empty
         test z x big tiny input =
             let c = ctx z x big tiny
             in (evaluateInContext @_ @'BooleanT $ ctx z x big tiny)
                <$> first (`P.ppFullError` input) (withEnvironment (contextToEnv c)
                                                   $ P.parseValue splices input)
 
-    it "Can splice in the escape radius and vanishing radius comparisons" $ do
+    it "Can use the escape radius and vanishing radius comparisons" $ do
       test 1 0    2 0.1 "z escapes" `shouldBe` Right False
       test 3 0    2 0.1 "z escapes" `shouldBe` Right True
       test 1 1.01 2 0.1 "|z| - x vanishes" `shouldBe` Right True
       test 1 1.01 2 0.1 "z + x escapes" `shouldBe` Right True
 
-    it "Can splice in vanishing radius during comparisons" $ do
+    it "Can use the vanishing radius during comparisons" $ do
       test 1 1 2 0.1 "x = x + 0.01" `shouldBe` Right True
       test 1 1 2 0.1 "x ≡ x + 0.01" `shouldBe` Right False
 
 
 type VanishEscapeEnv = '("z", 'ComplexT) ':
                        '("x", 'RealT) ':
-                       '("R", 'RealT) ':
-                       '("epsilon", 'RealT) ': '[]
+                       '("[internal] escape radius", 'RealT) ':
+                       '("[internal] vanishing radius", 'RealT) ': '[]

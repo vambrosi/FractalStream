@@ -1,13 +1,17 @@
 {-# language OverloadedStrings, TemplateHaskell #-}
 module Actor.Ensemble
   ( Ensemble(..)
-  --, runEnsemble
-  , Template(..)
-  , Project(..)
-  , runTemplate
-  , parseTemplate
-  , parseTemplateFromFile
+  , parseEnsembleFromFile
+  , runEnsemble
+  , runEnsembleFromSetup
+
+  , contextValuesChanged
+  , layoutToArgs
+
+  , BadEnsemble(..)
+
   , allTemplates
+
   ) where
 
 import FractalStream.Prelude
@@ -16,211 +20,330 @@ import Data.DynamicValue
 import Actor.UI
 import Actor.Configuration
 import Actor.Layout
+import Actor.Event
+import Actor.Tool (Tool)
+import Actor.Viewer
 import Actor.Viewer.Complex
 import Language.Environment
+import Language.Draw
+import Language.Value hiding (Join)
+import Language.Code.Parser (Splices(..), noSplices)
 
-import Data.Char (isSpace)
 import qualified Data.ByteString as BS
-import Data.Aeson
-import qualified Data.Yaml as YAML
-import qualified Data.Map as Map
 import qualified Data.ByteString.UTF8 as UTF8
+import qualified Data.Map as Map
+import qualified Data.Set as Set
 
+import Language.Code (usedVarsInCode, SomeCode(..))
+import Language.Value.Evaluator (evaluate)
+import Language.Code.InterpretIO
 import Development.IncludeFile
 
-import Debug.Trace
+import Control.Concurrent
+import Control.Exception (Exception, throwIO)
+
+import Data.Codec
+
+data BadEnsemble = BadEnsemble String deriving Show
+instance Exception BadEnsemble
+
 
 data Ensemble = Ensemble
-  { ensembleSetup :: Maybe Configuration
-  , ensembleConfiguration :: Maybe Configuration
-  , ensembleViewers :: [ComplexViewer]
-  }
-  deriving Show
-
-data Project = Project
-  { projectConfiguration :: Maybe Configuration
-  , projectViewers :: [ComplexViewer]
+  { ensembleSetup         :: Variable (Maybe Configuration)
+  , ensembleSplices       :: Dynamic (Either String Splices)
+  , ensembleConfiguration :: Variable (Maybe Configuration)
+  , ensembleViewers       :: Variable [ComplexViewer]
   }
 
-instance FromJSON Project where
-  parseJSON = withObject "project" $ \o -> do
-    projectConfiguration <- o .:? "configuration"
-    singleViewer <- o .:? "viewer"
-    projectViewers <- case singleViewer of
-      Just viewer -> pure [viewer]
-      Nothing -> o .:? "viewers" .!= []
-    pure Project{..}
+instance Codec Ensemble where
+  codec = do
+    setup <-ensembleSetup-< optionalField "setup"
+      (newVariable Nothing) (fmap isNothing . getDynamic) $ do
+      codecWith (pure . pure . pure $ noSplices)
 
-instance FromJSON Ensemble where
-  parseJSON = withObject "ensemble" $ \o -> do
-    ensembleSetup <- o .:? "setup"
-    ensembleConfiguration <- o .:? "configuration"
-    singleViewer <- o .:? "viewer"
-    ensembleViewers <- case singleViewer of
-      Just viewer -> pure [viewer]
-      Nothing -> o .:? "viewers" .!= []
-    pure Ensemble{..}
+    splices <-ensembleSplices-< purely $ \use -> dyn (use setup) >>= \case
+      Nothing                -> pure (pure noSplices)
+      Just Configuration{..} -> layoutToSplices coContents
 
-data Template
-  = WithSetup Configuration (Map String String -> Either String Project)
-  | WithoutSetup Project
+    config <-ensembleConfiguration-< optionalField "configuration"
+      (newVariable Nothing) (fmap isNothing . getDynamic) $
+      codecWith splices
 
-newtype ProjectSetup = ProjectSetup (Maybe Configuration)
+    context <- purely $ \use -> dyn (use config) >>= \case
+      Nothing                -> pure (Right $ SomeContext EmptyContext)
+      Just Configuration{..} -> layoutContext coContents
 
-instance FromJSON ProjectSetup where
-  parseJSON = withObject "ensemble" (fmap ProjectSetup . (.:? "setup"))
+    ctx <- purely $ \use -> (use context, use splices)
 
-parseTemplateFromFile :: FilePath -> IO (Either String Template)
-parseTemplateFromFile path = do
+    viewers <-ensembleViewers-< newOf $ match
+      [ Fragment (:[]) (\case { [x] -> Just x; _ -> Nothing }) $ field "viewer" (codecWith ctx)
+      , Fragment id Just $ field "viewers" (codecWith ctx)
+      , Fragment (const []) (\case { [] -> Just (); _ -> Nothing }) $ pure (pure ())
+      ]
+
+    build Ensemble setup splices config viewers
+
+contextValuesChanged :: SomeContext DynamicValue -> Dynamic ()
+contextValuesChanged (SomeContext ctx0) = go ctx0
+  where
+    go :: forall env. Context DynamicValue env -> Dynamic ()
+    go = \case
+      Bind _ _ v ctx' -> (<>) <$> (const () <$> v) <*> go ctx'
+      EmptyContext    -> pure ()
+
+
+parseEnsembleFromFile :: FilePath -> IO (Either String Ensemble)
+parseEnsembleFromFile path = do
   contents <- BS.readFile path
   BS.length contents `seq` pure ()
-  pure (parseTemplate contents)
+  deserializeYAML contents
 
-parseTemplate :: ByteString -> Either String Template
-parseTemplate bs = do
-  ProjectSetup msetup <- first show (YAML.decodeEither' bs)
-  case msetup of
-    Nothing -> do
-      Ensemble{..} <- first show (YAML.decodeEither' bs)
-      pure (WithoutSetup $ Project ensembleConfiguration ensembleViewers)
-    Just setup -> do
-      pure (WithSetup setup $ first show
-                            . (\x -> trace (UTF8.toString x) $ YAML.decodeEither' x)
-                            . UTF8.fromString
-                            . substitute (UTF8.toString bs))
+data HaskellValueOrError :: Symbol -> FSType -> Exp Type
+type instance Eval (HaskellValueOrError name t) = Either String (HaskellType t)
 
-substitute :: String -> Map String String -> String
-substitute input0 splices = unlines . concatMap substituteLine . lines $ input0
-  where
-    substituteLine il =
-      let leadingSpaces = takeWhile isSpace il
-          il' = drop (length leadingSpaces) il
-      in case il' of
-        ('$' : input) ->
-          let name = takeWhile (/= '$') input
-              input' = drop (length name + 1) input
-          in case Map.lookup name splices of
-            Nothing -> error ("No splice named " ++ show name)
-            Just s -> map (leadingSpaces ++) (lines s) ++ [leadingSpaces ++ go "" input']
-        _ -> [go "" il]
+runEnsembleFromSetup :: ViewerCompiler -> UI -> Ensemble -> IO ()
+runEnsembleFromSetup jit UI{..} Ensemble{..} = do
 
-    go acc = \case
-      ('$' : input) -> go acc (splice input)
-      (c : input) -> go (c : acc) input
-      "" -> reverse acc
-
-    splice input =
-      let name = takeWhile (/= '$') input
-          input' = drop (length name + 1) input
-      in case Map.lookup name splices of
-           Nothing -> error ("No splice named " ++ show name)
-           Just s  -> s ++ input'
-
-runTemplate :: ComplexViewerCompiler
-            -> UI
-            -> Template
-            -> IO ()
-runTemplate jit UI{..} wiz = do
-  -- Get a handle for the project
+  -- Get a handle for the ensemble
   project <- newEnsemble
+  let rerunSetup = pure ()
+  let runPostSetup = runEnsemblePostSetup project jit makeLayout makeViewer rerunSetup Ensemble{..}
 
-  let runProj :: Project -> IO ()
-      runProj Project{..} = do
+  -- Run the setup panel
+  getDynamic ensembleSetup >>= \case
+    Nothing -> runPostSetup
+    Just Configuration{..} -> do
+      title <- either (throwIO . BadEnsemble) pure =<< getDynamic coTitle
+      runSetup project title coContents runPostSetup
 
-        let withContextFromConfiguration :: (forall env. Context DynamicValue env -> IO ())
-                                         -> IO ()
-            withContextFromConfiguration k = case projectConfiguration of
-              Nothing -> k EmptyContext
-              Just config -> do
-                configUI <- runExceptTIO (allocateUIConstants (coContents config))
-                makeLayout project (coTitle config) (toSomeDynamic configUI)
-                withDynamicBindings configUI k
-
-        withContextFromConfiguration $ \config -> do
-          ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"[internal argument] #blockWidth")
-                                                  (contextToEnv config) "internal error"
-          ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"[internal argument] #blockHeight")
-                                                  (contextToEnv config) "internal error"
-          ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"[internal argument] #subsamples")
-                                                  (contextToEnv config) "internal error"
-          ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"color")
-                                                  (contextToEnv config)
-                                                  "internal error, `color` already defined"
-          forM_ projectViewers $ \viewer ->
-            withComplexViewer' jit config Map.empty viewer $ \vu cv' -> do
-              makeViewer project vu cv'
-
-  case wiz of
-    WithoutSetup proj -> runProj proj
-
-    WithSetup setup toProject -> do
-      let withSplicesFromSetup :: (Map String String -> IO ())
-                               -> IO ()
-          withSplicesFromSetup k = do
-            setupUI <- runExceptTIO (allocateUIExpressions (coContents setup))
-            runSetup project (coTitle setup) (toSomeDynamic setupUI) (withStrings setupUI k)
-
-      withSplicesFromSetup $ \splices -> do
-        proj <- either error pure (toProject splices)
-        runProj proj
-
-withStrings :: Layout Expression -> (Map String String -> IO ()) -> IO ()
-withStrings lo action = do
-  let getNameAndString :: forall t. Expression t -> IO (String, String)
-      getNameAndString = \case
-        Expression name _ _ v -> (name,) . fst <$> getDynamic v
-        ScriptExpression name _ v -> (name,) . fst <$> getDynamic v
-        BoolExpression {} -> error "TODO: withStrings BoolExpression"
-        ColorExpression {} -> error "TODO: withStrings ColorExpression"
-  contents <- sequence (extractAllBindings getNameAndString lo)
-  action (Map.fromList contents)
-
-{-
-runEnsemble :: ComplexViewerCompiler
-            -> UI
-            -> Ensemble
-            -> IO ()
+runEnsemble :: ViewerCompiler -> UI -> Ensemble -> IO ()
 runEnsemble jit UI{..} Ensemble{..} = do
 
   -- Get a handle for the ensemble
   project <- newEnsemble
+  let rerunSetup = pure ()
+  runEnsemblePostSetup project jit makeLayout makeViewer rerunSetup Ensemble{..}
 
-  -- Make the setup window and let it run
-  let withSplicesFromSetup :: (Splices -> IO ())
-                           -> IO ()
-      withSplicesFromSetup k = case ensembleSetup of
-        Nothing -> k Map.empty
-        Just setup -> do
-          setupUI <- runExceptTIO (allocateUIExpressions (coContents setup))
-          runSetup project (coTitle setup) (toSomeDynamic setupUI) (withSplices setupUI k)
 
-      withContextFromConfiguration :: (forall env. Context DynamicValue env -> IO ())
-                                   -> IO ()
-      withContextFromConfiguration k = case ensembleConfiguration of
-        Nothing -> k EmptyContext
-        Just config -> do
-          configUI <- runExceptTIO (allocateUIConstants (coContents config))
-          makeLayout project (coTitle config) (toSomeDynamic configUI)
-          withDynamicBindings configUI k
+runEnsemblePostSetup :: forall ensembleHandle
+                      . ensembleHandle
+                     -> ViewerCompiler
+                     -> (ensembleHandle -> String -> Layout -> IO (IO ()))
+                     -> (ensembleHandle -> IO () -> SomeContext EventArgument_ -> IO () -> IO () -> Viewer -> IO (IO ()))
+                     -> IO ()
+                     -> Ensemble
+                     -> IO ()
+runEnsemblePostSetup project jit mkLayout mkViewer rerunSetup Ensemble{..} = do
 
-  withSplicesFromSetup $ \splices -> do
-    withContextFromConfiguration $ \config -> do
-      ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"[internal argument] #blockWidth")
-                                              (contextToEnv config) "internal error"
-      ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"[internal argument] #blockHeight")
-                                              (contextToEnv config) "internal error"
-      ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"[internal argument] #subsamples")
-                                              (contextToEnv config) "internal error"
-      ProofNameIsAbsent <- assertAbsentInEnv' (Proxy @"color")
-                                              (contextToEnv config)
-                                              "internal error, `color` already defined"
-      forM_ ensembleViewers $ \viewer ->
-        withComplexViewer' jit config splices viewer $ \vu cv' -> do
-          makeViewer project vu cv'
--}
+  -- Make the configuration panel
+  (someContext, configArgs, showConfig) <- getDynamic ensembleConfiguration >>= \case
+    Nothing -> pure (SomeContext EmptyContext, SomeContext EmptyContext, pure ())
+    Just Configuration{..} -> do
+      title <- fromRight "???" <$> getDynamic coTitle
+      showConfig <- mkLayout project title coContents
+      layoutContext' coContents >>= \case
+        Left err -> throwIO (BadEnsemble err)
+        Right c  -> layoutToArgs coContents >>= \case
+          SomeContext' (Left err)   -> throwIO (BadEnsemble err)
+          SomeContext' (Right args) -> pure (c, args, showConfig)
 
-runExceptTIO :: ExceptT String IO a -> IO a
-runExceptTIO = fmap (either error id) . runExceptT
+  -- Make the viewers
+  viewers <- getDynamic ensembleViewers
+  forM_ viewers (makeComplexViewer project jit mkViewer someContext configArgs showConfig rerunSetup)
+
+makeComplexViewer :: forall ensembleHandle
+                   . ensembleHandle
+                  -> ViewerCompiler
+                  -> (ensembleHandle -> IO () -> SomeContext EventArgument_ -> IO () -> IO () -> Viewer -> IO (IO ()))
+                  -> SomeContext DynamicValue'
+                  -> SomeContext EventArgument_
+                  -> IO ()
+                  -> IO ()
+                  -> ComplexViewer
+                  -> IO ()
+makeComplexViewer project jit mkViewer someContext configArgs showConfig rerunSetup ComplexViewer{..} =
+   rebuildScript
+  where
+   rebuildScript = do
+
+    let throwLeft :: Show e => IO (Either e a) -> IO a
+        throwLeft action = action >>= \case
+          Left err -> throwIO (BadEnsemble $ show err)
+          Right x  -> pure x
+
+    SomeViewerWithContext context code <- throwLeft (getDynamic cvCode)
+
+    coord <- throwLeft (getDynamic cvCoord)
+    let usedVars = Set.delete coord (execState (usedVarsInCode code) Set.empty)
+    let vListen :: IO () -> IO (IO ())
+        vListen = \action -> do
+          let changed :: forall env. Context DynamicValue' env -> Dynamic ()
+              changed = \case
+                Bind n _t v ctx'
+                  | symbolVal n `Set.member` usedVars
+                              -> ((<>) <$> (const () <$> v) <*> changed ctx')
+                  | otherwise -> changed ctx'
+                EmptyContext  -> pure ()
+
+          let cc = (\(SomeContext c) -> changed c) someContext
+          watchDynamic cc (\_ -> action)
+
+    let env = contextToEnv context
+    withEnvironment env $ do
+      let vTitle = source cvTitle
+          vSize  = cvSize
+          vPosition = cvPosition
+
+          scriptCode = cvCode <&> right (\(SomeViewerWithContext _ c) -> SomeCode c)
+      scriptName <- newMapped (pure $ \n -> if null n then Left "Script title must be non-empty" else Right n)
+                              vTitle
+      scriptEnv <- newVariable (SomeEnvironment endOfDecls)
+      let vScript = UIScript{..}
+
+      vCanResize <- getDynamic cvCanResize
+
+      x0 :+ y0 <- throwLeft (getDynamic cvCenter)
+      vCenter <- newVariable (x0, y0)
+      vPixelSize <- throwLeft (getDynamic cvPixelSize) >>= newVariable
+      let vSaveView = pure ()
+          vGetArgs = case someContext of
+            SomeContext context' -> case sameEnvironment (contextToEnv context) (contextToEnv context') of
+              Nothing   -> pure $ Left "Internal error: the context changed, so the viewer should have recompiled"
+              Just Refl -> do
+                rawResult <- mapContextM @DynamicValue' @HaskellValueOrError (\_ _ -> getDynamic) context'
+                case mapContextM (\_ _ -> id) rawResult of
+                  Left err -> pure $
+                    Left ("Viewer paused until this issue with the configuration is addressed:\n" ++
+                          err)
+                  r -> pure r
+
+      withSelectTool <- if coord `Map.member` envToMap env then (:) <$> makeSelectTool coord else pure id
+      let vTools = withSelectTool <$> dyn cvTools
+
+      (vDrawCmds, vDrawCmdsChanged, vDrawTo) <- makeDrawCommandGetter
+
+      withCompiledViewer jit code $ \fun -> do
+        let vCodeWithArgs = CodeWithArgs vGetArgs (pure fun)
+        -- FIXME, we should grab the "close this window" action and do something with it
+        void $ mkViewer project showConfig configArgs rerunSetup rebuildScript Viewer{..}
+
+layoutToArgs :: Layout -> IO (SomeContext' EventArgument_)
+layoutToArgs = \case
+  Vertical   xs -> getDynamic xs >>= mapM layoutToArgs <&> mconcat
+  Horizontal xs -> getDynamic xs >>= mapM layoutToArgs <&> mconcat
+  Panel _ lo    -> getDynamic lo >>= layoutToArgs
+  Tabbed ts     -> getDynamic ts >>= mapM (getDynamic . dyn . tiBody >=> layoutToArgs) <&> mconcat
+  PlainText _   -> pure mempty
+  Button _      -> pure mempty
+  Selection _ n x _ -> getDynamic (dyn n) <&> \case
+    Left err -> SomeContext' (Left err)
+    Right name0 -> case someSymbolVal name0 of
+      SomeSymbol name ->
+        SomeContext' $ Right $ SomeContext $ Bind name IntegerType (mutableVar x) EmptyContext
+  CheckBox _ n b -> getDynamic (dyn n) <&> \case
+    Left err -> SomeContext' (Left err)
+    Right name0 -> case someSymbolVal name0 of
+      SomeSymbol name ->
+        SomeContext' $ Right $ SomeContext $ Bind name BooleanType (mutableVar b) EmptyContext
+  ColorPicker _ n c -> getDynamic (dyn n) <&> \case
+    Left err -> SomeContext' (Left err)
+    Right name0 -> case someSymbolVal name0 of
+      SomeSymbol name ->
+        SomeContext' $ Right $ SomeContext $ Bind name ColorType (mutableArg c) EmptyContext
+  ScriptBox {} -> pure $ SomeContext' (Left "Tools cannot accept scripts as configuration variables")
+  TextBox _ UIVariable{..} -> getDynamic (dyn exprName) >>= \case
+    Left err -> pure $ SomeContext' (Left err)
+    Right name0 -> case someSymbolVal name0 of
+      SomeSymbol name -> getDynamic (dyn exprValue) <&> \case
+        Left err -> SomeContext' (Left err)
+        Right (SomeValue env (ty :: TypeProxy ty) _) -> case env of
+          BindingProxy{} -> SomeContext' (Left "Tool configuration variables must have empty environments")
+          EmptyEnvProxy  -> withKnownType ty $
+            let arg :: EventArgument ty
+                arg = EventArgument getter setter
+                getter = getDynamic (dyn exprValue) <&> \case
+                  Left _ -> Nothing
+                  Right (SomeValue env' ty' v') -> case env' of
+                    BindingProxy{} -> Nothing
+                    EmptyEnvProxy -> case sameHaskellType ty ty' of
+                      Nothing -> Nothing
+                      Just Refl -> Just (evaluate v' EmptyContext)
+                setter = Just (\t -> setValue' (source exprValue) . toUserString t)
+            in SomeContext' (Right $ SomeContext $ Bind name ty arg EmptyContext)
+
+
+makeDrawCommandGetter :: IO (IO [[DrawCommand]], IO Bool, Int -> DrawHandler ScalarIORefM)
+makeDrawCommandGetter = do
+  layersMVar <- newMVar (Map.empty :: Map Int [DrawCommand])
+  dcChanged <- newMVar False
+
+  let consDrawCmd :: Draw_ value env
+                  -> Maybe [Draw_ value env]
+                  -> Maybe [Draw_ value env]
+      consDrawCmd = \case
+        Clear{} -> const (Just [])
+        c -> Just . \case
+          Nothing -> [c]
+          Just cs -> c:cs
+
+  let drawTo :: Int -> DrawHandler ScalarIORefM
+      drawTo n = DrawHandler $ \cmd -> do
+        let emit :: DrawCommand -> StateT (Context IORefTypeOfBinding e) IO ()
+            emit cmd' = liftIO $ do
+              modifyMVar_ dcChanged (pure . const True)
+              modifyMVar_ layersMVar (pure . Map.alter (consDrawCmd cmd') n)
+        case cmd of
+          DrawPoint _env pv -> do
+            p <- eval pv
+            emit (DrawPoint EmptyEnvProxy p)
+          DrawCircle _env doFill rv pv -> do
+            r    <- eval rv
+            p    <- eval pv
+            emit (DrawCircle EmptyEnvProxy doFill r p)
+          DrawLine _env fromv tov -> do
+            from <- eval fromv
+            to   <- eval tov
+            emit (DrawLine EmptyEnvProxy from to)
+          DrawRect _env doFill fromv tov -> do
+            from <- eval fromv
+            to   <- eval tov
+            emit (DrawRect EmptyEnvProxy doFill from to)
+          SetStroke _env cv -> do
+            c <- eval cv
+            emit (SetStroke EmptyEnvProxy c)
+          SetFill _env cv -> do
+            c <- eval cv
+            emit (SetFill EmptyEnvProxy c)
+          Clear _env -> emit (Clear EmptyEnvProxy)
+          Write _env txtv ptv -> do
+            txt <- eval txtv
+            pt <- eval ptv
+            emit (Write EmptyEnvProxy txt pt)
+
+  let getDrawCommands = do
+        tryTakeMVar dcChanged >>= \case
+          Nothing -> pure ()
+          Just _  -> putMVar dcChanged False
+        tryReadMVar layersMVar >>= \case
+          Nothing -> pure [[]]
+          Just m  -> pure (map reverse (Map.elems m))
+
+      drawCommandsChanged = tryReadMVar dcChanged >>= \case
+        Nothing -> pure True
+        Just tf -> pure tf
+  pure (getDrawCommands, drawCommandsChanged, drawTo)
+
+  -- | A standard tool for selecting the clicked point
+makeSelectTool :: String -> IO Tool
+makeSelectTool coord = do
+  let dep1 = pure (Right noSplices)
+      dep2 = pure (Right (ComplexCoordinate coord))
+      dep3 = pure (Right Nothing)
+  tool <- deserializeWith (dep1, dep2, dep3) (selectToolJson coord)
+  either (error . ("Internal error: " ++)) pure tool
+
+selectToolJson :: String -> ByteString
+selectToolJson n = "{ \"name\": \"Select " <> UTF8.fromString n <> "\", \"shortcut\": \"S\", \"actions\": [ {\"event\": \"click-or-drag\", \"code\": \"pass\", \"can-update-viewer-coords\": false }]}"
 
 $(includeFileInSource "../examples/templates/simple-complex-dynamics.yaml"
   "simpleComplexDynamicsTemplate")
@@ -234,7 +357,7 @@ $(includeFileInSource "../examples/templates/one-variable-complex-dynamics.yaml"
 $(includeFileInSource "../examples/templates/one-variable-parametric-complex-dynamics.yaml"
   "parametricComplexDynamicsTemplate")
 
-allTemplates :: [(String, Template)]
+allTemplates :: [(String, IO Ensemble)]
 allTemplates =
   [ template "Simplified complex dynamics" simpleComplexDynamicsTemplate
   , template "Simplified parametric complex dynamics" simpleParametricComplexDynamicsTemplate
@@ -242,6 +365,5 @@ allTemplates =
   , template "General parametric complex dynamics" parametricComplexDynamicsTemplate
   ]
  where
-   template name bs = case parseTemplate bs of
-     Left e -> error ("Internal error when parsing a template: " ++ e)
-     Right t -> (name, t)
+   template name bs = (name,) $
+     either (error . ("Internal error when parsing a template: " ++)) pure =<< deserializeYAML bs

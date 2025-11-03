@@ -4,7 +4,7 @@ setup:
   vertical-contents:
     - text-entry:
         label: "Title:"
-        value: "Quadratic dynamics"
+        value: "Parametric complex dynamics"
         type: Text
         variable: title
     - text: |
@@ -52,7 +52,7 @@ setup:
 
 viewers:
 
-  - title: "$title$ parameter plane"
+  - title: "«title» parameter plane"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -60,14 +60,14 @@ viewers:
     iteration-limit: maxIters
     escape-radius: maxRadius
     vanishing-radius: minRadius
-    initial-center: 0
+    initial-center: "0"
     initial-pixel-size: 1/100
     code: |
       dynamic : Boolean <- false
-      z : C <- $z0$
-      $script$
+      z : C <- «z0»
+      «script»
 
-  - title: "$title$ dynamical plane"
+  - title: "«title» dynamical plane"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -75,11 +75,11 @@ viewers:
     iteration-limit: maxIters
     escape-radius: maxRadius
     vanishing-radius: minRadius
-    initial-center: 0
+    initial-center: "0"
     initial-pixel-size: 1/100
     code: |
       dynamic : Boolean <- true
-      $script$
+      «script»
 
 configuration:
   title: Configuration
@@ -89,7 +89,7 @@ configuration:
         title: "Parameter value"
         text-entry:
           label: "C ="
-          value: $initialC$
+          value: «initialC»
           type: C
           variable: C
     - panel:

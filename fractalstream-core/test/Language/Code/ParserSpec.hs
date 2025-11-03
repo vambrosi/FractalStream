@@ -7,25 +7,44 @@ import FractalStream.Prelude
 
 import Language.Type
 import Language.Value
+import Language.Value.Typecheck
 import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Draw
 import Data.Color
 
-import qualified Data.Map as Map
 import Text.RawString.QQ
 
+{-
+splices :: Splices
+splices = Map.singleton internalIterationLimit (ParsedValue NoSourceRange f)
+  where
+    f :: (forall env ty. (KnownEnvironment env, KnownType ty)
+      => TypeProxy ty
+      -> TC (Value '(env, ty)))
+    f = \case
+      IntegerType -> pure (Const $ Scalar IntegerType 100)
+      _ -> error "internal error"
+-}
 runWithX :: forall xt
           . Scalar xt
          -> String
          -> Either String (HaskellType xt)
 runWithX (Scalar xt x) input = withKnownType xt $
-  let env = BindingProxy (Proxy @"x") xt EmptyEnvProxy
-      ctx = Bind (Proxy @"x") xt x EmptyContext
+  let env = BindingProxy (Proxy @"x") xt
+          $ BindingProxy (Proxy @InternalIterations) IntegerType
+          $ BindingProxy (Proxy @InternalIterationLimit) IntegerType
+          $ BindingProxy (Proxy @InternalStuck) BooleanType
+          $ EmptyEnvProxy
+      ctx = Bind (Proxy @"x") xt x
+          $ Bind (Proxy @InternalIterations) IntegerType 0
+          $ Bind (Proxy @InternalIterationLimit) IntegerType 100
+          $ Bind (Proxy @InternalStuck) BooleanType False
+          $ EmptyContext
   in first (`ppFullError` input)
      $ fmap ((`evalState` (ctx, ()))
              . (\c -> simulate noDraw c >> eval (Var (Proxy @"x") xt bindingEvidence)))
-     $ parseCode env Map.empty input
+     $ parseCode env noSplices ("n : Z <- 0\n" ++ input)
 
 runWithXY :: forall xt yt
            . Scalar xt
@@ -35,11 +54,14 @@ runWithXY :: forall xt yt
 runWithXY (Scalar xt x) (Scalar yt y) input = withKnownType xt $ withKnownType yt $
   let ctx = Bind (Proxy @"x") xt x
           $ Bind (Proxy @"y") yt y
+          $ Bind (Proxy @InternalIterations) IntegerType 0
+          $ Bind (Proxy @InternalIterationLimit) IntegerType 100
+          $ Bind (Proxy @InternalStuck) BooleanType False
           $ EmptyContext
   in first (`ppFullError` input)
      $ fmap ((`evalState` (ctx, ()))
              . (\c -> simulate noDraw c >> eval (Var (Proxy @"x") xt bindingEvidence)))
-     $ parseCode (envProxy Proxy) Map.empty input
+     $ parseCode (envProxy Proxy) noSplices ("n : Z <- 0\n" ++ input)
 
 runWithXYC :: forall xt yt
            . Scalar xt
@@ -51,11 +73,14 @@ runWithXYC (Scalar xt x) (Scalar yt y) input =
   let ctx = Bind (Proxy @"x") xt x
           $ Bind (Proxy @"y") yt y
           $ Bind (Proxy @"color") ColorType grey
+          $ Bind (Proxy @InternalIterations) IntegerType 0
+          $ Bind (Proxy @InternalIterationLimit) IntegerType 100
+          $ Bind (Proxy @InternalStuck) BooleanType False
           $ EmptyContext
   in first (`ppFullError` input)
      $ fmap ((`evalState` (ctx, ()))
              . (\c -> simulate noDraw c >> eval (Var (Proxy @"color") ColorType bindingEvidence)))
-     $ parseCode (envProxy Proxy) Map.empty input
+     $ parseCode (envProxy Proxy) noSplices ("n : Z <- 0\n" ++ input)
 
 noDraw :: DrawHandler (HaskellTypeM ())
 noDraw = DrawHandler (const $ pure ())
@@ -68,18 +93,18 @@ spec = do
     it "can parse if/then/else blocks" $ do
 
       let p1 = [r|
-if true then
+if true:
   pass
   x <- 1 + 2
-else
+else:
   x <- 3 + 4
 |]
           p2 = "x <- 1 + 3"
           p3 = [r|
-if y then
+if y:
   x <- 1 + 3
   pass
-else
+else:
   pass
 |]
       runWithX  (Scalar IntegerType 7) p1 `shouldBe` Right 3
@@ -92,15 +117,15 @@ else
        let p1 = [r|
 x <- 5
 y : Z <- x - 2
-if true then
+if true:
   x <- 2 * y
-else
+else:
   pass
 |]
            p2 = [r|
 x <- 5
 y : Z <- x - 2
-if true then
+if true:
   x <- 2 * y
 |]
 
@@ -119,15 +144,13 @@ x <- k|]
       let mandel = [r|
 C : C <- x + y i
 z : C <- 0
-count : Z <- 0
-while |z| < 100 and count < 100
+while |z| < 100:
   z <- z^2 + C
-  count <- count + 1
-if count = 100 then
+if |z| < 100:
   color <- black
-else if im z > 0 then
+else if im z > 0:
   color <- red
-else
+else:
   color <- yellow|]
 
           runMandel (x :+ y) = runWithXYC (Scalar RealType x) (Scalar RealType y) mandel

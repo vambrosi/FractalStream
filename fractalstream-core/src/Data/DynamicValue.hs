@@ -1,100 +1,205 @@
 module Data.DynamicValue
   ( Dynamic(..)
-  , SomeDynamic(..)
-  , UIValue
-  , newUIValue
-  , modifyUIValue
-  , setUIValue
-  , getUIValue
+  , Variable(..)
+  , Mapped(..)
+  , AsDynamic(..)
+  , newVariable
+  , newMapped
+  , debugNextVariableId
+  , clone
+  , setValue
+  , setValue'
+  , modifyValue
+  , watchDynamic
+  , getDynamic
   , type DynamicValue
-  , SomeUIExpr(..)
-  , SomeUIValue(..)
+  , Dynamic_
+  , Variable_
+  , ppDynamic
   ) where
 
 import FractalStream.Prelude
-
 import Language.Type
-import Language.Value.Parser (ParsedValue(..))
 
-import Control.Concurrent.MVar
+import qualified Data.Map as Map
+import Control.Concurrent
 
--- | A type constructor @f@ is @Dynamic@ when it supports
--- impure reads and writes, and can inform listeners when its
--- value changes.
---
--- NOTE: there is not yet any provision for UN-registering listeners!
-class Dynamic (e :: Type -> Type) where
-  getDynamic :: e t -> IO t
-  setDynamic :: e t -> t -> IO (Maybe String)
-  listenWith :: e t -> (t -> t -> IO ()) -> IO ()
+import System.IO.Unsafe (unsafePerformIO)
+import Data.Typeable
 
-instance Dynamic UIValue where
-  getDynamic = getUIValue
-  setDynamic d v = setUIValue d v >> pure Nothing
-  listenWith = onChange
+nextVariableId :: MVar Int
+nextVariableId = unsafePerformIO (newMVar 0)
 
--- | A @SomeDynamic t@ is an instance of @Dynamic@, but we
--- aren't sure /which/ instance. In other words, it's an
--- existential closure over some dynamic value of type @t@.
-data SomeDynamic t where
-  SomeDynamic :: forall dyn t. Dynamic dyn => dyn t -> SomeDynamic t
+debugNextVariableId :: IO ()
+debugNextVariableId = do
+  iD <- readMVar nextVariableId
+  putStrLn ("next variable id will be " ++ show (iD + 1))
 
-instance Dynamic SomeDynamic where
-  getDynamic (SomeDynamic d) = getDynamic d
-  setDynamic (SomeDynamic d) = setDynamic d
-  listenWith (SomeDynamic d) = listenWith d
+data Variable a = Variable Int (MVar (a, Int, Map Int (a -> IO ())))
 
--- | @UIValue@ is some simple glue that allows us to dynamically
--- read and write configuration values.
-newtype UIValue t = UIValue (MVar (t, [t -> t -> IO ()]))
+instance Show (Variable a) where show (Variable i _) = "@@" ++ show i
 
--- | Create a new @UIValue@ with no listeners and the given initial value.
-newUIValue :: MonadIO m => t -> m (UIValue t)
-newUIValue v = UIValue <$> liftIO (newMVar (v, []))
+instance Eq (Variable a) where
+  Variable x _ == Variable y _ = x == y
 
--- | Register a listener for changes to some @UIValue@.
-onChange :: MonadIO m => UIValue t -> (t -> t -> IO ()) -> m ()
-onChange (UIValue glue) action =
-  liftIO (modifyMVar_ glue (\(v, actions) -> pure (v, action:actions)))
+data Dynamic a where
+  Dynamic :: forall a. Variable a -> Dynamic a
+  Ap :: forall a b. Dynamic (a -> b) -> Dynamic a -> Dynamic b
+  Pure :: forall a. a -> Dynamic a
+  Join :: forall a. Dynamic (Dynamic a) -> Dynamic a
 
--- | Update a @UIValue@ using the given function, triggering update listeners.
---
--- NOTE: This takes a lock while the listeners are being invoked. If
--- one of the listeners attempts to update this @UIValue@ again, it will
--- deadlock! If you may need to update the @UIValue@ in a handler, do it
--- asynchronously by forking a thread and not waiting for completion.
-modifyUIValue :: MonadIO m => UIValue t -> (t -> t) -> m ()
-modifyUIValue (UIValue glue) f = liftIO $ modifyMVar_ glue $ \(old, actions) -> do
-  let !new = f old
-  forM_ actions (\action -> action old new)
-  pure (new, actions)
+ppDynamic :: Dynamic a -> String
+ppDynamic = \case
+  Dynamic (Variable i _) -> "(dyn #" ++ show i ++ ")"
+  Ap f x -> concat ["(ap ", ppDynamic f , " ", ppDynamic x, ")"]
+  Pure _ -> "pure"
+  Join d -> "(join " ++ ppDynamic d ++ ")"
 
--- | Write a @UIValue@, triggering update listeners.
-setUIValue :: MonadIO m => UIValue t -> t -> m ()
-setUIValue v = liftIO . modifyUIValue v . const
+instance Functor Dynamic where
+  fmap f = \case
+    Pure x -> Pure (f x)
+    x -> Ap (Pure f) x
 
--- | Read a @UIValue@.
-getUIValue :: MonadIO m => UIValue t -> m t
-getUIValue (UIValue glue) = fst <$> liftIO (readMVar glue)
+instance Applicative Dynamic where
+  Pure f <*> Pure x = Pure (f x)
+  f <*> x = Ap f x
+  pure = Pure
+
+instance Monad Dynamic where
+  Pure x >>= f = f x
+  dx >>= f = Join (f <$> dx)
+
+data Mapped src a = Mapped
+  { mapper :: Dynamic (src -> a)
+  , source :: Variable src
+  , cached :: Dynamic a
+  }
+  deriving Functor
+
+newMapped :: forall a src io. (Typeable a, MonadIO io)
+          => Dynamic (src -> a) -> Variable src -> io (Mapped src a)
+newMapped mapper source = do
+  cache <- getDynamic (mapper <*> dyn source) >>= newVariable
+  let cached = dyn cache
+  _ <- watchDynamic mapper $ \f -> do
+    src <- getDynamic (dyn source)
+    setValue' cache (f src)
+  _ <- watchDynamic source $ \src -> do
+    f <- getDynamic mapper
+    setValue' cache (f src)
+  pure Mapped{..}
+
+newVariable :: forall a io. (Typeable a, MonadIO io) => a -> io (Variable a)
+newVariable x = liftIO $ do
+  iD <- modifyMVar nextVariableId (\i -> let i' = i + 1 in seq i' $ pure (i', i'))
+  Variable iD <$> newMVar (x, 0, Map.empty)
+
+clone :: (Typeable a, MonadIO io) => Variable a -> io (Variable a)
+clone v = newVariable =<< getDynamic v
+
+class AsDynamic f where
+  dyn :: forall a. f a -> Dynamic a
+
+instance AsDynamic Dynamic where dyn = id
+instance AsDynamic Variable where dyn = Dynamic
+instance AsDynamic (Mapped s) where dyn m = dyn (cached m)
 
 -- | @DynamicValue@ is a type family that represents
 -- a named, dynamic version of the Haskell type corresponding to
 -- the given 'FSType'.
 data DynamicValue :: Symbol -> FSType -> Exp Type
-type instance Eval (DynamicValue name ty) = SomeDynamic (HaskellType ty)
+type instance Eval (DynamicValue name ty) = Dynamic (HaskellType ty)
 
-data SomeUIValue where
-  SomeUIValue :: forall name ty
-               . (KnownSymbol name)
-              => Proxy name
-              -> TypeProxy ty
-              -> SomeDynamic (HaskellType ty)
-              -> SomeUIValue
+getDynamic :: (AsDynamic f, MonadIO io) => f a -> io a
+getDynamic d = case dyn d of
+  Dynamic (Variable _ mvar) -> (\(x,_,_) -> x) <$> liftIO (readMVar mvar)
+  Ap f x   -> getDynamic f <*> getDynamic x
+  Pure x   -> pure x
+  Join ddx -> getDynamic ddx >>= getDynamic
 
-data SomeUIExpr where
-  SomeUIExpr :: forall name ty
-               . (KnownSymbol name)
-              => Proxy name
-              -> TypeProxy ty
-              -> IO ParsedValue
-              -> SomeUIExpr
+setValue :: (MonadIO io, Eq a)
+         => Variable a
+         -> a
+         -> io ()
+setValue (Variable _ mvar) x' = liftIO $ do
+  mactions <- modifyMVar mvar $ \s@(x, n, actions) ->
+    if x == x'
+    then pure (s, Nothing)
+    else pure ((x', n, actions), Just actions)
+  case mactions of
+    Nothing -> pure ()
+    Just actions -> void (traverse ($ x') actions)
+
+setValue' :: MonadIO io
+          => Variable a
+          -> a
+          -> io ()
+setValue' (Variable _ mvar) x' = liftIO $ do
+  actions <- modifyMVar mvar (\(_, n, actions) -> pure ((x', n, actions), actions))
+  void $ traverse ($ x') actions
+
+modifyValue :: MonadIO io
+            => Variable a
+            -> (a -> a)
+            -> io ()
+modifyValue (Variable _ mvar) f = liftIO $ do
+  (fx, actions) <- modifyMVar mvar (\(x, n, actions) ->
+                                      let fx = f x
+                                      in pure ((fx, n, actions), (fx, actions)))
+  void $ traverse ($ fx) actions
+
+watchDynamic :: (MonadIO io, AsDynamic f) => f a -> (a -> IO ()) -> io (IO ())
+watchDynamic d = liftIO . (`go` dyn d)
+  where
+    go :: forall t. (t -> IO ()) -> Dynamic t -> IO (IO ())
+    go action = \case
+
+      Pure _ -> pure (pure ())
+
+      Ap f x -> do
+        update <- newEmptyMVar
+        tid <- forkIO $
+          let next = takeMVar update >>= \case
+                Just (Left  fv) -> do
+                  fx <- fv <$> getDynamic x
+                  action fx
+                  next
+                Just (Right xv) -> do
+                  fx <- getDynamic f <&> ($ xv)
+                  action fx
+                  next
+                Nothing -> pure ()
+          in next
+        stopF <- go (void . putMVar update . Just . Left) f
+        stopX <- go (void . putMVar update . Just . Right) x
+        pure (stopF >> stopX >> putMVar update Nothing >> killThread tid)
+
+      Dynamic (Variable _ mvar) -> do
+        n <- modifyMVar mvar $ \(x, n, m) ->
+          pure ((x, n + 1, Map.insert n action m), n)
+        pure (modifyMVar_ mvar $ \(x', n', m) -> pure (x', n', Map.delete n m))
+
+      Join ddx -> do
+        dx0 <- getDynamic ddx
+        inner <- newMVar =<< watchDynamic dx0 action
+        outerStop <- watchDynamic ddx $ \dx ->
+          modifyMVar_ inner $ \oldStop -> do
+            -- If the inner dynamic value has changed, run the old
+            -- stop action, then set the new stop action.
+            oldStop
+            getDynamic dx >>= action
+            newStop <- watchDynamic dx action
+            pure newStop
+        pure (join (takeMVar inner) >> outerStop)
+
+-- | @Dynamic_@ is a type family that represents
+-- a named, dynamic version of the Haskell type corresponding to
+-- the given 'FSType'.
+data Dynamic_ :: Symbol -> FSType -> Exp Type
+type instance Eval (Dynamic_ name ty) = Dynamic (HaskellType ty)
+
+-- | @Variable_@ is a type family that represents
+-- a named, variable version of the Haskell type corresponding to
+-- the given 'FSType'.
+data Variable_ :: Symbol -> FSType -> Exp Type
+type instance Eval (Variable_ name ty) = Variable (HaskellType ty)

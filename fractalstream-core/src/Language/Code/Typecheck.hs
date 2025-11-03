@@ -9,9 +9,7 @@ import Language.Value.Parser
 import Language.Code
 import Language.Draw
 import Language.Parser.SourceRange
-import Language.Value.Typecheck (internalIterationLimit, InternalIterations, InternalStuck)
-
-import qualified Data.Map as Map
+import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck)
 
 ------------------------------------------------------
 -- Parsed code
@@ -51,16 +49,13 @@ tcSet n v sr env = do
 tcGenericLoop :: Bool
               -> (forall env. KnownEnvironment env =>
                     Value '(env, 'BooleanT) -> Code env -> Code env)
-              -> Splices -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
-tcGenericLoop negateCondition mkLoop splices mlimit body cond sr (env :: EnvironmentProxy env) =
+              -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
+tcGenericLoop negateCondition mkLoop mlimit body cond sr (env :: EnvironmentProxy env) =
   withFresh sr env  IntegerType 0 $ \env' (counterName :: Proxy counterName) pf0 -> recallIsAbsent pf0 $ do
 
   limitValue <- case mlimit of
     Just (ParsedValue _ limitFun) -> limitFun IntegerType
-    Nothing -> case Map.lookup internalIterationLimit splices of
-      Just (ParsedValue _ limitFun)  -> limitFun IntegerType
-      Nothing -> throwError $ internal $
-               Advice sr "The script's iteration limit was not defined."
+    Nothing -> tcVar internalIterationLimit sr IntegerType
 
   withFresh sr env' IntegerType limitValue $ \env'' (limitName :: Proxy limitName) pf' -> recallIsAbsent pf' $ do
 
@@ -83,13 +78,13 @@ tcGenericLoop negateCondition mkLoop splices mlimit body cond sr (env :: Environ
       , Set ipf iterations counter
       , Set spf stuck (Eql IntegerType counter limit) ]
 
-tcWhile, tcUntil :: Splices -> ParsedValue -> Maybe ParsedValue -> ParsedCode -> CheckedCode
-tcDoWhile, tcDoUntil :: Splices -> Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
+tcWhile, tcUntil :: ParsedValue -> Maybe ParsedValue -> ParsedCode -> CheckedCode
+tcDoWhile, tcDoUntil :: Maybe ParsedValue -> ParsedCode -> ParsedValue -> CheckedCode
 
-tcWhile s c l b =
-  tcGenericLoop False (\cond body -> IfThenElse cond (DoWhile cond body) NoOp) s l b c
-tcUntil s c l b =
-  tcGenericLoop True  (\cond body -> IfThenElse cond (DoWhile cond body) NoOp) s l b c
+tcWhile c l b =
+  tcGenericLoop False (\cond body -> IfThenElse cond (DoWhile cond body) NoOp) l b c
+tcUntil c l b =
+  tcGenericLoop True  (\cond body -> IfThenElse cond (DoWhile cond body) NoOp) l b c
 tcDoWhile = tcGenericLoop False DoWhile
 tcDoUntil = tcGenericLoop True  DoWhile
 
@@ -99,17 +94,17 @@ tcIfThenElse cond yes no _sr env =
              <*> atEnv env yes
              <*> atEnv env no
 
-tcIterate :: Splices -> String -> ParsedValue -> Bool -> ParsedValue -> Maybe ParsedValue -> CheckedCode
-tcIterate splices var expr isWhile cond upto sr env = do
+tcIterate :: String -> ParsedValue -> Bool -> ParsedValue -> Maybe ParsedValue -> CheckedCode
+tcIterate var expr isWhile cond upto sr env = do
   let body = ParsedCode (\e -> withEnvironment e $ tcSet var expr sr e)
       tc = if isWhile then tcWhile else tcUntil
-  tc splices cond upto body sr env
+  tc cond upto body sr env
 
 tcPoint :: KnownEnvironment env => ParsedValue -> TC (Value '(env, 'Pair 'RealT 'RealT))
 tcPoint p@(ParsedValue sr _) =
-  tryEach (Surprise sr "this"
-            "not a complex number or pair of real numbers"
-            (Expected "something point-like"))
+  tryEachType (Surprise sr "this"
+               "not a complex number or pair of real numbers"
+               (Expected "something point-like"))
     [ atType p (PairType RealType RealType)
     , C2R2 <$> atType p ComplexType ]
 

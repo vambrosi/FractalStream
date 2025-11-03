@@ -79,10 +79,12 @@ executable FractalStream
   other-modules:       UI.Tile
                        UI.ProjectViewer
                        UI.ProjectEditor
+                       UI.ConfigEditor
                        UI.CodeEditor
                        UI.Layout
                        UI.Menu
                        UI.ProjectActions
+                       UI.Session
                        UI.Welcome
 
   build-depends:       base >=4.8 && <5
@@ -94,6 +96,7 @@ executable FractalStream
                      , async
                      , containers
                      , mtl
+                     , transformers
                      , time
                      , monad-parallel
                      , monad-par
@@ -106,6 +109,8 @@ executable FractalStream
                      , aeson
                      , text
                      , utf8-string
+                     , microlens
+                     , microlens-th
 
   if flag(use-llvm)
      build-depends: fractalstream-backend-llvm

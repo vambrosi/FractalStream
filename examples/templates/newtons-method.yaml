@@ -4,7 +4,7 @@ setup:
   vertical-contents:
     - text-entry:
         label: "Title:"
-        value: "Newton's method on ℂ"
+        value: "\"Newton's method on ℂ\""
         type: Text
         variable: title
     - panel:
@@ -47,7 +47,7 @@ setup:
               variable: "on_failure"
 
 viewers:
-  - title: "$title$"
+  - title: "«title»"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -61,13 +61,13 @@ viewers:
         lastZ : C <- 0
         repeat:
           lastZ <- z
-          z <- z - $f$ / $df$
+          z <- z - «f» / «df»
         until z = lastZ
 
         if stuck:
-          color <- $on_failure$
+          color <- «on_failure»
         else:
-          color <- $basin_color$
+          color <- «basin_color»
           if shade_convergence:
             color <- blend(iterations / 20, dark color, light color)
 
@@ -89,7 +89,7 @@ viewers:
               repeat:
                 prevZ <- z
                 draw point at z
-                z <- z - $f$ / $df$
+                z <- z - «f» / «df»
                 draw line from z to prevZ
               until z = prevZ
 
