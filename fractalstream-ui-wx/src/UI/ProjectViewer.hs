@@ -120,7 +120,10 @@ makeWxComplexViewer
     let requestRefresh = void (tryPutMVar offThreadRefresh ())
 
     -- Build the initial view model
-    let initialModel = Model (0,0) (1/128, 1/128)
+    initialX :+ initialY <- getUIValue cvCenter'
+    initialPx <- getUIValue cvPixelSize'
+
+    let initialModel = Model (initialX, initialY) (initialPx, initialPx)
     model <- variable [value := initialModel]
 
     -- History tracking
