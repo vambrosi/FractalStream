@@ -87,6 +87,7 @@ library
                        Language.Type
                        Language.Environment
                        Language.Value
+                       Language.Value.Derivative
                        Language.Value.Evaluator
                        Language.Value.Parser
                        Language.Value.Typecheck
@@ -146,6 +147,7 @@ test-suite spec
                     , mtl
                     , containers
   other-modules:      Data.Indexed.FunctorSpec
+                    , Language.Value.DerivativeSpec
                     , Language.Value.EvaluatorSpec
                     , Language.Value.ParserSpec
                     , Language.Code.ParserSpec
