@@ -1,0 +1,217 @@
+viewers:
+  - title: C-plane
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: C
+    iteration-limit: max_iters
+    escape-radius: escape_radius
+    vanishing-radius: tolerance
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      z : C <- C
+      iterate z -> (z^2 - C)/(z^2 - 1) until z escapes
+      if stuck:
+        color <- black
+      else:
+        color <- rainbow (iterations / 20)
+
+  - title: Dynamics
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: z
+    iteration-limit: max_iters
+    vanishing-radius: tolerance
+    escape-radius: escape_radius
+    initial-center: 0
+    initial-pixel-size: 1/128
+    code: |
+      iterate z -> (z^2 - C)/(z^2 - 1) until z escapes
+      if stuck:
+        color <- black
+      else:
+        color <- dark rainbow (iterations / 20)
+
+    tools:
+      - name: Preimages
+        shortcut: p
+        actions:
+          - event: click-or-drag
+            code: |
+              erase
+              use color1 for line
+              draw point at z
+              pre1 : C <- sqrt((-C + z) / (z - 1))
+              pre2 : C <- -sqrt((-C + z) / (z - 1))
+              use color2 for line
+              draw point at pre1
+              use color3 for line
+              draw point at pre2
+
+      - name: Mark orbit of critical point
+        shortcut: o
+        configuration:
+          title: Postcritical points
+          size: 400x200
+          vertical-contents:
+            - checkbox:
+                label: "Draw lines between iterations?"
+                value: false
+                variable: follow
+            - color-picker:
+                label: "Orbit of 0"
+                value: "red"
+                type: Color
+                variable: zero_orbit_color
+            - color-picker:
+                label: "Mark 1"
+                value: "yellow"
+                type: Color
+                variable: one_color
+        actions:
+          - event: refresh
+            code: |
+              erase
+
+              use one_color for line
+              use one_color for fill
+              draw point at 1
+
+              use zero_orbit_color for line
+              use zero_orbit_color for fill
+              z <- 0
+              last_z : C <- z
+              repeat:
+                draw point at z
+                if follow:
+                  draw line from last_z to z
+                  last_z <- z
+                z <- (z^2 - C) / (z^2 - 1)
+              while z != 0
+
+      - name: Pullback
+        shortcut: b
+        configuration:
+          title: Pullback
+          size: 400x200
+          vertical-contents:
+            - checkbox:
+                label: "Follow previous preimages?"
+                value: false
+                variable: follow
+            - text-entry:
+                label: "Selected point"
+                value: "0"
+                type: C
+                variable: last_z
+            - text-entry:
+                label: "Preimage 1"
+                value: "0"
+                type: C
+                variable: last_pre1
+            - text-entry:
+                label: "Preimage 2"
+                value: "0"
+                type: C
+                variable: last_pre2
+            - button: "Erase"
+
+        actions:
+          - event: button
+            label: "Erase"
+            code: |
+              erase
+              follow <- false
+
+          - event: drag-finished
+            code: |
+              follow <- false
+
+          - event: drag
+            code: |
+              pre1 : C <- sqrt((-C + z) / (z - 1))
+              pre2 : C <- -sqrt((-C + z) / (z - 1))
+
+              if follow:
+                use color1 for line
+                draw line from last_z to z
+                last_z <- z
+
+                # Make sure that pre1 is the preimage that
+                # is closest to last_pre1
+                if |last_pre1 - pre2| < |last_pre1 - pre1|:
+                  tmp : C <- pre1
+                  pre1 <- pre2
+                  pre2 <- tmp
+
+                use color2 for line
+                draw line from last_pre1 to pre1
+                last_pre1 <- pre1
+
+                use color3 for line
+                draw line from last_pre2 to pre2
+                last_pre2 <- pre2
+
+              else:
+                use color1 for line
+                use color1 for fill
+                draw point at z
+                last_z <- z
+
+                use color2 for line
+                use color2 for fill
+                draw point at pre1
+                last_pre1 <- pre1
+
+                use color3 for line
+                use color3 for fill
+                draw point at pre2
+                last_pre2 <- pre2
+                follow <- true
+
+configuration:
+  title: Configuration
+  size: 400x200
+  vertical-contents:
+    - text-entry:
+        label: "C = "
+        value: "0.5000000000 + 0.8660254038*i"
+        type: C
+        variable: C
+    - text-entry:
+        label: "Max. iterations:"
+        value: "100"
+        type: Z
+        variable: max_iters
+    - text-entry:
+        label: "Escape radius:"
+        value: 10
+        type: R
+        variable: escape_radius
+    - text-entry:
+        label: "Tolerance:"
+        value: 0.0001
+        type: R
+        variable: tolerance
+    - text-entry:
+        label: "Brightness: "
+        value: 0.5
+        type: R
+        variable: p
+
+    - color-picker:
+        label: "Selected point"
+        value: white
+        variable: color1
+
+    - color-picker:
+        label: "Preimage 1"
+        value: red
+        variable: color2
+
+    - color-picker:
+        label: "Preimage 2"
+        value: red
+        variable: color3
