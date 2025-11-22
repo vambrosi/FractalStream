@@ -45,8 +45,6 @@ jobs:
         brew install haskell-stack
         brew install libffi
         brew install jemalloc
-        # Delete the jemalloc dylib so we link to the static lib instead. This is dumb.
-        sudo rm `jemalloc-config --libdir`/*.dylib
 
         ##################################################################
         # wxWidgets dependencies
@@ -225,7 +223,7 @@ jobs:
         security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$MACOS_CI_KEYCHAIN_PWD" build.keychain
         # We finally codesign our app bundle, specifying the Hardened runtime option
-        /usr/bin/codesign --force -s "$MACOS_CERTIFICATE_NAME" --options runtime --entitlements macos/Entitlements.plist FractalStream.app -v
+        /usr/bin/codesign --deep --force -s "$MACOS_CERTIFICATE_NAME" --options runtime --entitlements macos/Entitlements.plist FractalStream.app -v
 
     - if: ${{ inputs.notarize }}
       name: Notarize app bundle
