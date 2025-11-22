@@ -41,7 +41,6 @@ jobs:
         # Prerequisites
         ##################################################################
 
-        brew install cmake
         brew install wget
         brew install haskell-stack
         brew install libffi
@@ -62,7 +61,7 @@ jobs:
       id: cache-wxwidgets
       uses: actions/cache@v4
       with:
-        key: ${{ runner.os }}-cache-wxwidgets-${{ inputs.wxwidgets }}
+        key: ${{ runner.os }}-${{ runner.arch }}-cache-wxwidgets-${{ inputs.wxwidgets }}
         path: wxWidgets-3.2.8
 
     - if: ${{ inputs.wxwidgets == 'homebrew' }}
@@ -113,7 +112,7 @@ jobs:
       id: cache-wxc
       uses: actions/cache@v4
       with:
-        key: ${{ runner.os }}-cache-wxc-for-${{ inputs.wxwidgets }}
+        key: ${{ runner.os }}-${{ runner.arch }}-cache-wxc-for-${{ inputs.wxwidgets }}
         path: wxHaskell-3.2
 
     - if: ${{ steps.cache-wxc.outputs.cache-hit != 'true' }}
@@ -146,7 +145,7 @@ jobs:
       id: cache-llvm-12-static
       uses: actions/cache@v4
       with:
-        key: ${{ runner.os }}-cache-llvm-12-static
+        key: ${{ runner.os }}-${{ runner.arch }}-cache-llvm-12-static
         path: llvm-12.0.1.src
 
     - if: ${{ steps.cache-llvm-12-static.outputs.cache-hit != 'true' }}
@@ -184,7 +183,7 @@ jobs:
       id: cache-dot-stack
       uses: actions/cache@v4
       with:
-        key: ${{ runner.os }}-cache-dot-stack-for-${{ inputs.wxwidgets }}
+        key: ${{ runner.os }}-${{ runner.arch }}-cache-dot-stack-for-${{ inputs.wxwidgets }}
         path: ~/.stack
 
     - if: ${{ steps.cache-dot-stack.outputs.cache-hit != 'true' }}
@@ -258,12 +257,12 @@ jobs:
 
     - name: Archive app bundle
       env:
-        TARGET_BUNDLE_NAME: FractalStream-${{ runner.os }}-intel-${{ github.sha }}-wx-${{ inputs.wxwidgets }}
+        TARGET_BUNDLE_NAME: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-wx-${{ inputs.wxwidgets }}
       run: |
         zip -r $TARGET_BUNDLE_NAME.zip FractalStream.app
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-          name: FractalStream-${{ runner.os }}-intel-${{ github.sha }}-wx-${{ inputs.wxwidgets }}.zip
-          path: FractalStream-${{ runner.os }}-intel-${{ github.sha }}-wx-${{ inputs.wxwidgets }}.zip
+          name: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-wx-${{ inputs.wxwidgets }}.zip
+          path: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-wx-${{ inputs.wxwidgets }}.zip
