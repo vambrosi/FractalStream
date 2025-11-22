@@ -16,6 +16,10 @@ on:
         description: 'Submit the signed app bundle to the Apple notary service?'
         required: true
         type: boolean
+      jemalloc:
+        description: 'Link against jemalloc?'
+        required: true
+        type: boolean
 
 jobs:
   build:
@@ -37,9 +41,11 @@ jobs:
         # Prerequisites
         ##################################################################
 
+        brew install cmake
         brew install wget
         brew install haskell-stack
         brew install libffi
+        brew install jemalloc
 
         ##################################################################
         # wxWidgets dependencies
@@ -188,9 +194,11 @@ jobs:
         stack build --only-snapshot
 
     - name: Build FractalStream
+      env:
+        USE_JEMALLOC: ${{ inputs.jemalloc && '--flag fractalstream-ui-wx:use-jemalloc' || '' }}
       run: |
         cd fractalstream-ui-wx
-        stack build
+        stack build $JEMALLOC
         mv `find . -name "FractalStream.app"` ../FractalStream.app
         mv ../FractalStream.app/PkgInfo ../FractalStream.app/Contents/PkgInfo
 
