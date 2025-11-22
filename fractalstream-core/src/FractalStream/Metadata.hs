@@ -4,12 +4,10 @@ module FractalStream.Metadata
   , gitHash
   , gitBranch
   , gitDirty
-  , usingJeMalloc
   ) where
 
 import Development.IncludeFile
 import GitHash
-import Foreign.C
 
 import qualified Data.ByteString.UTF8 as UTF8
 
@@ -29,8 +27,3 @@ gitBranch = giBranch gitInfo
 
 gitDirty :: Bool
 gitDirty = giDirty gitInfo
-
-foreign import ccall "mallctl" jemalloc :: CSize
-
-usingJeMalloc :: Bool
-usingJeMalloc = jemalloc /= 0

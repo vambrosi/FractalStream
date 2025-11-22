@@ -112,7 +112,4 @@ executable FractalStream
   else
      build-depends: fractalstream-backend-pure
 
-  if flag(use-jemalloc)
-     extra-libraries: jemalloc
-
   hs-source-dirs:      src

@@ -1,3 +1,4 @@
+{-# language LambdaCase #-}
 import Distribution.MacOSX
 import Distribution.Simple
 import Distribution.Simple.Setup (ConfigFlags(..))
@@ -10,10 +11,11 @@ import Data.Either (partitionEithers)
 import Data.List (isSuffixOf)
 
 main :: IO ()
-main = defaultMainWithHooks $ simpleUserHooks
-       { postBuild = appBundleBuildHook guiApps -- no-op if not MacOS X
-       , confHook = wxConfHook
-       }
+main = do
+  defaultMainWithHooks $ simpleUserHooks
+    { postBuild = appBundleBuildHook guiApps -- no-op if not MacOS X
+    , confHook = fsConfHook
+    }
 
 guiApps :: [MacApp]
 guiApps = [MacApp "FractalStream"
@@ -44,10 +46,10 @@ guiApps = [MacApp "FractalStream"
           ]
 
 
-wxConfHook :: (GenericPackageDescription, HookedBuildInfo)
+fsConfHook :: (GenericPackageDescription, HookedBuildInfo)
            -> ConfigFlags
            -> IO LocalBuildInfo
-wxConfHook (pkg_descr, hooked_bi) flags = do
+fsConfHook (pkg_descr, hooked_bi) flags = do
   -- Get wx-config --libs output
   wxConfig <- getWxConfig flags
   output0 <- words <$> wxConfig ["--libs"]
@@ -56,9 +58,22 @@ wxConfHook (pkg_descr, hooked_bi) flags = do
   let output = if System.os == "darwin"
                then output0 ++ ["-framework", "AppKit"]
                else output0
-      (wxLibs, wxLdDirsOrOpts) = partitionEithers (concatMap splitLdOptions output)
-      (wxLdDirs, wxLdOpts) = partitionEithers wxLdDirsOrOpts
-      pkg_descr' = updatePackageDescription wxLibs wxLdOpts wxLdDirs includes cxxOpts pkg_descr
+      (wxLibs0, wxLdDirsOrOpts) = partitionEithers (concatMap splitLdOptions output)
+      (wxLdDirs0, wxLdOpts) = partitionEithers wxLdDirsOrOpts
+
+  (wxLibs, wxLdDirs) <- case lookupFlagAssignment (mkFlagName "use-jemalloc")
+                             $ configConfigurationsFlags flags of
+    Just True -> do
+      let verbosity = fromFlag $ configVerbosity flags
+      program <- fst <$> requireProgram verbosity (simpleProgram "jemalloc-config")
+                        (configPrograms flags)
+      (words <$> getProgramOutput verbosity program ["--libdir"]) >>= \case
+        [d] -> pure ("jemalloc" : wxLibs0, d : wxLdDirs0)
+        []  -> error "jemalloc-config --libdir returned nothing"
+        _   -> error "jemalloc-config --libdir returned multiple directories"
+
+    _ -> pure (wxLibs0, wxLdDirs0)
+  let pkg_descr' = updatePackageDescription wxLibs wxLdOpts wxLdDirs includes cxxOpts pkg_descr
   confHook simpleUserHooks (pkg_descr', hooked_bi) flags
 
 splitLdOptions :: String -> [Either String (Either String String)]
