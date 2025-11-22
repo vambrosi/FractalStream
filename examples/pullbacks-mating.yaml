@@ -38,6 +38,34 @@ viewers:
       - name: Preimages
         shortcut: i
         draw-to-layer: 10
+        configuration:
+          title: Preimages
+          size: 400x200
+          vertical-contents:
+            - panel:
+                title: "Preimage 1"
+                vertical-contents:
+                  - text-entry:
+                      label: "Value"
+                      value: "0"
+                      type: C
+                      variable: pre1
+                  - color-picker:
+                      label: "Color"
+                      value: red
+                      variable: color2
+            - panel:
+                title: "Preimage 1"
+                vertical-contents:
+                  - text-entry:
+                      label: "Value"
+                      value: "0"
+                      type: C
+                      variable: pre2
+                  - color-picker:
+                      label: "Color"
+                      value: yellow
+                      variable: color3
         actions:
           - event: deactivated
             code: erase
@@ -46,8 +74,8 @@ viewers:
               erase
               use color1 for line
               draw point at z
-              pre1 : C <- sqrt((-C + z) / (z - 1))
-              pre2 : C <- -sqrt((-C + z) / (z - 1))
+              pre1 <- sqrt((-C + z) / (z - 1))
+              pre2 <- -sqrt((-C + z) / (z - 1))
               use color2 for line
               draw point at pre1
               use color3 for line
@@ -77,7 +105,8 @@ viewers:
             - button: "Erase postcritical points"
 
         actions:
-          - label: "Erase postcritical points"
+          - event: button
+            label: "Erase postcritical points"
             code: erase
           - event: refresh
             code: |
