@@ -105,6 +105,7 @@ library
                        Data.Recursive
                        Data.DynamicValue
 
+  c-sources: src/FractalStream/find_jemalloc.c
 
   build-depends:       base >=4.8 && <5,
                        random,

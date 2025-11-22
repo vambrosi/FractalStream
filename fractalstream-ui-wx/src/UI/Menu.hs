@@ -82,5 +82,6 @@ makeMenuBar ProjectActions{..} f addlMenus = do
         , on (menu about) :=
           infoDialog f "About FractalStream" $ unlines
           ("Contributors:" : contributors ++
-            ["", "Build info:", gitBranch ++ "@" ++ take 8 gitHash])
+            ["", "Build info:", gitBranch ++ "@" ++ take 8 gitHash] ++
+            [ "Using jemalloc" | usingJeMalloc ])
         ]
