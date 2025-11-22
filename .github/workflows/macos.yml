@@ -197,7 +197,7 @@ jobs:
         USE_JEMALLOC: ${{ inputs.jemalloc && '--flag fractalstream-ui-wx:use-jemalloc' || '' }}
       run: |
         cd fractalstream-ui-wx
-        stack build $JEMALLOC
+        stack build $USE_JEMALLOC
         mv `find . -name "FractalStream.app"` ../FractalStream.app
         mv ../FractalStream.app/PkgInfo ../FractalStream.app/Contents/PkgInfo
 
