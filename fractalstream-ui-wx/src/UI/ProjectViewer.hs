@@ -809,7 +809,10 @@ paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
 
         DrawPoint _ pt -> do
           pt' <- modelToView pt
+          savedBrush <- readIORef currentBrush
+          writeIORef currentBrush =<< readIORef currentPen
           withPen True (circle dc pt' 2)
+          writeIORef currentBrush savedBrush
 
         DrawLine _ pt1 pt2 -> do
           pt1' <- modelToView pt1

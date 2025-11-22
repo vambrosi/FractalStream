@@ -140,7 +140,7 @@ fatalErrorDialog projectWindow title mkContents = do
   d <- dialog objectNull [ text := title ]
   p <- panel d []
   contents <- mkContents p
-  ok <- button d [text := "OK"]
+  ok <- button p [text := "OK"]
   set d [ layout := fill $ container p $ margin 15 $ floatCenter $
           column 5 (contents ++ [widget ok]) ]
   _ <- showModal d (\done -> set ok [on command := done Nothing ])

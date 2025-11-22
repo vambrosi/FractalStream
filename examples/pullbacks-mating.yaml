@@ -36,8 +36,11 @@ viewers:
 
     tools:
       - name: Preimages
-        shortcut: p
+        shortcut: i
+        draw-to-layer: 10
         actions:
+          - event: deactivated
+            code: erase
           - event: click-or-drag
             code: |
               erase
@@ -52,6 +55,7 @@ viewers:
 
       - name: Mark orbit of critical point
         shortcut: o
+        draw-to-layer: 11
         configuration:
           title: Postcritical points
           size: 400x200
@@ -62,25 +66,27 @@ viewers:
                 variable: follow
             - color-picker:
                 label: "Orbit of 0"
-                value: "red"
+                value: "blue"
                 type: Color
                 variable: zero_orbit_color
             - color-picker:
                 label: "Mark 1"
-                value: "yellow"
+                value: "green"
                 type: Color
                 variable: one_color
+            - button: "Erase postcritical points"
+
         actions:
+          - label: "Erase postcritical points"
+            code: erase
           - event: refresh
             code: |
               erase
 
               use one_color for line
-              use one_color for fill
               draw point at 1
 
               use zero_orbit_color for line
-              use zero_orbit_color for fill
               z <- 0
               last_z : C <- z
               repeat:
@@ -92,7 +98,8 @@ viewers:
               while z != 0
 
       - name: Pullback
-        shortcut: b
+        shortcut: p
+        draw-to-layer: 12
         configuration:
           title: Pullback
           size: 400x200
@@ -106,16 +113,31 @@ viewers:
                 value: "0"
                 type: C
                 variable: last_z
-            - text-entry:
-                label: "Preimage 1"
-                value: "0"
-                type: C
-                variable: last_pre1
-            - text-entry:
-                label: "Preimage 2"
-                value: "0"
-                type: C
-                variable: last_pre2
+            - panel:
+                title: "Preimage 1"
+                vertical-contents:
+                  - text-entry:
+                      label: "Value"
+                      value: "0"
+                      type: C
+                      variable: last_pre1
+                  - color-picker:
+                      label: "Color"
+                      value: red
+                      variable: color2
+            - panel:
+                title: "Preimage 1"
+                vertical-contents:
+                  - text-entry:
+                      label: "Value"
+                      value: "0"
+                      type: C
+                      variable: last_pre2
+                  - color-picker:
+                      label: "Color"
+                      value: yellow
+                      variable: color3
+
             - button: "Erase"
 
         actions:
@@ -156,17 +178,14 @@ viewers:
 
               else:
                 use color1 for line
-                use color1 for fill
                 draw point at z
                 last_z <- z
 
                 use color2 for line
-                use color2 for fill
                 draw point at pre1
                 last_pre1 <- pre1
 
                 use color3 for line
-                use color3 for fill
                 draw point at pre2
                 last_pre2 <- pre2
                 follow <- true
@@ -205,13 +224,3 @@ configuration:
         label: "Selected point"
         value: white
         variable: color1
-
-    - color-picker:
-        label: "Preimage 1"
-        value: red
-        variable: color2
-
-    - color-picker:
-        label: "Preimage 2"
-        value: red
-        variable: color3
