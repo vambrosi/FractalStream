@@ -45,6 +45,8 @@ jobs:
         brew install haskell-stack
         brew install libffi
         brew install jemalloc
+        # Delete the jemalloc dylib so we link to the static lib instead. This is dumb.
+        sudo rm `jemalloc-config --libdir`/*.dylib
 
         ##################################################################
         # wxWidgets dependencies
