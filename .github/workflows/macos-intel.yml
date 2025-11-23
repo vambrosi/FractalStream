@@ -84,7 +84,7 @@ jobs:
         wget https://github.com/wxWidgets/wxWidgets/releases/download/v3.2.8/wxWidgets-3.2.8.tar.bz2
         tar xvf wxWidgets-3.2.8.tar.bz2
         cd wxWidgets-3.2.8
-        git patch ../patches/macos-fix-for-wxcolour.patch
+        git apply ../patches/macos-fix-for-wxcolour.patch
         mkdir build-cocoa
         cd build-cocoa
         cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=OFF -DwxBUILD_MONOLITHIC=ON ..
@@ -96,7 +96,7 @@ jobs:
         wget https://github.com/wxWidgets/wxWidgets/releases/download/v3.2.8/wxWidgets-3.2.8.tar.bz2
         tar xvf wxWidgets-3.2.8.tar.bz2
         cd wxWidgets-3.2.8
-        git patch ../patches/macos-fix-for-wxcolour.patch
+        git apply ../patches/macos-fix-for-wxcolour.patch
         mkdir build-cocoa
         cd build-cocoa
         cmake -DCMAKE_BUILD_TYPE=Release -DwxBUILD_SHARED=ON -DwxBUILD_MONOLITHIC=ON ..
