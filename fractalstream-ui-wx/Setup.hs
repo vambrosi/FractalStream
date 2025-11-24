@@ -23,8 +23,8 @@ guiApps = [MacApp "FractalStream"
                   -- Icon file
                   (Just "FS.icns")
 
-                  -- Build a default Info.plist
-                  Nothing
+                  -- Info.plist
+                  (Just "../macos/Info.plist")
 
                   -- Other resource files
                   []
