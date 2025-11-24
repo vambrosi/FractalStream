@@ -211,7 +211,7 @@ jobs:
       run: |
         install_name_tool -change /usr/lib/libSystem.B.dylib TMP ./FractalStream.app/Contents/MacOS/FractalStream
         install_name_tool -change @executable_path/../Frameworks/opt/homebrew/opt/jemalloc/lib/libjemalloc.2.dylib /usr/lib/libSystem.B.dylib ./FractalStream.app/Contents/MacOS/FractalStream
-        install_name_tool -change TMP @executable_path/../Frameworks/opt/homebrew/opt/jemalloc/lib/libjemalloc.2.dylib /usr/lib/libSystem.B.dylib ./FractalStream.app/Contents/MacOS/FractalStream
+        install_name_tool -change TMP @executable_path/../Frameworks/opt/homebrew/opt/jemalloc/lib/libjemalloc.2.dylib ./FractalStream.app/Contents/MacOS/FractalStream
 
     - name: Sign app bundle
       env:
