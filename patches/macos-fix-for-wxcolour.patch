@@ -49,3 +49,45 @@ index 20a7044ef4e..3c39b94520d 100644
  }
 
  bool wxColour::operator==(const wxColour& other) const
+diff --git a/include/wx/object.h b/include/wx/object.h
+index adc0c03ab1..ae701a7258 100644
+--- a/include/wx/object.h
++++ b/include/wx/object.h
+@@ -16,6 +16,7 @@
+ // headers
+ // ----------------------------------------------------------------------------
+
++#include <atomic>
+ #include "wx/memory.h"
+
+ #define wxDECLARE_CLASS_INFO_ITERATORS()                                     \
+@@ -228,7 +229,7 @@ inline T *wxCheckCast(const void *ptr)
+ class WXDLLIMPEXP_BASE wxRefCounter
+ {
+ public:
+-    wxRefCounter() { m_count = 1; }
++    wxRefCounter() : m_count(1) { }
+
+     int GetRefCount() const { return m_count; }
+
+@@ -242,7 +243,7 @@ protected:
+
+ private:
+     // our refcount:
+-    int m_count;
++    std::atomic_int m_count;
+
+     // It doesn't make sense to copy the reference counted objects, a new ref
+     // counter should be created for a new object instead and compilation
+diff --git a/src/common/object.cpp b/src/common/object.cpp
+index 52d11f3fd7..e5957b3cd7 100644
+--- a/src/common/object.cpp
++++ b/src/common/object.cpp
+@@ -335,6 +335,6 @@ void wxRefCounter::DecRef()
+ {
+     wxASSERT_MSG( m_count > 0, "invalid ref data count" );
+
+-    if ( --m_count == 0 )
++    if ( m_count.fetch_sub(1) == 1 )
+         delete this;
+ }
