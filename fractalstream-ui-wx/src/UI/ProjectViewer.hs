@@ -209,6 +209,8 @@ makeWxComplexViewer
           pure (point px py)
 
     -- Set paint handlers
+    defaultPen <- penCreateDefault
+    defaultBrush <- brushCreateDefault
     set p [ on paintRaw := \dc r _dirty -> get animate value >>= \case
               Nothing -> do
                 -- Normal paint. Draw current rendering, then layer
@@ -224,6 +226,10 @@ makeWxComplexViewer
                 get currentToolIndex value >>= \case
                   Just{}  -> paintToolLayer (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands dc
                   Nothing -> paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
+
+                -- Reset the brush and pen so they can be safely deleted
+                dcSetPen dc defaultPen
+                dcSetBrush dc defaultBrush
 
               Just (startTime, oldModel, oldImage) -> do
                 -- Animated paint. Zoom and blend smoothly between
@@ -299,6 +305,10 @@ makeWxComplexViewer
                                               (round $ negate viewCenterX)
                                               (round $ negate viewCenterY)) []
                 paintToolLayer (modelToView midModel) (modelPixelDim midModel) cvGetDrawCommands dc
+
+                -- Reset the brush and pen so they can be safely deleted
+                dcSetPen dc defaultPen
+                dcSetBrush dc defaultBrush
           ]
 
     lastKnownMouse <- newIORef Nothing
