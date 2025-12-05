@@ -258,6 +258,7 @@ valueGrammar splices = mdo
     , var
     , color
     , listOp
+    , diff
     ]
 
   quoted <- rule $ tokenMatch (\case { Quoted txt -> Just txt; _ -> Nothing })
@@ -295,7 +296,7 @@ valueGrammar splices = mdo
     , check (
         tcRGB <$> (token (Identifier "rgb") *> (token OpenParen *> arith))
               <*> (token Comma *> arith)
-              <*> (token Comma *> arith <* token CloseParen))
+              <*> (token Comma *> arith <* token CloseParen))  
     ]
 
   textConcat <- rule $ check $
@@ -328,11 +329,15 @@ valueGrammar splices = mdo
     , check (tcIndex True  <$> (toplevel <* token AtAt) <*> toplevel)
     ]
 
+  diff <- rule $ check $
+    tcDiff <$> (token DiffKeyword *> (token OpenParen *> ident))
+            <*> (token Comma *> toplevel <* token CloseParen)
+
   typ <- typeGrammar
 
   let reserved = (`Set.member` reservedWords)
       reservedWords = Set.fromList
-        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "rgb", "mod"]
+        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "rgb", "mod", "diff"]
         `Set.union` Map.keysSet colors
         `Set.union` Map.keysSet commonFunctions
         `Set.union` Map.keysSet realFunctions

@@ -6,6 +6,7 @@ import FractalStream.Prelude
 import qualified Data.Map as Map
 
 import Language.Value
+import Language.Value.Derivative
 import Language.Typecheck
 import Language.Parser.SourceRange
 
@@ -247,6 +248,12 @@ tcComplexFun (name, ComplexFun resultTy makeC) x sr ty = case resultTy of
     ComplexType -> makeC <$> atType x ComplexType
     _ -> throwError (Surprise sr ("the result of " ++ name) "a complex number" (Expected $ an ty))
   _ -> throwError (Surprise sr ("the result of " ++ name) (an $ SomeType resultTy) (Expected $ an ty))
+
+tcDiff :: String -> ParsedValue -> CheckedValue
+tcDiff x f sr = \case
+  RealType    -> (atType f RealType) >>= derivative x sr
+  ComplexType -> (atType f ComplexType) >>= derivative x sr
+  ty -> throwError (Surprise sr "the result of a derivative" "a real or complex variable" (Expected $ an ty))
 
 tcInvert, tcDark, tcLight :: ParsedValue -> CheckedValue
 tcDark c sr = \case

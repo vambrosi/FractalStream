@@ -37,7 +37,8 @@ data TCError
   | MissingName SourceRange String
   | AlreadyDefined SourceRange String
   | BadConversion SourceRange SomeType (Expected SomeType)
-  | Advice SourceRange String
+  | Advice SourceRange String 
+  | DiffNotImplemented SourceRange String
   | Internal TCError
   deriving Show
 
@@ -55,11 +56,12 @@ tryEach failure = go
 
 instance HasErrorLocation TCError where
   errorLocation = \case
-    Surprise sr _ _ _    -> sr
-    MissingName sr _     -> sr
-    AlreadyDefined sr _  -> sr
-    BadConversion sr _ _ -> sr
-    Advice sr _          -> sr
+    Surprise sr _ _ _        -> sr
+    MissingName sr _         -> sr
+    AlreadyDefined sr _      -> sr
+    BadConversion sr _ _     -> sr
+    Advice sr _              -> sr
+    DiffNotImplemented sr _  -> sr
     Internal e -> errorLocation e
 
 instance PrettyPrint TCError where
@@ -76,6 +78,7 @@ ppError = concat .  \case
   BadConversion _ ty (Expected ety) ->
     ["Conversion to ", an ty, " was used here, but ", an ety, " was expected."]
   Advice _ advice -> [advice]
+  DiffNotImplemented _ name  -> ["The derivative of this function with respect to ", name, " is not implemented."]
   Internal e ->
     ["INTERNAL ERROR, please report at ",
       "https://github.com/matt-noonan/FractalStream/issues:\n",
