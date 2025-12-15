@@ -309,6 +309,7 @@ makeWxComplexViewer
                 -- Reset the brush and pen so they can be safely deleted
                 dcSetPen dc defaultPen
                 dcSetBrush dc defaultBrush
+                graphicsContextDelete gc
           ]
 
     lastKnownMouse <- newIORef Nothing
