@@ -209,10 +209,9 @@ makeWxComplexViewer
           pure (point px py)
 
     -- Set paint handlers
-    defaultPen <- penCreateDefault
-    defaultBrush <- brushCreateDefault
     set p [ on paintRaw := \dc r _dirty -> get animate value >>= \case
               Nothing -> do
+                gc <- graphicsContextCreate dc
                 -- Normal paint. Draw current rendering, then layer
                 -- tool imagery on top.
                 viewRect <- windowGetViewRect f
@@ -227,9 +226,8 @@ makeWxComplexViewer
                   Just{}  -> paintToolLayer (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands dc
                   Nothing -> paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
 
-                -- Reset the brush and pen so they can be safely deleted
-                dcSetPen dc defaultPen
-                dcSetBrush dc defaultBrush
+                -- Flush the graphics context
+                graphicsContextDelete gc
 
               Just (startTime, oldModel, oldImage) -> do
                 -- Animated paint. Zoom and blend smoothly between
@@ -306,9 +304,7 @@ makeWxComplexViewer
                                               (round $ negate viewCenterY)) []
                 paintToolLayer (modelToView midModel) (modelPixelDim midModel) cvGetDrawCommands dc
 
-                -- Reset the brush and pen so they can be safely deleted
-                dcSetPen dc defaultPen
-                dcSetBrush dc defaultBrush
+                -- Flush the graphics context
                 graphicsContextDelete gc
           ]
 
@@ -798,42 +794,38 @@ paintToolLayer
 paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
 
     cmdss <- getDrawCommands
-    let initialPenColor = rgba 255 255 255 (255 :: Word8)
-        initialBrushColor = rgba 255 255 255 (255 :: Word8)
-    currentPen <- newIORef initialPenColor
-    currentBrush <- newIORef initialBrushColor
+    let initialColor = rgba 255 255 255 (255 :: Word8)
 
-    let withPen fil action = do
-          curPen <- (`penColored` 2) <$> readIORef currentPen
-          curBrush <- (if fil then brushSolid else const brushTransparent) <$> readIORef currentBrush
-          curText <- readIORef currentPen
-          dcSetTextForeground dc curText
-          dcWithPenStyle dc curPen $ dcWithBrushStyle dc curBrush $ action []
+    let withFill fil action
+          | fil = action [ brush := brushTransparent ]
+          | otherwise = action []
         pxSz = sqrt(fst pxDim * snd pxDim)
 
     forM_ cmdss $ \cmds -> do
       -- Reset the pen and brush for the next drawing layer
-      writeIORef currentPen initialPenColor
-      writeIORef currentBrush initialBrushColor
+      set dc [ pen := penColored initialColor 2
+             , brush := brushSolid initialColor
+             , textColor := initialColor ]
 
       forM_ cmds $ \case
 
         DrawPoint _ pt -> do
           pt' <- modelToView pt
-          savedBrush <- readIORef currentBrush
-          writeIORef currentBrush =<< readIORef currentPen
-          withPen True (circle dc pt' 2)
-          writeIORef currentBrush savedBrush
+          pc <- get dc penColor
+          oldBrush <- get dc brush
+          set dc [ brush := brushSolid pc ]
+          withFill True (circle dc pt' 2)
+          set dc [ brush := oldBrush ]
 
         DrawLine _ pt1 pt2 -> do
           pt1' <- modelToView pt1
           pt2' <- modelToView pt2
-          withPen False (line dc pt1' pt2')
+          withFill False (line dc pt1' pt2')
 
         DrawCircle _ fil r pt -> do
           pt' <- modelToView pt
           let r' = round (r / pxSz)
-          withPen fil (circle dc pt' r')
+          withFill fil (circle dc pt' r')
 
         DrawRect _ fil pt1 pt3 -> do
           let pt2 = (fst pt1, snd pt2)
@@ -843,19 +835,22 @@ paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
           pt3' <- modelToView pt3
           pt4' <- modelToView pt4
           let boxpts = [pt1', pt2', pt3', pt4']
-          withPen fil (polygon dc boxpts)
+          withFill fil (polygon dc boxpts)
 
         Clear {} -> pure () -- clear operations should be handled upstream,
                             -- by truncating the draw command list
-        SetStroke _ c -> writeIORef currentPen (fsColorToWxColor c)
+        SetStroke _ c ->
+          set dc [ pen := penColored (fsColorToWxColor c) 2
+                 , textColor := fsColorToWxColor c ]
 
-        SetFill _ c -> writeIORef currentBrush (fsColorToWxColor c)
+        SetFill _ c ->
+          set dc [ brush := brushSolid (fsColorToWxColor c) ]
 
         Write _ txt pt -> do
           Point x0 y0 <- modelToView pt
           Size tw th <- getTextExtent dc txt
           let pt' = Point (x0 - tw `div` 2) (y0 - th `div` 2)
-          withPen False (drawText dc txt pt')
+          withFill False (drawText dc txt pt')
 
 -- | Convert a FractalStream color to a WxWidgets color
 fsColorToWxColor :: Color -> WX.Color
