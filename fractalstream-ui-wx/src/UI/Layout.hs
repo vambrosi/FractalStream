@@ -39,17 +39,17 @@ generateWxLayout buttonPress frame0 wLayout = do
        p' <- panel p [ ]
        lo <- go p' inner
        set p' [ layout := lo ]
-       pure (hstretch $ expand $ boxed pTitle (fill $ widget p'))
+       pure (hstretch $ expand $ margin 5 $ boxed pTitle (fill $ widget p'))
 
      Vertical parts -> do
        p' <- panel p []
-       lo <- hstretch . expand . column 5 <$> mapM (go p') parts
+       lo <- hstretch . expand . margin 5 . column 5 <$> mapM (go p') parts
        set p' [ layout := lo ]
        pure (hstretch $ expand (widget p'))
 
      Horizontal parts -> do
        p' <- panel p []
-       lo <- fill . row 5 <$> mapM (go p') parts
+       lo <- fill . margin 5 . row 5 <$> mapM (go p') parts
        set p' [ layout := lo ]
        pure (hstretch $ expand (widget p'))
 
@@ -65,18 +65,19 @@ generateWxLayout buttonPress frame0 wLayout = do
          set c [ layout := page ]
          notebookAddPage nb c lab True (-1)
        notebookSetSelection nb 0
-       pure (fill $ widget nb)
+       pure (fill $ margin 5 $ widget nb)
 
      PlainText txt -> do
        p' <- panel p []
-       lo <- fill . margin 5 . floatCentre . widget <$> staticText p' [ text := txt ]
+       lo <- margin 5 . floatCentre . widget <$> staticText p' [ text := txt ]
        set p' [layout := lo]
-       pure (hstretch $ widget p')
+       pure (hstretch . expand . margin 5 $ widget p')
 
      Button txt -> do
-       btn <- button p [ text := txt
-                       , on command := buttonPress txt ]
-       pure (floatRight $ margin 5 $ widget btn)
+       p' <- panel p []
+       btn <- button p' [ text := txt
+                        , on command := buttonPress txt ]
+       pure (hstretch . expand . container p' $ floatCentre $ margin 5 $ widget btn)
 
      ColorPicker (Label lab) v -> do
        (r0, g0, b0) <- colorToRGB <$> getDynamic v
@@ -92,7 +93,8 @@ generateWxLayout buttonPress frame0 wLayout = do
                  b = colorBlue c
              void (setDynamic v (rgbToColor (r, g, b)))
        WX.windowOnEvent picker [wxEVT_COMMAND_COLOURPICKER_CHANGED] newPick (const newPick)
-       pure (hstretch $ expand $ row 5 [ margin 3 (label lab), hfill (widget picker) ])
+       pure (hstretch $ expand $ margin 5 $
+             row 5 [ margin 3 (label lab), hfill (widget picker) ])
 
      CheckBox (Label lab) v -> do
        initial <- getDynamic v
@@ -106,7 +108,7 @@ generateWxLayout buttonPress frame0 wLayout = do
                   void (setDynamic v isChecked)
               ]
        listenWith v (\_ isChecked -> set cb [ checked := isChecked ])
-       pure (widget cb)
+       pure (hstretch . expand . margin 5 $ widget cb)
 
      Multiline v -> do
        txt <- getDynamic v
@@ -196,4 +198,4 @@ generateWxLayout buttonPress frame0 wLayout = do
                     propagateEvent
               ]
        listenWith v (\_ newText -> set te [ text := newText ])
-       pure (hstretch $ expand $ row 5 [ margin 3 (label lab), hfill (widget te) ])
+       pure (hstretch $ expand $ margin 5 $ row 5 [ margin 3 (label lab), hfill (widget te) ])
