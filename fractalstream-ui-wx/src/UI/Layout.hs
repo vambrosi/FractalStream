@@ -71,7 +71,7 @@ generateWxLayout buttonPress frame0 wLayout = do
        p' <- panel p []
        lo <- fill . margin 5 . floatCentre . widget <$> staticText p' [ text := txt ]
        set p' [layout := lo]
-       pure (hstretch $ expand $ widget p')
+       pure (hstretch $ widget p')
 
      Button txt -> do
        btn <- button p [ text := txt

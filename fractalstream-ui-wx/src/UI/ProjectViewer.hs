@@ -66,6 +66,7 @@ viewProject projectWindow addMenuBar = UI
       set f [ layout := margin 5 . container p $ fill $ column 5
               $ [ innerLayout, hfloatRight $ widget compileButton ]
             ]
+      windowReLayout f
 
   , makeLayout = \_ title ui -> do
       f <- frameEx frameDefaultStyle [ text := title
@@ -78,6 +79,7 @@ viewProject projectWindow addMenuBar = UI
 
       innerLayout <- generateWxLayout (\_ -> pure ()) f ui
       set f [ layout := fill . margin 5 . column 5 $ [ innerLayout ] ]
+      windowReLayout f
 
   , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar)
   }
@@ -113,6 +115,7 @@ makeWxComplexViewer
           , layout := fill (minsize (sz 128 128) (widget p))
           , clientSize := sz width height
           ]
+    windowReLayout f
 
     -- `requestRefresh` can be used from any thread to queue up a
     -- window refresh.
@@ -598,6 +601,7 @@ makeWxComplexViewer
               cvDrawCommandsChanged >>= \yn -> when yn triggerRepaint
         tlo <- generateWxLayout buttonPress tf tcfg
         set tf [ layout := margin 10 $ fill $ tlo ]
+        windowReLayout tf
         pure (\viz -> do
                  set tf [ visible := viz ]
                  -- Un-steal focus from the config window

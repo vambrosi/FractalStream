@@ -42,6 +42,7 @@ welcome ProjectActions{..} = do
                     , widget edit
                     ]
         ]
+  windowReLayout f
 
 chooseTemplate :: ProjectActions -> Window a -> IO (Choice ())
 chooseTemplate pa f = do
