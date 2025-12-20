@@ -801,8 +801,8 @@ paintToolLayer modelToView pxDim getDrawCommands dc = dcEncapsulate dc $ do
     let initialColor = rgba 255 255 255 (255 :: Word8)
 
     let withFill fil action
-          | fil = action [ brush := brushTransparent ]
-          | otherwise = action []
+          | fil = action []
+          | otherwise = action [ brush := brushTransparent ]
         pxSz = sqrt(fst pxDim * snd pxDim)
 
     forM_ cmdss $ \cmds -> do
