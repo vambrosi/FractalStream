@@ -52,7 +52,7 @@ setup:
 
 viewers:
 
-  - title: $title$ parameter plane
+  - title: "$title$ parameter plane"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -67,7 +67,7 @@ viewers:
       z : C <- $z0$
       $script$
 
-  - title: $title$ dynamical plane
+  - title: "$title$ dynamical plane"
     style: complex-plane
     size: 600x600
     resizable: true

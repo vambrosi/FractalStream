@@ -47,7 +47,7 @@ setup:
               variable: "on_failure"
 
 viewers:
-  - title: $title$
+  - title: "$title$"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -61,7 +61,7 @@ viewers:
         lastZ : C <- 0
         repeat:
           lastZ <- z
-          z <- z - ($f$) / ($df$)
+          z <- z - $f$ / $df$
         until z = lastZ
 
         if stuck:
@@ -89,7 +89,7 @@ viewers:
               repeat:
                 prevZ <- z
                 draw point at z
-                z <- z - ($f$) / ($df$)
+                z <- z - $f$ / $df$
                 draw line from z to prevZ
               until z = prevZ
 

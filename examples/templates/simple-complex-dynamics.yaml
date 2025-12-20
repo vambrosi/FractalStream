@@ -52,7 +52,7 @@ setup:
               variable: "on_failure"
 
 viewers:
-  - title: $title$ of $expression$
+  - title: "$title$ of $expression$"
     style: complex-plane
     size: 600x600
     resizable: true

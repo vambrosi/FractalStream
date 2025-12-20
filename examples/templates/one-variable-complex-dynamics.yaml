@@ -39,7 +39,7 @@ setup:
 
 viewers:
 
-  - title: $title$
+  - title: "$title$"
     style: complex-plane
     size: 600x600
     resizable: true
