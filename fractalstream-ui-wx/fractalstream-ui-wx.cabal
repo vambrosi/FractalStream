@@ -13,7 +13,7 @@ build-type:          Custom
 
 custom-setup
   setup-depends:
-    base >=4.8 && <5, Cabal, cabal-macosx
+    base >=4.8 && <5, Cabal, cabal-macosx, cabal-appimage
 
 flag use-llvm
   description: Use the LLVM backend
