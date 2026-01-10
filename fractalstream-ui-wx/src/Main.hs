@@ -1,3 +1,4 @@
+
 {- |
 Module       : Main
 Description  : Main entry point into FractalStream
@@ -22,15 +23,18 @@ import Backend
 import Graphics.UI.WX --(start)
 import Graphics.UI.WXCore.Draw (withFontStyle)
 import Graphics.UI.WXCore.Frame (windowChildren)
-import Graphics.UI.WXCore.WxcClasses (styledTextCtrlStyleSetFont, styledTextCtrlSetText)
+import Graphics.UI.WXCore.WxcClasses ( styledTextCtrlStyleSetFont
+                                     , styledTextCtrlSetText
+                                     , wxcAppSetAppName )
 
 import Control.Exception (catch, ErrorCall(..))
 
 main :: IO ()
 main = withBackend $ \complexViewerCompiler -> start $ do
 
-  sessions <- newUIValue []
+  wxcAppSetAppName "FractalStream"
 
+  sessions <- newUIValue []
 
   let projectNew = putStrLn "TODO"
 

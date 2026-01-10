@@ -23,6 +23,15 @@ jobs:
         wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
         sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
 
+        # Install fuse for appimage and icnsutils for converting the macos icns file
+        sudo apt install libfuse2 icnsutils
+
+        # Install appimagetool and linuxbuilder
+        wget https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+        mv appimagetool-x86_64.AppImage /usr/bin/appimagetool
+        wget https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
+        mv linuxdeploy-x86_64.AppImage /usr/bin/linuxdeploy
+
         # Install Haskell stack
         #     (nope, already installed in this runner)
         #curl -sSL https://get.haskellstack.org/ | sh
@@ -84,4 +93,17 @@ jobs:
     - name: Build FractalStream
       run: |
         cd fractalstream-ui-wx
+        icns2png -x FS.icns
         stack build
+
+    - name: Archive app image
+      env:
+        TARGET_BUNDLE_NAME: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+      run: |
+        zip -r $TARGET_BUNDLE_NAME.zip stack-work/dist/x86_64-linux-tinfo6/ghc-9.10.3/build/FractalStream.AppImage
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}.zip
+        path: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}.zip
