@@ -103,7 +103,7 @@ jobs:
       env:
         TARGET_BUNDLE_NAME: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
       run: |
-        zip $TARGET_BUNDLE_NAME.zip stack-work/dist/x86_64-linux-tinfo6/ghc-9.10.3/build/FractalStream.AppImage
+        zip $TARGET_BUNDLE_NAME.zip `stack path --dist-dir`/build/FractalStream.AppImage
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
