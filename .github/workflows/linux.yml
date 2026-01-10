@@ -109,5 +109,5 @@ jobs:
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
-        path: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+        name: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}.AppImage
+        path: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}.AppImage
