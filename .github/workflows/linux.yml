@@ -104,7 +104,7 @@ jobs:
         TARGET_BUNDLE_NAME: FractalStream-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
       run: |
         cd fractalstream-ui-wx
-        zip ../$TARGET_BUNDLE_NAME.zip `stack path --dist-dir`/build/FractalStream.AppImage
+        zip ../$TARGET_BUNDLE_NAME.zip `stack path --dist-dir`/build/FractalStream-x86_64.AppImage
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
