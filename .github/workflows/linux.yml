@@ -31,6 +31,7 @@ jobs:
         sudo mv appimagetool-x86_64.AppImage /usr/bin/appimagetool
         wget https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage
         sudo mv linuxdeploy-x86_64.AppImage /usr/bin/linuxdeploy
+        echo "/usr/bin" >> $GITHUB_PATH
 
         # Install Haskell stack
         #     (nope, already installed in this runner)
