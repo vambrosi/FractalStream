@@ -293,6 +293,9 @@ valueGrammar splices = mdo
         tcRainbow <$> (token (Identifier "rainbow") *>
                        (token OpenParen *> arith <* token CloseParen)))
     , check (
+        tcArenberg <$> (token (Identifier "arenberg") *>
+                       (token OpenParen *> arith <* token CloseParen)))
+    , check (
         tcRGB <$> (token (Identifier "rgb") *> (token OpenParen *> arith))
               <*> (token Comma *> arith)
               <*> (token Comma *> arith <* token CloseParen))
@@ -332,7 +335,7 @@ valueGrammar splices = mdo
 
   let reserved = (`Set.member` reservedWords)
       reservedWords = Set.fromList
-        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "rgb", "mod"]
+        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg", "rgb", "mod"]
         `Set.union` Map.keysSet colors
         `Set.union` Map.keysSet commonFunctions
         `Set.union` Map.keysSet realFunctions

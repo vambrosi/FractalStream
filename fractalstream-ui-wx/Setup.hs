@@ -16,9 +16,9 @@ import Data.List (isSuffixOf)
 main :: IO ()
 main = do
   defaultMainWithHooks $ simpleUserHooks
-    { postBuild = \args buildFlags -> do
-        appBundleBuildHook [macApp] args buildFlags
-        appImageBuildHook  [linuxApp] args buildFlags
+    { postBuild = \args buildFlags packageDesc localBuildInfo -> do
+        appBundleBuildHook [macApp]   args buildFlags packageDesc localBuildInfo
+        appImageBuildHook  [linuxApp] args buildFlags packageDesc localBuildInfo
     , confHook = fsConfHook
     }
 
