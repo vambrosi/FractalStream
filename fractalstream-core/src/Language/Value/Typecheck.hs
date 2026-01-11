@@ -295,12 +295,34 @@ tcCycle t c1 c2 sr = \case
 -- Cycle through 8 colors over the [0,1] interval:
 --   red, orange, yellow, green, cyan, blue, purple, magenta
 tcRainbow :: ParsedValue -> CheckedValue
-tcRainbow t sr = \case
+tcRainbow = tcWheel "rainbow" red orange yellow green cyan blue purple violet
+  where
+    cyan = rgbToColor (0, 128, 128)
+
+-- | Sampled from 8 points in the Arenberg phase wheel
+-- (https://eprovst.github.io/DomainColoring.jl/stable/arenberg/#The-Arenberg-Phase-Wheel)
+-- and converted to sRGB using D50 at 2 degrees
+tcArenberg :: ParsedValue -> CheckedValue
+tcArenberg = tcWheel "arenberg"
+  (rgbToColor (255, 80, 81))
+  (rgbToColor (255, 174, 0))
+  (rgbToColor (152, 190, 0))
+  (rgbToColor (0, 183, 74))
+  (rgbToColor (0, 237, 232))
+  (rgbToColor (0, 172, 255))
+  (rgbToColor (184, 161, 255))
+  (rgbToColor (255, 134, 226))
+
+tcWheel :: String
+        -> Color -> Color -> Color -> Color
+        -> Color -> Color -> Color -> Color
+        -> ParsedValue -> CheckedValue
+tcWheel name c1 c2 c3 c4 c5 c6 c7 c8 t sr = \case
   ColorType -> do
-    let argName = Proxy @"#rainbow-arg"
+    let argName = Proxy @"#wheel-arg"
 
         go :: forall env. KnownEnvironment env
-           => NameIsAbsent "#rainbow-arg" env
+           => NameIsAbsent "#wheel-arg" env
            -> TC (Value '(env, 'ColorT))
         go pf = recallIsAbsent pf $ do
           argVal <- ModF <$> atType t RealType <*> pure 1
@@ -314,8 +336,7 @@ tcRainbow t sr = \case
                           (ifBelow 0.625 (triple 4) (triple 5))
                           (ifBelow 0.875 (triple 6) (triple 7)))
               wheel = map (Const . Scalar ColorType)
-                          [red, orange, yellow, green, cyan, blue, purple, violet, red]
-              cyan = rgbToColor (0, 128, 128)
+                          [c1, c2, c3, c4, c5, c6, c7, c8, c1]
 
               triple i =
                 let lo = fromIntegral i * 0.125
@@ -335,7 +356,8 @@ tcRainbow t sr = \case
       Found' {} -> throwError (internal $ AlreadyDefined sr (symbolVal argName))
       Absent' pf -> go pf
 
-  ty -> throwError (Surprise sr "the result of a rainbow blend operation" "a color" (Expected $ an ty))
+  ty -> throwError (Surprise sr ("the result of a " ++ name ++ " blend operation") "a color"
+                                 (Expected $ an ty))
 
 tcRGB r g b sr = \case
   ColorType -> RGB <$> atType r RealType
