@@ -167,10 +167,15 @@ generateWxLayout buttonPress frame0 wLayout = do
                   else do
                     let m = editorOffsetMap code
                     styledTextCtrlStartStyling ce 0 0
-                    styledTextCtrlSetStyling ce ((m Map.! (length code - 1)) + 1) 0
+                    case Map.lookup (length code - 1) m of
+                      Nothing -> pure ()
+                      Just k -> styledTextCtrlSetStyling ce (k + 1) 0
                     forM_ (commentRanges code) $ \(s, e) -> do
-                      styledTextCtrlStartStyling ce (m Map.! s) 0
-                      styledTextCtrlSetStyling ce (m Map.! (e + 1 - s)) 2
+                      case (,) <$> Map.lookup s m <*> Map.lookup (e + 1 - s) m of
+                        Nothing -> pure ()
+                        Just (styleStart, styleRange) -> do
+                          styledTextCtrlStartStyling ce styleStart 0
+                          styledTextCtrlSetStyling ce styleRange 2
                     pure m
 
           liftIO $ set ce $
@@ -210,8 +215,11 @@ generateWxLayout buttonPress frame0 wLayout = do
                 Nothing -> void doSyntaxColoring
                 Just (s, e) -> do
                   m <- doSyntaxColoring
-                  styledTextCtrlStartStyling ce (m Map.! s) 0
-                  styledTextCtrlSetStyling ce (m Map.! (e + 1 - s)) 1
+                  case (,) <$> Map.lookup s m <*> Map.lookup (e + 1 - s) m of
+                    Nothing -> pure ()
+                    Just (styleStart, styleRange) -> do
+                      styledTextCtrlStartStyling ce styleStart 0
+                      styledTextCtrlSetStyling ce styleRange 1
             Right _ -> do
               wasError <- get isError value
               void doSyntaxColoring
