@@ -45,6 +45,7 @@ import Text.Printf
 import Text.Read (readMaybe)
 import qualified Data.Map as Map
 import Data.Char (toLower)
+import qualified System.Info as System
 
 viewProject :: Window ()
             -> (forall a. Frame a -> [Menu ()] -> IO ())
@@ -106,9 +107,12 @@ makeWxComplexViewer :: Window ()
                     -> IO (IO ())
 makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (SomeContext configValues) _rerunSetup remakeViewer theViewer@Viewer{..} = do
 
-  {-
-    let clone = cloneViewer theViewer >>= void . makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (SomeContext configValues)
--}
+    {- let clone = cloneViewer theViewer >>= void . makeWxComplexViewer projectWindow addMenuBar saveSessi         on raiseConfigWindow (SomeContext configValues)
+    -}
+    let baseFontSize = case System.os of
+          "darwin" -> 14
+          _        -> 10
+
     Dimensions (width, height) <- getDynamic vSize
     Dimensions (xpos, ypos) <- getDynamic vPosition
     title0 <- getDynamic vTitle
@@ -135,7 +139,7 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (Some
     pointerLocationText <- staticText plp [ text := ""
                                           , textColor := overlayForeground
                                           , font := fontFixed
-                                          , fontSize := 14
+                                          , fontSize := baseFontSize
                                           , fontWeight := WeightBold
                                           ]
     set pointerLocation [ layout := minsize (sz 310 20) $ floatCentre $ container plp $
@@ -175,12 +179,12 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (Some
     hamburgerMenu <- menuPane [ text := "Viewer" ]
     hamburger <- staticText hp [ text := "☰"
                                , textColor := overlayForeground
-                               , fontSize := 20
+                               , fontSize := baseFontSize + 6
                                , size := Size 20 20
                                ]
-    set hp [ on click := \(Point px py) -> do
-               Point wx wy <- get hamburgerPanel position
-               menuPopup hamburgerMenu (Point (px + wx) (py + wy)) f ]
+    set hamburger [ on click := \(Point px py) -> do
+                      Point wx wy <- get hamburgerPanel position
+                      menuPopup hamburgerMenu (Point (px + wx) (py + wy)) f ]
 
     set hamburgerPanel [ layout := minsize (sz 25 25) $ container hp $ alignCentre $ widget hamburger ]
 
