@@ -12,6 +12,7 @@ import Actor.Layout
 import Data.IORef
 import Text.Printf (printf)
 import qualified Data.Map as Map
+import Control.Concurrent
 
 import UI.CodeEditor
 
@@ -33,8 +34,14 @@ generateWxLayout buttonPress frame0 wLayout = do
 
   let watch :: forall f a. AsDynamic f => f a -> (a -> IO ()) -> StateT (IO ()) IO ()
       watch d action = do
-        done <- watchDynamic d action
-        modify (>> done)
+        xv <- liftIO $ newMVar (pure ())
+        t <- liftIO $ timer frame0 [ interval := 100, enabled := True
+                                   , on command := do
+                                       todo <- modifyMVar xv (pure . (pure (),))
+                                       todo
+                                   ]
+        done <- watchDynamic d (\x -> modifyMVar_ xv (const $ pure $ action x))
+        modify (timerStop t >> done >>)
 
       go :: Window a -> Layout -> StateT (IO ()) IO WX.Layout
       go p = \case
