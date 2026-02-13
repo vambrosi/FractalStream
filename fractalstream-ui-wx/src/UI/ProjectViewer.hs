@@ -331,7 +331,6 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (Some
             menuItem toolPickerMenu [ text := tname ++ shorty
                                     , on command := activateTool thisTool ]
     wxWatchDynamic f vTools setupToolPicker
-    setupToolPicker =<< getDynamic vTools
 
     toolShortcuts <- fmap Map.unions $ do
       tools <- getDynamic vTools
