@@ -4,13 +4,15 @@ module Language.Value.Parser
   , parseParsedValue
   , parseInputValue
   , parseType
+  , parseEnvironment
+  , parseConstant
   , valueGrammar
   , valueGrammarWithNoSplices
   , atType
   , typeGrammar
   , ParsedValue(..)
   , CheckedValue
-  , Splices
+  , ValueSplices
   -- * Re-exports
   , TCError
   , ParseError
@@ -28,16 +30,35 @@ import Language.Value.Typecheck
 import Language.Parser
 import Language.Typecheck
 import Language.Parser.Tokenizer
+import Language.Parser.SourceRange
+import Language.Value.Evaluator (evaluateInContext)
 
 ------------------------------------------------------
 -- Main functions for parsing Values
 ------------------------------------------------------
 
+type ValueSplices = Map String ParsedValue
+
 parseType :: String -> Either ParseError SomeType
 parseType = fmap (`withType` SomeType) . parse typeGrammar . tokenize
 
+parseEnvironment :: String -> Either ParseError (Map String SomeType)
+parseEnvironment = fmap (Map.fromList . map (fmap (`withType` SomeType)))
+                 . parse envGrammar . tokenize
+
+parseConstant :: forall ty
+               . TypeProxy ty
+              -> String
+              -> Either (Either ParseError TCError) (HaskellType ty)
+parseConstant ty input = withKnownType ty $
+  parseValue @'[] @ty Map.empty input >>= \v ->
+    case sameHaskellType (typeOfValue v) ty of
+      Just Refl -> Right (evaluateInContext EmptyContext v)
+      Nothing   -> Left . Right $ Surprise NoSourceRange
+        "this expression" (an $ typeOfValue v) (Expected $ an ty)
+
 parseValue :: forall env ty. (KnownEnvironment env, KnownType ty)
-           => Splices
+           => ValueSplices
            -> String
            -> Either (Either ParseError TCError) (Value '(env, ty))
 parseValue splices input = do
@@ -50,12 +71,12 @@ parseParsedValue :: Map String ParsedValue
 parseParsedValue splices = parse (valueGrammar splices) . tokenize
 
 parseInputValue :: forall env ty. (KnownEnvironment env, KnownType ty)
-                => Splices
+                => ValueSplices
                 -> String
                 -> Either (Either ParseError TCError) (Value '(env, ty))
 parseInputValue splices input = case typeProxy @ty of
   TextType     -> parseValue splices (show input)
-  ListType ity -> case filter (not . (`elem` " \t\n\r")) input of
+  ListType ity -> case filter (not . (flip (elem @[]) " \t\n\r")) input of
     "" -> pure (List ity [])
     _  -> parseValue splices ("[" ++ input ++ "]")
   _ -> parseValue splices input
@@ -63,6 +84,20 @@ parseInputValue splices input = case typeProxy @ty of
 ------------------------------------------------------
 -- Type and Value grammars
 ------------------------------------------------------
+
+envGrammar :: forall r. Grammar r (Prod r [(String, FSType)])
+envGrammar = mdo
+
+  toplevel <- ruleChoice
+    [ pure []
+    , (:) <$> oneVar <*> many (token Comma *> oneVar)
+    ]
+
+  oneVar <- rule ((,) <$> (ident <* token Colon) <*> typ)
+
+  typ <- typeGrammar
+
+  pure toplevel
 
 typeGrammar :: forall r. Grammar r (Prod r FSType)
 typeGrammar = mdo
@@ -97,7 +132,7 @@ valueGrammarWithNoSplices :: forall r. Grammar r (Prod r ParsedValue)
 valueGrammarWithNoSplices = valueGrammar Map.empty
 
 valueGrammar :: forall r
-              . Splices
+              . ValueSplices
              -> Grammar r (Prod r ParsedValue)
 valueGrammar splices = mdo
 
@@ -146,14 +181,14 @@ valueGrammar splices = mdo
 
   comparison <- ruleChoice
     [ check (tcEql <$> (arith <* token ExactlyEqual) <*> arith)
-    , check (tcAppxEql splices <$> (arith <* token Equal) <*> arith)
-    , check (tcAppxNEq splices <$> (arith <* token NotEqual) <*> arith)
+    , check (tcAppxEql <$> (arith <* token Equal) <*> arith)
+    , check (tcAppxNEq <$> (arith <* token NotEqual) <*> arith)
     , check (tcLT  <$> (arith <* token LessThan) <*> arith)
     , check (tcGT  <$> (arith <* token GreaterThan) <*> arith)
     , check (tcGTE <$> (arith <* token GreaterThanOrEqual) <*> arith)
     , check (tcLTE <$> (arith <* token LessThanOrEqual) <*> arith)
-    , check (tcEscapes splices <$> (arith <* token Escapes))
-    , check (tcVanishes splices <$> (arith <* token Vanishes))
+    , check (tcEscapes <$> (arith <* token Escapes))
+    , check (tcVanishes <$> (arith <* token Vanishes))
     , arith
     ]
 
@@ -242,8 +277,8 @@ valueGrammar splices = mdo
     , check (tcScalar "𝑒" RealType (exp 1.0) <$ token Euler)
     , check (tcScalar "π" RealType pi <$ token Pi)
     , check (tcScalar "text" TextType <$> quoted)
-    , check (tcIterations splices <$ token Iterations)
-    , check (tcStuck splices <$ token Stuck)
+    , check (tcIterations <$ token Iterations)
+    , check (tcStuck <$ token Stuck)
     , check (
         (\n -> tcScalar (show n) IntegerType (fromIntegral n))
         <$> tokenMatch (\case { NumberI n -> Just n; _ -> Nothing }))
@@ -296,6 +331,51 @@ valueGrammar splices = mdo
         tcArenberg <$> (token (Identifier "arenberg") *>
                        (token OpenParen *> arith <* token CloseParen)))
     , check (
+        tcRoma <$> (token (Identifier "romao") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcBam <$> (token (Identifier "bamo") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcBroc <$> (token (Identifier "broco") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcCork <$> (token (Identifier "corko") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcVik <$> (token (Identifier "viko") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcIce <$> (token (Identifier "ice") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcFire <$> (token (Identifier "fire") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcRose <$> (token (Identifier "rose") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcWheat <$> (token (Identifier "wheat") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcForest <$> (token (Identifier "forest") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcOcean <$> (token (Identifier "ocean") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcWinter <$> (token (Identifier "winter") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcSpring <$> (token (Identifier "spring") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcSummer <$> (token (Identifier "summer") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
+        tcFall <$> (token (Identifier "fall") *>
+                     (token OpenParen *> arith <* token CloseParen)))
+    , check (
         tcRGB <$> (token (Identifier "rgb") *> (token OpenParen *> arith))
               <*> (token Comma *> arith)
               <*> (token Comma *> arith <* token CloseParen))
@@ -335,7 +415,11 @@ valueGrammar splices = mdo
 
   let reserved = (`Set.member` reservedWords)
       reservedWords = Set.fromList
-        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg", "rgb", "mod"]
+        [ "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg"
+        , "romao", "bamo", "broco", "corko", "viko"
+        , "ice", "fire", "rose", "wheat", "forest", "ocean"
+        , "winter", "spring", "summer", "fall"
+        , "rgb", "mod"]
         `Set.union` Map.keysSet colors
         `Set.union` Map.keysSet commonFunctions
         `Set.union` Map.keysSet realFunctions

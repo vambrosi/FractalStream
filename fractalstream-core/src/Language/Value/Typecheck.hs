@@ -22,8 +22,6 @@ data ParsedValue = ParsedValue SourceRange
     => TypeProxy ty
     -> TC (Value '(env, ty)))
 
-type Splices = Map String ParsedValue
-
 -- | Values which have been checked for type and scope
 -- correctness.
 type CheckedValue = SourceRange -> (forall env ty. (KnownEnvironment env, KnownType ty) => TypeProxy ty -> TC (Value '(env,ty)))
@@ -34,14 +32,14 @@ atType :: (KnownEnvironment env, KnownType ty)
        -> TypeProxy ty
        -> TC (Value '(env, ty))
 atType v@(ParsedValue sr f) ty = case ty of
-  TextType    -> tryEach (Advice sr "I don't know how to turn this type of value into text.")
+  TextType    -> tryEachType (Advice sr "I don't know how to turn this type of value into text.")
     [ f TextType
     , ToText IntegerType <$> atType v IntegerType
     , ToText RealType    <$> atType v RealType
     , ToText ComplexType <$> atType v ComplexType
     ]
-  RealType    -> catchError (I2R <$> atType v IntegerType) $ \_ -> f RealType
-  ComplexType -> catchError (R2C <$> atType v RealType) $ \_ -> f ComplexType
+  RealType    -> catchError (I2R <$> atType v IntegerType) (\_ -> f RealType)
+  ComplexType -> catchError (R2C <$> atType v RealType) (\_ -> f ComplexType)
   _           -> f ty
 
 ------------------------------------------------------
@@ -53,11 +51,11 @@ tcCast v tgt sr ty = withType tgt $ \tgtTy ->
   case sameHaskellType ty tgtTy of
     Nothing -> throwError (BadConversion sr (SomeType tgtTy) (Expected $ SomeType ty))
     Just Refl -> case ty of
-      RealType -> tryEach (Advice sr "Could not convert to a real number")
+      RealType -> tryEachType (Advice sr "Could not convert to a real number")
         [ atType v RealType
         , I2R <$> atType v IntegerType
         ]
-      ComplexType -> tryEach (Advice sr "Could not convert to a complex number")
+      ComplexType -> tryEachType (Advice sr "Could not convert to a complex number")
         [ atType v ComplexType
         , R2C <$> atType v RealType
         , R2C . I2R <$> atType v IntegerType
@@ -90,59 +88,59 @@ tcNot arg sr = \case
 tcEql, tcLT, tcLTE, tcGT, tcGTE :: ParsedValue -> ParsedValue -> CheckedValue
 
 tcEql lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to ≡ must be real or complex numbers.")
+  BooleanType -> tryEachType (Advice sr "Arguments to ≡ must be real or complex numbers.")
     [ Eql RealType    <$> atType lhs RealType    <*> atType rhs RealType
     , Eql ComplexType <$> atType lhs ComplexType <*> atType rhs ComplexType
     ]
   ty -> throwError (Surprise sr "the result of an equality check" "a truth value" (Expected $ an ty))
 
 tcLT lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to a comparison must be integers or real numbers.")
+  BooleanType -> tryEachType (Advice sr "Arguments to a comparison must be integers or real numbers.")
     [ LTF <$> atType lhs RealType    <*> atType rhs RealType
     , LTI <$> atType lhs IntegerType <*> atType rhs IntegerType
     ]
   ty -> throwError (Surprise sr "the result of a comparison" "a truth value" (Expected $ an ty))
 
 tcGT lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to a comparison must be integers or real numbers.")
+  BooleanType -> tryEachType (Advice sr "Arguments to a comparison must be integers or real numbers.")
     [ LTF <$> atType rhs RealType    <*> atType lhs RealType
     , LTI <$> atType rhs IntegerType <*> atType lhs IntegerType
     ]
   ty -> throwError (Surprise sr "the result of a comparison" "a truth value" (Expected $ an ty))
 
 tcGTE lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to a comparison must be integers or real numbers.")
+  BooleanType -> tryEachType (Advice sr "Arguments to a comparison must be integers or real numbers.")
     [ Not <$> (LTF <$> atType lhs RealType    <*> atType rhs RealType)
     , Not <$> (LTI <$> atType lhs IntegerType <*> atType rhs IntegerType)
     ]
   ty -> throwError (Surprise sr "the result of a comparison" "a truth value" (Expected $ an ty))
 
 tcLTE lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to a comparison must be integers or real numbers.")
+  BooleanType -> tryEachType (Advice sr "Arguments to a comparison must be integers or real numbers.")
     [ Not <$> (LTF <$> atType rhs RealType    <*> atType lhs RealType)
     , Not <$> (LTI <$> atType rhs IntegerType <*> atType lhs IntegerType)
     ]
   ty -> throwError (Surprise sr "the result of a comparison" "a truth value" (Expected $ an ty))
 
-tcAppxEql, tcAppxNEq :: Splices -> ParsedValue -> ParsedValue -> CheckedValue
+tcAppxEql, tcAppxNEq :: ParsedValue -> ParsedValue -> CheckedValue
 
-tcAppxEql splices lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to ≠ must be of some comparable type.")
+tcAppxEql lhs rhs sr = \case
+  BooleanType -> tryEachType (Advice sr "Arguments to ≠ must be of some comparable type.")
     [ Eql IntegerType <$> atType lhs IntegerType <*> atType rhs IntegerType
     , Eql BooleanType <$> atType lhs BooleanType <*> atType rhs BooleanType
     , let delta = ParsedValue sr (tcSub lhs rhs sr)
           norm  = ParsedValue sr (tcAbs delta sr)
-      in tcVanishes splices norm sr BooleanType
+      in tcVanishes norm sr BooleanType
     ]
   ty -> throwError (Surprise sr "the result of an equality check" "a truth value" (Expected $ an ty))
 
-tcAppxNEq splices lhs rhs sr = \case
-  BooleanType -> tryEach (Advice sr "Arguments to = must be of some comparable type.")
+tcAppxNEq lhs rhs sr = \case
+  BooleanType -> tryEachType (Advice sr "Arguments to = must be of some comparable type.")
     [ NEq IntegerType <$> atType lhs IntegerType <*> atType rhs IntegerType
     , NEq BooleanType <$> atType lhs BooleanType <*> atType rhs BooleanType
     , let delta = ParsedValue sr (tcSub lhs rhs sr)
           norm  = ParsedValue sr (tcAbs delta sr)
-      in Not <$> tcVanishes splices norm sr BooleanType
+      in Not <$> tcVanishes norm sr BooleanType
     ]
   ty -> throwError (Surprise sr "the result of an inequality check" "a truth value" (Expected $ an ty))
 
@@ -195,21 +193,16 @@ tcScalar name ty' v sr ty = case sameHaskellType ty ty' of
   Just Refl -> pure (Const $ Scalar ty v)
   Nothing   -> throwError (Surprise sr name (an $ SomeType ty') (Expected $ an ty))
 
-tcIterations :: Splices -> CheckedValue
-tcIterations splices sr ty = case Map.lookup internalIterations splices of
-  Nothing -> throwError $ internal
-    (Advice sr "The script's internal iteration counter was not defined.")
-  Just r  -> atType r ty
+tcIterations :: CheckedValue
+tcIterations = tcVar internalIterations
 
-tcStuck :: Splices -> CheckedValue
-tcStuck splices sr ty = case Map.lookup internalStuck splices of
-  Just (ParsedValue _ stuck) -> ParsedValue sr stuck `atType` ty
-  Nothing -> throwError (internal $ Advice sr "The script's internal `stuck` status variable was not defined.")
+tcStuck :: CheckedValue
+tcStuck = tcVar internalStuck
 
 tcAbs :: ParsedValue -> CheckedValue
 tcAbs x sr = \case
   IntegerType -> AbsI <$> atType x IntegerType
-  RealType -> tryEach (Advice sr "The argument to |·| is not a real or complex number")
+  RealType -> tryEachType (Advice sr "The argument to |·| is not a real or complex number")
      [ AbsF <$> atType x RealType
      , AbsC <$> atType x ComplexType ]
   ty -> throwError (Surprise sr "the result of |·|" "a real number or integer" (Expected $ an ty))
@@ -294,7 +287,9 @@ tcCycle t c1 c2 sr = \case
 
 -- Cycle through 8 colors over the [0,1] interval:
 --   red, orange, yellow, green, cyan, blue, purple, magenta
-tcRainbow :: ParsedValue -> CheckedValue
+tcRainbow, tcArenberg, tcRoma, tcBam, tcBroc, tcCork, tcVik,
+  tcIce, tcFire, tcWheat, tcRose, tcOcean, tcForest,
+  tcWinter, tcSpring, tcSummer, tcFall :: ParsedValue -> CheckedValue
 tcRainbow = tcWheel "rainbow" red orange yellow green cyan blue purple violet
   where
     cyan = rgbToColor (0, 128, 128)
@@ -302,16 +297,71 @@ tcRainbow = tcWheel "rainbow" red orange yellow green cyan blue purple violet
 -- | Sampled from 8 points in the Arenberg phase wheel
 -- (https://eprovst.github.io/DomainColoring.jl/stable/arenberg/#The-Arenberg-Phase-Wheel)
 -- and converted to sRGB using D50 at 2 degrees
-tcArenberg :: ParsedValue -> CheckedValue
-tcArenberg = tcWheel "arenberg"
-  (rgbToColor (255, 80, 81))
-  (rgbToColor (255, 174, 0))
-  (rgbToColor (152, 190, 0))
-  (rgbToColor (0, 183, 74))
-  (rgbToColor (0, 237, 232))
-  (rgbToColor (0, 172, 255))
-  (rgbToColor (184, 161, 255))
-  (rgbToColor (255, 134, 226))
+tcArenberg = rgbWheel "arenberg"
+  (255,  80,  81) (255, 174,   0) (152, 190,   0) (  0, 183,  74)
+  (  0, 237, 232) (  0, 172, 255) (184, 161, 255) (255, 134, 226)
+
+-- Color maps from https://s-ink.org/scientific-colour-maps
+
+tcRoma = rgbWheel "romao"
+  (201, 218, 169) (196, 163,  72) (164, 103,  43) (137,  64,  53)
+  (116,  57,  88) ( 93,  84, 140) ( 81, 135, 185) (136, 197, 201)
+
+tcBam = rgbWheel "bamo"
+  (208, 200, 189) (212, 162, 196) (178, 110, 160) (118,  59, 102)
+  ( 78, 45, 63)   ( 79,  69,  59) (105, 110,  75) (177, 186, 150)
+
+tcBroc = rgbWheel "broco"
+  (201, 203, 179) (139, 162, 190) ( 89, 115, 155) ( 57,  65, 100)
+  ( 57,  46,  55) ( 69,  63,  41) (109, 105,  60) (166, 165, 118)
+
+tcCork = rgbWheel "corko"
+  (165, 196, 173) (134, 157, 185) ( 86, 111, 148) ( 64,  68,  93)
+  ( 64,  62,  57) ( 69,  79,  43) ( 79, 115,  58) (117, 164, 111)
+
+tcVik = rgbWheel "viko"
+  (210, 179, 161) (119, 157, 187) ( 61, 104, 151) ( 60,  53, 103)
+  ( 80,  25,  59) (105,  24,  34) (150,  62,  35) (203, 135,  99)
+
+-- Sawtooth gradients
+tcIce = rgbSawtooth "ice"
+  (0x1e, 0xcb, 0xff) (0x5f, 0xd8, 0xfb) (0x89, 0xe3, 0xf9) (0xad, 0xef, 0xf9) (0xcf, 0xf9, 0xfc)
+
+tcFire = rgbSawtooth "fire"
+  (0xff, 0x3d, 0x3d) (0xff, 0x7b, 0x39) (0xff, 0xab, 0x47) (0xff, 0xd4, 0x67) (0xff, 0xfa, 0x94)
+
+tcWheat = rgbSawtooth "wheat"
+  (0x00, 0xb3, 0xff) (0x66, 0xaf, 0xe5) (0x8a, 0xac, 0xcb) (0xf3, 0xd7, 0xa4) (0xed, 0xf2, 0x00)
+
+tcRose = rgbSawtooth "rose"
+  (0xff, 0x00, 0x99) (0xff, 0x58, 0x62) (0xf7, 0x92, 0x41) (0xd5, 0xbf, 0x4d) (0xb3, 0xe2, 0x83)
+
+tcForest = rgbSawtooth "forest"
+  (0x0c, 0x49, 0x00) (0x42, 0x57, 0x12) (0x67, 0x64, 0x2c) (0x86, 0x72, 0x4a) (0x9f, 0x83, 0x6b)
+
+tcOcean = rgbSawtooth "ocean"
+  (0x0a, 0x00, 0x49) (0x00, 0x34, 0x6a) (0x04, 0x5e, 0x7d) (0x54, 0x87, 0x8c) (0x98, 0xad, 0xa7)
+
+tcWinter = rgbSawtooth "winter"
+  (0xf7, 0xfa, 0xff) (0xc3, 0xcb, 0xdf) (0x94, 0x9d, 0xc0) (0x6b, 0x71, 0xa0) (0x46, 0x46, 0x80)
+
+tcSpring = rgbSawtooth "spring"
+  (0x67, 0xdf, 0x82) (0x88, 0xcf, 0x57) (0xa4, 0xbc, 0x31) (0xbd, 0xa7, 0x0e) (0xd3, 0x8e, 0x08)
+
+tcSummer = rgbSawtooth "summer"
+  (0x30, 0x5c, 0xce) (0x00, 0x87, 0xb4) (0x00, 0xa1, 0xb1) (0x00, 0xc1, 0x95) (0x23, 0xe3, 0x00)
+
+tcFall = rgbSawtooth "fall"
+  (0x80, 0x37, 0x03) (0x9e, 0x63, 0x1a) (0xba, 0x8f, 0x37) (0xd4, 0xbd, 0x5a) (0xeb, 0xec, 0x83)
+
+type RGB = (Word8, Word8, Word8)
+rgbWheel :: String -> RGB -> RGB -> RGB -> RGB -> RGB -> RGB -> RGB -> RGB -> ParsedValue -> CheckedValue
+rgbWheel name c1 c2 c3 c4 c5 c6 c7 c8 = tcWheel name
+  (rgbToColor c1) (rgbToColor c2) (rgbToColor c3) (rgbToColor c4)
+  (rgbToColor c5) (rgbToColor c6) (rgbToColor c7) (rgbToColor c8)
+
+rgbSawtooth :: String -> RGB -> RGB -> RGB -> RGB -> RGB -> ParsedValue -> CheckedValue
+rgbSawtooth name c1 c2 c3 c4 c5 = rgbWheel name c1 c2 c3 c4 c5 c4 c3 c2
 
 tcWheel :: String
         -> Color -> Color -> Color -> Color
@@ -378,43 +428,42 @@ tcMod x y sr = \case
                        "the result of a modulo operation"
                        "an integer or real number" (Expected $ an (SomeType ty)))
 
-tcEscapes :: Splices -> ParsedValue -> CheckedValue
-tcEscapes splices pv sr = \case
+tcEscapes :: ParsedValue -> CheckedValue
+tcEscapes pv sr = \case
   BooleanType -> do
-    p <- tryEach (Advice sr "The argument to `escapes` should be a real or complex number.")
+    p <- tryEachType (Advice sr "The argument to `escapes` should be a real or complex number.")
      [ AbsC <$> atType pv ComplexType
      , AbsF <$> atType pv RealType ]
-    case Map.lookup internalEscapeRadius splices of
-      Nothing -> throwError $ internal (Advice sr "The script's escape radius was not defined.")
-      Just r  -> LTF <$> atType r RealType <*> pure p
+    LTF <$> tcVar internalEscapeRadius sr RealType <*> pure p
   ty -> throwError (Surprise sr "the result of `escapes`" "a truth value" (Expected $ an (SomeType ty)))
 
-tcVanishes :: Splices -> ParsedValue -> CheckedValue
-tcVanishes splices pv sr = \case
+tcVanishes :: ParsedValue -> CheckedValue
+tcVanishes pv sr = \case
   BooleanType -> do
-    p <- tryEach (Advice sr "The argument to `vanishes` should be a real or complex number.")
+    p <- tryEachType (Advice sr "The argument to `vanishes` should be a real or complex number.")
      [ AbsC <$> atType pv ComplexType
      , AbsF <$> atType pv RealType ]
-    case Map.lookup internalVanishingRadius splices of
-      Nothing -> throwError $ internal (Advice sr "The script's vanishing radius was not defined.")
-      Just r  -> LTF p <$> atType r RealType
+    LTF p <$> tcVar internalVanishingRadius sr RealType
   ty -> throwError (Surprise sr "the result of `vanishes`" "a truth value" (Expected $ an (SomeType ty)))
 
 internalEscapeRadius, internalVanishingRadius, internalIterations :: String
 internalStuck, internalIterationLimit :: String
-internalEscapeRadius    = "[internal] escape radius"
-internalVanishingRadius = "[internal] vanishing radius"
+internalEscapeRadius      = "[internal] escape radius"
+type InternalEscapeRadius = "[internal] escape radius"
+internalVanishingRadius      = "[internal] vanishing radius"
+type InternalVanishingRadius = "[internal] vanishing radius"
 internalIterations      = "[internal] iteration count"
 type InternalIterations = "[internal] iteration count"
-internalIterationLimit  = "[internal] iteration limit"
-type InternalStuck      = "[internal] stuck"
-internalStuck           = "[internal] stuck"
+internalIterationLimit      = "[internal] iteration limit"
+type InternalIterationLimit = "[internal] iteration limit"
+type InternalStuck = "[internal] stuck"
+internalStuck      = "[internal] stuck"
 
 tcText :: [ParsedValue] -> CheckedValue
 tcText args sr = \case
   TextType -> do
     let pv (ParsedValue sr' f) =
-          tryEach (Advice sr' "I don't know how to make this value into text.")
+          tryEachType (Advice sr' "I don't know how to make this value into text.")
           [ f TextType
           , ToText IntegerType <$> f IntegerType
           , ToText RealType <$> f RealType

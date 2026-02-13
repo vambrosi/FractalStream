@@ -2,11 +2,14 @@
 
 module Language.Environment
   ( type Environment
+  , SomeEnvironment(..)
   , CanAppendTo(..)
   , type Lookup
   , type Required
   , type NotPresent
   , Context(..)
+  , SomeContext(..)
+  , SomeContext'(..)
   , type (:**:)
   , (#)
   , (<#>)
@@ -72,8 +75,8 @@ import FractalStream.Prelude
 
 import Language.Type
 
-import Unsafe.Coerce
 import Data.Constraint
+import Unsafe.Coerce
 import qualified Data.Map as Map
 
 ---------------------------------------------------------------------------------
@@ -92,6 +95,9 @@ type family Append (xs :: [(Symbol, FSType)]) (ys :: [(Symbol, FSType)]) :: [(Sy
 ---------------------------------------------------------------------------------
 -- Value-level proxies for the environment
 ---------------------------------------------------------------------------------
+
+data SomeEnvironment where
+  SomeEnvironment :: forall env. EnvironmentProxy env -> SomeEnvironment
 
 -- | A singleton datatype for Environment type variables.
 data EnvironmentProxy (env :: Environment) where
@@ -436,6 +442,18 @@ ctx1 <#> ctx2 = go ctx1
           Absent pf -> pure (recallIsAbsent pf $ Bind n t v ctx')
           _ -> Left (symbolVal n ++ " is defined twice.")
 
+newtype SomeContext' f = SomeContext' (Either String (SomeContext f))
+
+instance Semigroup (SomeContext' f) where
+  e@(SomeContext' (Left _)) <> _ = e
+  _ <> e@(SomeContext' (Left _)) = e
+  SomeContext' (Right (SomeContext ctx1)) <> SomeContext' (Right (SomeContext ctx2))
+    = SomeContext' $ case ctx1 <#> ctx2 of
+        Left err -> Left err
+        Right ctx -> withEnvironment (contextToEnv ctx) (pure $ SomeContext ctx)
+
+instance Monoid (SomeContext' f) where
+  mempty = SomeContext' (Right (SomeContext EmptyContext))
 
 ---------------------------------------------------------------------------------
 -- Constraints to require that a certain name is or is not present
@@ -484,6 +502,11 @@ type family NotPresent_impl
 -- defined in the environment.
 ---------------------------------------------------------------------------------
 
+data SomeContext (value :: Symbol -> FSType -> Exp Type) where
+  SomeContext :: forall env value. KnownEnvironment env
+              => Context value env
+              -> SomeContext value
+
 data Context (value :: Symbol -> FSType -> Exp Type) (env :: Environment) where
   EmptyContext :: forall value. Context value '[]
   Bind :: forall name ty env value
@@ -501,6 +524,7 @@ data Context (value :: Symbol -> FSType -> Exp Type) (env :: Environment) where
      -> Context value ( '(name, ty) ': env)
 (#) = Bind Proxy typeProxy
 
+infixr 7 #
 
 contextToEnv :: Context value env -> EnvironmentProxy env
 contextToEnv = \case

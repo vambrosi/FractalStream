@@ -16,9 +16,16 @@ module FractalStream.Prelude
     , module Data.Int
     , module Data.Word
     , module Data.Maybe
+    , module Data.Either
+    , (***)
+    , (&&&)
+    , (&)
+    , left
+    , right
     , Exp
     , Eval
     , Pure1
+    , Id
     , Map
     , Set
     , (:~:)(..)
@@ -43,6 +50,7 @@ import Control.Applicative hiding (Const(..))
 import Control.Monad.State
 import Control.Monad.Reader
 import Control.Monad.Except
+import Data.Function ((&))
 import Data.Functor hiding (unzip)
 import Data.Bifunctor
 import Data.String
@@ -51,9 +59,12 @@ import Fcf (Exp, Eval, Pure1)
 import Data.Map (Map)
 import Data.Set (Set)
 import Data.Maybe
+import Data.Either
 import Data.List (intercalate, isPrefixOf, isSuffixOf, sortOn, unsnoc)
 import Data.Int
 import Data.Word
+
+import Control.Arrow ((***), (&&&), left, right)
 
 class An a where
   an :: a -> String
@@ -62,7 +73,7 @@ instance An String where
   an x = case x of
     "" -> "???"
     (c:_)
-      | c `elem` "aeiouAEIOU" -> "an " ++ x
+      | elem @[] c "aeiouAEIOU" -> "an " ++ x
       | otherwise -> "a " ++ x
 
 class PrettyPrint a where
@@ -70,3 +81,6 @@ class PrettyPrint a where
 
 instance (PrettyPrint a, PrettyPrint b) => PrettyPrint (Either a b) where
   pp = either pp pp
+
+data Id a :: Exp Type
+type instance Eval (Id x) = x

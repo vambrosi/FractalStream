@@ -10,8 +10,10 @@ module Language.Code
   , transformValuesM
   , set
   , let_
+  , letInEnv
   , usedVarsInCode
   , usedVarsInValue
+  , pprintCode
   , Unit
   , UnitET
   ) where
@@ -233,6 +235,12 @@ let_ :: forall name env ty
      -> Code env
 let_ = Let bindingEvidence (Proxy @name)
 
+letInEnv :: forall name env ty
+          . (KnownSymbol name, KnownType ty)
+         => (KnownEnvironment env => Value '(env, ty))
+         -> (EnvironmentProxy ( '(name, ty) ': env ), Code ( '(name, ty) ': env))
+         -> (EnvironmentProxy env, Code env)
+letInEnv x (BindingProxy _ _ e, c) = withEnvironment e (e, let_ x c)
 
 -- | Set the value of a variable.
 -- This is the same as using the 'Set' constructor directly,
@@ -282,6 +290,39 @@ usedVarsInValue = indexedFoldM @UnitET phi
 
 usedVarsInCode :: Code env -> State (Set String) ()
 usedVarsInCode = indexedFoldM @Unit gatherUsedVarsInCode
+
+data String_ :: Environment -> Exp Type
+type instance Eval (String_ env) = String
+
+pprintCode :: Code env -> String
+pprintCode = unlines . go
+  where
+    name n = "`" ++ symbolVal n ++ "`"
+    go, indented :: forall env'. Code env' -> [String]
+    indented = map ("  " ++) . go
+    go = \case
+      Let _ n v body -> ("let " ++ name n ++ " = " ++ pprint v ++ " in:") : indented body
+      Set _ n v -> ["set " ++ name n ++ " := " ++ pprint v]
+      Block body -> "block:" : concatMap (map ("  " ++) . go) body
+      NoOp -> ["no-op"]
+      DoWhile v body -> ("do-while " ++ pprint v ++ ":") : indented body
+      IfThenElse c y n ->
+        let yy = indented y
+            nn = indented n
+        in ["if " ++ pprint c ++ " then:"] ++ yy ++ ["else:"] ++ nn
+      DrawCommand cmd -> (:[]) $ case cmd of
+        DrawPoint _ v -> "draw point at " ++ pprint v
+        DrawCircle _ f r v -> "draw " ++ (if f then "filled " else "") ++
+                              "circle at " ++ pprint v ++ " with radius " ++ pprint r
+        DrawLine _ p q -> "draw line from " ++ pprint p ++ " to " ++ pprint q
+        DrawRect _ f p q -> "draw " ++ (if f then "filled " else "") ++
+                            "rectangle from " ++ pprint p ++ " to " ++ pprint q
+        SetStroke _ c -> "use " ++ pprint c ++ " for line"
+        SetFill _ c -> "use " ++ pprint c ++ " for line"
+        Clear _ -> "erase"
+        Write _ t p -> "write " ++ pprint t ++ " at " ++ pprint p
+      Lookup{} -> ["{TODO: Lookup}"]
+      ForEach{} -> ["{TODO: ForEach}"]
 
 data Unit :: Environment -> Exp Type
 type instance Eval (Unit _) = ()

@@ -1,186 +1,141 @@
-viewers:
-  - title: Parameter space
-    style: complex-plane
-    size: 512x512
-    resizable: true
-    z-coord: C
-    iteration-limit: maxIters
-    escape-radius: maxRadius
-    initial-center: 0
-    initial-pixel-size: 1/128
-    code: |
-        z : ℂ ⭠ 0
-        until $stop$:
-          z ⭠ $f$
-          d : ℝ ⭠ |z - twist_center|
-          if d > r0 and d < r1:
-            theta : ℝ ⭠ 2 pi (d - r0) / (r1 - r0)
-            z ⭠ 𝑒^(𝑖 theta) (z - twist_center) + twist_center
-
-        if stuck:
-          color ⭠ black
-        else:
-          c1 : Color ⭠ if im(z) > 0 then blue else yellow
-          c2 : Color ⭠ if im(z) > 0 then green else red
-          s : ℝ ⭠ iterations + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
-          s ⭠ cos (s π / 10)²
-          color ⭠ blend (s, c1, c2)
-
-  - title: Twisted dynamical plane
-    style: complex-plane
-    size: 512x512
-    resizable: true
-    z-coord: z
-    pixel-size: px
-    iteration-limit: maxIters
-    escape-radius: maxRadius
-    initial-center: 0
-    initial-pixel-size: 1/128
-    code: |
-        until $stop$:
-          z ⭠ $f$
-          d : ℝ ⭠ |z - twist_center|
-          if d > r0 and d < r1:
-            theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
-            z ⭠ 𝑒^(𝑖 theta) (z - twist_center) + twist_center
-
-        if stuck:
-          color ⭠ black
-        else:
-          c1 : Color ⭠ if im(z) > 0 then blue else yellow
-          c2 : Color ⭠ if im(z) > 0 then green else red
-          s : ℝ ⭠ iterations + 1 - (log (log (|z|²) / (2 log maxRadius))) / log 2
-          s ⭠ cos (s π / 10)²
-          color ⭠ blend (s, c1, c2)
-
-    tools:
-      - name: Trace
-        shortcut: t
-        actions:
-          - event: deactivated
-            code: erase
-
-          - event: click-or-drag
-            code: |
-              prevZ : ℂ ⭠ z
-              k : ℤ ⭠ 0
-              erase
-              until $stop$ up to 100 times:
-                prevZ ⭠ z
-                draw point at z
-                z ⭠ $f$
-                d : ℝ ⭠ |z - twist_center|
-                if d > r0 and d < r1:
-                  theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)
-                  z ⭠ e^(𝑖 theta) (z - twist_center) + twist_center
-                draw line from z to prevZ
-
-
-      - name: Dehn twist
-        shortcut: d
-        actions:
-          - event: activated
-            code: |
-              use red for stroke
-              draw point at twist_center
-              use white for stroke
-              draw circle at twist_center with radius r0
-              draw circle at twist_center with radius r1
-          - event: deactivated
-            code: erase
-          - event: drag-finished
-            code: drag_target ⭠ 0
-          - event: drag
-            start: z0
-            code: |
-              eps : ℝ ⭠ 5 px
-              if drag_target = 0:
-                if |z0 - twist_center| < eps:
-                  drag_target ⭠ 1
-
-                else if |(|z0 - twist_center|) - r0| < eps:
-                  drag_target ⭠ 2
-
-                else if |(|z0 - twist_center|) - r1| < eps:
-                  drag_target ⭠ 3
-
-              if drag_target = 1:
-                twist_center ⭠ z
-              if drag_target = 2:
-                r0 ⭠ |z - twist_center|
-              if drag_target = 3:
-                r1 ⭠ |z - twist_center|
-              if drag_target > 0:
-                erase
-                use red for stroke
-                draw point at twist_center
-                use white for stroke
-                draw circle at twist_center with radius r0
-                draw circle at twist_center with radius r1
-
-
-setup:
-  title: Parametric complex dynamics
-  size: 200x200
-  vertical-contents:
-    - text-entry:
-        label: "Iterate f(z) = "
-        value: "z^2 + C"
-        type: ℂ
-        environment:
-          z: C
-          C: C
-        variable: f
-    - text-entry:
-        label: "until"
-        value: "|z| > maxRadius"
-        environment:
-          z: C
-          C: C
-          maxRadius: R
-        type: Boolean
-        variable: stop
-
 configuration:
-  title: Configuration
   size: 400x200
+  title: Configuration
   vertical-contents:
-    - text-entry:
-        label: "Selected value of C:"
-        value: -0.1226 + 0.7449i
-        type: ℂ
-        variable: C
-    - panel:
-        title: "Dehn twist"
-        vertical-contents:
-          - text-entry:
-              label: "Center of twist:"
-              value: -0.267 + 0.478i
-              type: ℂ
-              variable: twist_center
-          - horizontal-contents:
-              - text-entry:
-                  label: "Inner radius"
-                  value: 0.2
-                  type: ℝ
-                  variable: r0
-              - text-entry:
-                  label: "Outer radius"
-                  value: 0.5
-                  type: ℝ
-                  variable: r1
-    - text-entry:
-        label: "Max. iterations: "
-        value: "100"
-        type: ℤ
-        variable: maxIters
-    - text-entry:
-        label: "Max. radius: "
-        value: 10
-        type: ℝ
-        variable: maxRadius
-    - text-entry:
-        label: "Dehn tool drag target: "
-        value: "0"
-        type: ℤ
-        variable: drag_target
+  - text-entry:
+      label: 'Selected value of C:'
+      type: ℂ
+      value: -0.1226 + 0.7449i
+      variable: C
+  - panel:
+      title: Dehn twist
+      vertical-contents:
+      - text-entry:
+          label: 'Center of twist:'
+          type: ℂ
+          value: -0.267 + 0.478i
+          variable: twist_center
+      - horizontal-contents:
+        - text-entry:
+            label: Inner radius
+            type: ℝ
+            value: 0.2
+            variable: r0
+        - text-entry:
+            label: Outer radius
+            type: ℝ
+            value: 0.5
+            variable: r1
+  - text-entry:
+      label: 'Max. iterations: '
+      type: ℤ
+      value: 100
+      variable: maxIters
+  - text-entry:
+      label: 'Max. radius: '
+      type: ℝ
+      value: 10
+      variable: maxRadius
+  - text-entry:
+      label: 'Dehn tool drag target: '
+      type: ℤ
+      value: 0
+      variable: drag_target
+setup:
+  size: 200x200
+  title: Parametric complex dynamics
+  vertical-contents:
+  - text-entry:
+      environment:
+        C: ℂ
+        z: ℂ
+      label: 'Iterate f(z) = '
+      type: ℂ
+      value: z^2 + C
+      variable: f
+  - text-entry:
+      environment:
+        C: ℂ
+        maxRadius: ℝ
+        z: ℂ
+      label: until
+      type: Boolean
+      value: '|z| > maxRadius'
+      variable: stop
+viewers:
+- code: "z : ℂ ⭠ 0\nuntil «stop»:\n  z ⭠ «f»\n  d : ℝ ⭠ |z - twist_center|\n  if d
+    > r0 and d < r1:\n    theta : ℝ ⭠ 2 pi (d - r0) / (r1 - r0)\n    z ⭠ \U0001D452^(\U0001D456
+    theta) (z - twist_center) + twist_center\n\nif stuck:\n  color ⭠ black\nelse:\n
+    \ c1 : Color ⭠ if im(z) > 0 then blue else yellow\n  c2 : Color ⭠ if im(z) > 0
+    then green else red\n  s : ℝ ⭠ iterations + 1 - (log (log (|z|²) / (2 log maxRadius)))
+    / log 2\n  s ⭠ cos (s π / 10)²\n  color ⭠ blend (s, c1, c2)\n"
+  escape-radius: maxRadius
+  iteration-limit: maxIters
+  size: 512x512
+  title: Parameter space
+  z-coord: C
+- code: "until «stop»:\n  z ⭠ «f»\n  d : ℝ ⭠ |z - twist_center|\n  if d > r0 and d
+    < r1:\n    theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)\n    z ⭠ \U0001D452^(\U0001D456
+    theta) (z - twist_center) + twist_center\n\nif stuck:\n  color ⭠ black\nelse:\n
+    \ c1 : Color ⭠ if im(z) > 0 then blue else yellow\n  c2 : Color ⭠ if im(z) > 0
+    then green else red\n  s : ℝ ⭠ iterations + 1 - (log (log (|z|²) / (2 log maxRadius)))
+    / log 2\n  s ⭠ cos (s π / 10)²\n  color ⭠ blend (s, c1, c2)\n"
+  escape-radius: maxRadius
+  iteration-limit: maxIters
+  pixel-size: px
+  position: 620x104
+  size: 512x512
+  title: Twisted dynamical plane
+  tools:
+  - actions:
+    - code: erase
+      event: deactivated
+    - code: "prevZ : ℂ ⭠ z\nk : ℤ ⭠ 0\nerase\nuntil «stop» up to 100 times:\n  prevZ
+        ⭠ z\n  draw point at z\n  z ⭠ «f»\n  d : ℝ ⭠ |z - twist_center|\n  if d >
+        r0 and d < r1:\n    theta : ℝ ⭠ 2π (d - r0) / (r1 - r0)\n    z ⭠ e^(\U0001D456
+        theta) (z - twist_center) + twist_center\n  draw line from z to prevZ\n"
+      event: click-or-drag
+    name: Trace
+    shortcut: t
+  - actions:
+    - code: |
+        use red for stroke
+        draw point at twist_center
+        use white for stroke
+        draw circle at twist_center with radius r0
+        draw circle at twist_center with radius r1
+      event: activated
+    - code: erase
+      event: deactivated
+    - code: drag_target ⭠ 0
+      event: drag-finished
+    - code: |
+        eps : ℝ ⭠ 5 px
+        if drag_target = 0:
+          if |z0 - twist_center| < eps:
+            drag_target ⭠ 1
+
+          else if |(|z0 - twist_center|) - r0| < eps:
+            drag_target ⭠ 2
+
+          else if |(|z0 - twist_center|) - r1| < eps:
+            drag_target ⭠ 3
+
+        if drag_target = 1:
+          twist_center ⭠ z
+        if drag_target = 2:
+          r0 ⭠ |z - twist_center|
+        if drag_target = 3:
+          r1 ⭠ |z - twist_center|
+        if drag_target > 0:
+          erase
+          use red for stroke
+          draw point at twist_center
+          use white for stroke
+          draw circle at twist_center with radius r0
+          draw circle at twist_center with radius r1
+      event: drag
+      start: z0
+    name: Dehn twist
+    shortcut: d
+  z-coord: z

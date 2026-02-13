@@ -46,7 +46,7 @@ viewers:
       color ⭠ black
       if z escapes:
         m : ℝ ⭠ iterations + 1 - log (log (|z|²) / (2 log 10)) / log 2
-        color ⭠ if use_arenberg then arenberg(m / speed) else rainbow(m / 20)
+        color ⭠ if use_arenberg then arenberg(m / speed) else rainbow(m / speed)
 
   - title: Dynamical plane
     style: complex-plane
@@ -63,4 +63,4 @@ viewers:
       color ⭠ black
       if z escaped:
         m : ℝ ⭠ iterations + 1 - log (log (|z|²) / (2 log 10)) / log 2
-        color ⭠ if use_arenberg then arenberg(m / speed) else rainbow(m / 20)
+        color ⭠ if use_arenberg then arenberg(m / speed) else rainbow(m / speed)

@@ -13,7 +13,6 @@ import Language.Code.Simulator
 import Language.Draw (DrawHandler(..))
 import Language.Value
 
-import qualified Data.Map as Map
 import Text.RawString.QQ
 
 runWithXY :: Double
@@ -31,7 +30,7 @@ runWithXY x y lst input = do
     _ -> Left "impossible"
   first (`ppFullError` input)
     $ fmap ((`evalState` (ctx, ())) . (\c -> simulate noDraw c >> eval testVar))
-    $ parseCode (envProxy Proxy) Map.empty input
+    $ parseCode (envProxy Proxy) noSplices input
 
 noDraw :: DrawHandler (HaskellTypeM ())
 noDraw = DrawHandler (const $ pure ())
@@ -45,21 +44,21 @@ spec = do
 
       let p1 = [r|
 x <- 0
-for each item in test do
+for each item in test:
   x <- x + item
 y <- x
-insert y at end of test|]
+test <- append(test, y)|]
       runWithXY 5 7 [1,2,3,4,5] p1 `shouldBe` Right [1,2,3,4,5,15]
 
       let p2 = [r|
 x <- 3
-remove each item matching item <= x from test|]
+test <- remove(test, item -> item <= x)|]
       runWithXY 5 7 [1,2,3,4,5] p2 `shouldBe` Right [4,5]
 
       let p3 = [r|
 x <- 3
-if |x - y| < 2 then
-  remove all items from test|]
+if |x - y| < 2:
+  test <- []|]
 
       runWithXY 1 10 [1,2,3,4,5] p3 `shouldBe` Right [1,2,3,4,5]
       runWithXY 1 4 [1,2,3,4,5] p3  `shouldBe` Right []

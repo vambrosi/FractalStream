@@ -2,9 +2,9 @@ module Backend
   ( withBackend
   ) where
 
-import Actor.Viewer.Complex
+import Actor.Viewer
 import Backend.Pure
 
-withBackend :: (ComplexViewerCompiler -> IO a) -> IO a
+withBackend :: (ViewerCompiler -> IO a) -> IO a
 withBackend action =
-  action (ComplexViewerCompiler interpretComplexViewer)
+  action (ViewerCompiler interpretViewer)

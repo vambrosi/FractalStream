@@ -1,6 +1,6 @@
-{-# options_ghc -Wno-unused-matches #-}
+--{-# options_ghc -Wno-unused-matches #-}
 module Backend.Pure
-  ( interpretComplexViewer
+  ( interpretViewer
   ) where
 
 import FractalStream.Prelude
@@ -8,67 +8,46 @@ import Language.Environment
 import Language.Draw
 import Language.Code
 import Language.Code.InterpretIO
-import Language.Value.Evaluator (HaskellTypeOfBinding)
-import Data.Color (colorToRGB)
+import Language.Value.Evaluator (HaskellValue)
+import Actor.Viewer
+import Data.Indexed.Functor
+import Data.Color (colorToRGB, grey)
 
 import Foreign hiding (void)
 import Data.IORef
 
-interpretComplexViewer
-    :: forall x y dx dy out env t
-     . ( KnownEnvironment env
-       , NotPresent "[internal argument] #blockWidth" env
-       , NotPresent "[internal argument] #blockHeight" env
-       , NotPresent "[internal argument] #subsamples" env
-       , KnownSymbol x, KnownSymbol y
-       , KnownSymbol dx, KnownSymbol dy
-       , KnownSymbol out
-       , Required x env ~ 'RealT
-       , NotPresent x (env `Without` x)
-       , Required y env ~ 'RealT
-       , NotPresent y (env `Without` y)
-       , Required dx env ~ 'RealT
-       , NotPresent dx (env `Without` dx)
-       , Required dy env ~ 'RealT
-       , NotPresent dy (env `Without` dy)
-       , Required out env ~ 'ColorT
-       , NotPresent out (env `Without` out)
-       )
-    => Proxy x
-    -> Proxy y
-    -> Proxy dx
-    -> Proxy dy
-    -> Proxy out
-    -> Code env
-    -> ((Int32 -> Int32 -> Int32 -> Context HaskellTypeOfBinding env -> Ptr Word8 -> IO ())
-         -> IO t)
-    -> IO t
-interpretComplexViewer px py pdx pdy out body action = do
+interpretViewer :: forall env t. MissingViewerArgs env
+                => Code (ViewerEnv env)
+                -> (ViewerFunction env -> IO t) -> IO t
+interpretViewer body action = do
+  let env = toIndex body
+  withEnvironment env $ action $ ViewerFunction $ \ViewerArgs{..} -> do
+    let (x0, y0) = vaPoint
+        (dx, dy) = vaStep
+        context :: Context HaskellValue (ViewerEnv env)
+        context = Bind (Proxy @InternalX)  RealType  x0
+                $ Bind (Proxy @InternalY)  RealType  y0
+                $ Bind (Proxy @InternalDX) RealType  dx
+                $ Bind (Proxy @InternalDY) RealType  dy
+                $ Bind (Proxy @"color")    ColorType grey
+                $ vaArgs
 
-  action $ \blockWidth blockHeight subsamples ctx buf -> do
+    forM_ (zip [0 .. vaWidth - 1] [y0, y0 - dy ..]) $ \(j, y) -> do
+      forM_ (zip [0 .. vaHeight - 1] [x0, x0 + dx ..]) $ \(i, x) -> do
 
-    let x0 = getBinding @x  @'RealT ctx bindingEvidence
-        y0 = getBinding @y  @'RealT ctx bindingEvidence
-        dx = getBinding @dx @'RealT ctx bindingEvidence
-        dy = getBinding @dy @'RealT ctx bindingEvidence
-
-    forM_ (zip [0 .. blockWidth - 1] [y0, y0 - dy ..]) $ \(j, y) -> do
-      forM_ (zip [0 .. blockHeight - 1] [x0, x0 + dx ..]) $ \(i, x) -> do
-
-        iorefs :: Context IORefTypeOfBinding env <-
-          mapContextM (\_ _ -> newIORef) ctx
+        iorefs :: Context IORefTypeOfBinding (ViewerEnv env) <-
+          mapContextM (\_ _ -> newIORef) context
 
         (r, g, b) <- fmap colorToRGB . flip evalStateT iorefs $ do
-          update bindingEvidence px RealType x
-          update bindingEvidence py RealType y
+          update bindingEvidence (Proxy @InternalX) RealType x
+          update bindingEvidence (Proxy @InternalY) RealType y
           interpretToIO noDrawing body
-          eval (Var out ColorType bindingEvidence)
+          eval (Var (Proxy @"color") ColorType bindingEvidence)
 
-        let offset = fromIntegral (3 * (j * blockWidth + i))
-        pokeByteOff buf (offset + 0) r
-        pokeByteOff buf (offset + 1) g
-        pokeByteOff buf (offset + 2) b
-
+        let offset = fromIntegral (3 * (j * vaWidth + i))
+        pokeByteOff vaBuffer (offset + 0) r
+        pokeByteOff vaBuffer (offset + 1) g
+        pokeByteOff vaBuffer (offset + 2) b
 
     pure ()
 

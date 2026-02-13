@@ -22,11 +22,6 @@ setup:
           maxIters: Z
           maxRadius: R
           minRadius: R
-          "[internal] iteration count": Z
-          "[internal] stuck": Boolean
-          "[internal] iterations": Z
-          "[internal] escape radius": R
-          "[internal] vanishing radius": R
         value: |
           iterate z ⟼ z² + i until z escapes
 
@@ -39,7 +34,7 @@ setup:
 
 viewers:
 
-  - title: "$title$"
+  - title: "«title»"
     style: complex-plane
     size: 600x600
     resizable: true
@@ -47,10 +42,10 @@ viewers:
     iteration-limit: maxIters
     escape-radius: maxRadius
     vanishing-radius: minRadius
-    initial-center: 0
+    initial-center: "0"
     initial-pixel-size: 1/100
     code: |
-      $script$
+      «script»
 
 configuration:
   title: Configuration

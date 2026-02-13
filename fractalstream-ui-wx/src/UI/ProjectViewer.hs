@@ -7,7 +7,6 @@ module UI.ProjectViewer
 
 import FractalStream.Prelude hiding (get)
 
-import Language.Environment
 import Data.Color (Color, colorToRGB)
 import Control.Concurrent.MVar
 
@@ -32,20 +31,26 @@ import Data.IORef
 import Actor.UI
 import Actor.Tool
 import Actor.Layout
-import Actor.Viewer.Complex
-import Actor.Event (Event(..))
+import Actor.Configuration
+import Actor.Viewer
+import Actor.Ensemble (layoutToArgs)
+import Actor.Event (Event(..), buildHandler, EventArgument_)
 import Language.Draw
+import Language.Environment
 
-import Data.DynamicValue
-import Language.Code (usedVarsInCode)
+import Data.DynamicValue hiding (clone)
 import Task.Block (BlockComputeAction)
 
-import qualified Data.Set as Set
+import Text.Printf
+import Text.Read (readMaybe)
+import qualified Data.Map as Map
+import Data.Char (toLower)
 
 viewProject :: Window ()
             -> (forall a. Frame a -> [Menu ()] -> IO ())
+            -> IO ()
             -> UI
-viewProject projectWindow addMenuBar = UI
+viewProject projectWindow addMenuBar saveSession = UI
   { newEnsemble = pure ()
 
   , runSetup = \_ title setupUI continue -> do
@@ -57,7 +62,7 @@ viewProject projectWindow addMenuBar = UI
       WX.windowOnClose f (set f [ visible := False ])
 
       p <- panel f []
-      innerLayout <- generateWxLayout (\_ -> pure ()) p setupUI
+      (stopListening, innerLayout) <- generateWxLayout (\_ -> pure ()) p setupUI
       compileButton <- button p [ text := "Go!"
                                 , on command := do
                                     set f [ visible := False ]
@@ -65,57 +70,189 @@ viewProject projectWindow addMenuBar = UI
                                 ]
       set f [ layout := margin 5 . container p $ fill $ column 5
               $ [ innerLayout, hfloatRight $ widget compileButton ]
+            , on closing :~ (>> stopListening)
             ]
       windowReLayout f
 
   , makeLayout = \_ title ui -> do
       f <- frameEx frameDefaultStyle [ text := title
                  , on resize := propagateEvent
+                 , style := wxFRAME_TOOL_WINDOW .+. wxRESIZE_BORDER .+.
+                            wxCAPTION .+. wxCLOSE_BOX
+                 , visible := False
                  ] projectWindow
 
       WX.windowOnClose f (set f [ visible := False ])
 
       addMenuBar f []
 
-      innerLayout <- generateWxLayout (\_ -> pure ()) f ui
-      set f [ layout := fill . margin 5 . column 5 $ [ innerLayout ] ]
+      (stopListening, innerLayout) <- generateWxLayout (\_ -> pure ()) f ui
+      set f [ layout := fill . margin 5 . column 5 $ [ innerLayout ]
+            , on closing :~ (>> stopListening) ]
       windowReLayout f
+      pure (windowShow f >> windowRaise f)
 
-  , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar)
+  , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar saveSession)
   }
 
 makeWxComplexViewer :: Window ()
                     -> (forall a. Frame a -> [Menu ()] -> IO ())
-                    -> ViewerUIProperties
-                    -> ComplexViewer'
                     -> IO ()
-makeWxComplexViewer
-  projectWindow
-  addMenuBar
-  vup@ViewerUIProperties{..}
-  theViewer@ComplexViewer'{..} = do
+                    -> IO ()
+                    -> SomeContext EventArgument_
+                    -> IO ()
+                    -> IO ()
+                    -> Viewer
+                    -> IO (IO ())
+makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (SomeContext configValues) _rerunSetup remakeViewer theViewer@Viewer{..} = do
 
-    let clone = do
-          newCV <- cloneComplexViewer theViewer
-          makeWxComplexViewer projectWindow addMenuBar vup newCV
-
-    let (width, height) = (fst vpSize, snd vpSize)
-    f <- frameEx frameDefaultStyle [ text := vpTitle
-               , on resize := propagateEvent
-               ] projectWindow
+  {-
+    let clone = cloneViewer theViewer >>= void . makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (SomeContext configValues)
+-}
+    Dimensions (width, height) <- getDynamic vSize
+    Dimensions (xpos, ypos) <- getDynamic vPosition
+    title0 <- getDynamic vTitle
+    f <- frameEx frameDefaultStyle [ text := title0
+                                   , position := Point xpos ypos
+                                   , on resize := propagateEvent
+                                   ] projectWindow
     WX.windowOnClose f (set f [ visible := False ])
 
-    p <- scrolledWindow f [ scrollRate := sz 10 10 ]
 
-    -- Viewer status bar
-    status <- statusField [ text := "Pointer location" ]
-    toolStatus <- statusField [text := ""]
+    p <- scrolledWindow f [ scrollRate := sz 10 10, visible := True ]
 
-    set f [ statusBar := [toolStatus, status]
-          , layout := fill (minsize (sz 128 128) (widget p))
+    -- HUD
+    let isDarkMode = True
+        overlayBackground = if isDarkMode then rgba 0 0 0 (80 :: Int) else rgba 255 255 255 (180 :: Int)
+        overlayForeground = if isDarkMode then white else black
+
+    pointerLocation <- panel f [ bgcolor := overlayBackground
+                               , position := Point (width `div` 2 - 155) (height - 30)
+                               , visible := False
+                               ]
+    shouldShowPointerLocation <- variable [ value := False ]
+    plp <- panel pointerLocation [ bgcolor := rgba 0 0 0 (0 :: Int) ]
+    pointerLocationText <- staticText plp [ text := ""
+                                          , textColor := overlayForeground
+                                          , font := fontFixed
+                                          , fontSize := 14
+                                          , fontWeight := WeightBold
+                                          ]
+    set pointerLocation [ layout := minsize (sz 310 20) $ floatCentre $ container plp $
+                          widget pointerLocationText
+                        ]
+
+    let setPointerLocation (x,y) =
+          let txt0
+                | y < 0     = printf "%.14f - %.14f𝑖" x (negate y)
+                | otherwise = printf "%.14f + %.14f𝑖" x y
+              txt = if x < 0 then txt0 else ' ' : txt0
+          in set pointerLocationText [ text := txt ]
+
+    currentTool <- variable [value := Nothing]
+    toolPanel <- panel f [ bgcolor := overlayBackground
+                         , position := Point 5 5 ]
+    toolpick <- staticText toolPanel [ text := "▼ Navigate", textColor := overlayForeground ]
+    toolPickerMenu <- menuPane [ text := "Tool" ]
+    set toolPanel [ layout := margin 5 (widget toolpick) ]
+    windowFit toolPanel
+
+    set toolpick [ on click := \(Point px py) -> do
+                      Point wx wy <- get toolPanel position
+                      menuPopup toolPickerMenu (Point (px + wx) (py + wy)) f
+                  ]
+    warningPanel <- panel f [ bgcolor := rgba 255 0 0 (50 :: Int)
+                            , position := Point 250 5
+                            , visible := False ]
+
+    warning <- staticText warningPanel [ text := "Viewer paused"
+                                       , color := white ]
+    set warningPanel [ layout := fill $ margin 5 $ widget warning ]
+
+    hamburgerPanel <- panel f [ bgcolor := overlayBackground
+                              , position := Point (width - 30) 5 ]
+    hp <-  panel hamburgerPanel []
+    hamburgerMenu <- menuPane [ text := "Viewer" ]
+    hamburger <- staticText hp [ text := "☰"
+                               , textColor := overlayForeground
+                               , fontSize := 20
+                               , size := Size 20 20
+                               ]
+    set hp [ on click := \(Point px py) -> do
+               Point wx wy <- get hamburgerPanel position
+               menuPopup hamburgerMenu (Point (px + wx) (py + wy)) f ]
+
+    set hamburgerPanel [ layout := minsize (sz 25 25) $ container hp $ alignCentre $ widget hamburger ]
+
+    shouldShowToolPicker <- variable [value := True]
+
+    let repositionButtons = do
+          Size w h <- get f clientSize
+          set pointerLocation [ position := Point (w `div` 2 - 155) (h - 30) ]
+          set hamburgerPanel [ position := Point (w - 30) 5 ]
+          Size ww wh <- get warningPanel outerSize
+          set warningPanel [ position := Point ((w - ww) `div` 2) ((h - wh) `div` 2) ]
+
+    -- Make the script editor
+    let showViewer tf = do
+          set p [ visible := tf ]
+          set hamburgerPanel [ visible := tf ]
+          showTools <- get shouldShowToolPicker value
+          set toolPanel [ visible := tf && showTools ]
+          showPtr <- get shouldShowPointerLocation value
+          set pointerLocation [ visible := tf && showPtr ]
+
+    sePanel <- panel f []
+    seTitle <- staticText sePanel [ text := "Edit script for `" ++ title0 ++ "`" ]
+    oldScriptValue <- variable [ value := CodeString "" ]
+    seOk <- button sePanel [ text := "Ok"
+                           , on command := do
+                               newScript <- getDynamic (source $ scriptCode vScript)
+                               oldScript <- get oldScriptValue value
+                               if newScript /= oldScript
+                                 then do
+                                   void $ windowClose f True
+                                   remakeViewer
+                                 else do
+                                   showViewer True
+                                   set sePanel [ visible := False ]
+                                   windowReLayout f
+                                   focusOn p
+                           ]
+    wxWatchDynamic f (dyn $ scriptCode vScript) $ \result ->
+      set seOk [ enabled := isRight result ]
+
+    seCancel <- button sePanel [ text := "Cancel"
+                               , on command := do
+                                   showViewer True
+                                   set sePanel [ visible := False ]
+                                   windowReLayout f
+                                   focusOn p
+                               ]
+
+    (_seUnhook, seLo) <- generateWxLayout (const $ pure ()) sePanel (ScriptBox vScript)
+    set sePanel [ visible := False
+                , layout := column 5 $
+                  [ hfloatCentre (widget seTitle)
+                  , seLo
+                  , row 5 [ expand (margin 3 $ widget seOk)
+                          , hglue
+                          , expand (margin 3 $ widget seCancel) ] ]]
+
+    set f [ layout := column 0 [ fill $ widget p, margin 5 $ fill (widget sePanel) ]
           , clientSize := sz width height
+          , on activate :~ \old vis -> do
+              numTools <- length <$> getDynamic vTools
+              shouldShowTools <- get shouldShowToolPicker value
+              set toolPanel [ visible := vis && numTools > 0 && shouldShowTools ]
+              set hamburgerPanel [ visible := vis ]
+              showPtr <- get shouldShowPointerLocation value
+              set pointerLocation [ visible := vis && showPtr ]
+              old vis
+              propagateEvent
           ]
     windowReLayout f
+
 
     -- `requestRefresh` can be used from any thread to queue up a
     -- window refresh.
@@ -123,22 +260,14 @@ makeWxComplexViewer
     let requestRefresh = void (tryPutMVar offThreadRefresh ())
 
     -- Build the initial view model
-    initialX :+ initialY <- getUIValue cvCenter'
-    initialPx <- getUIValue cvPixelSize'
+    (initialX, initialY) <- getDynamic vCenter
+    initialPx <- getDynamic vPixelSize
 
     let initialModel = Model (initialX, initialY) (initialPx, initialPx)
     model <- variable [value := initialModel]
 
     -- History tracking
     history <- newIORef (History [] initialModel [])
-
-    -- Get the tools
-    let theTools = cvTools'
-
-    -------------------------------------------------------
-    -- Main view
-    -------------------------------------------------------
-
 
     -- trigger repaint
     let triggerRepaint = do
@@ -148,6 +277,90 @@ makeWxComplexViewer
             windowRefresh p True -- True=redraw background
             windowUpdateWindowUI p
 
+    -------------------------------------------------------
+    -- Set up the tools
+    -------------------------------------------------------
+    -- Get the tools
+
+    let getToolEventHandler :: Tool -> IO (Double -> Actor.Event.Event -> Maybe (IO ()))
+        getToolEventHandler Tool{..} = getDynamic (dyn toolEventHandler)
+        runToolEventHandler theTool e = do
+          handle <- getToolEventHandler theTool
+          Model _ (px, _) <- get model value
+          fromMaybe (pure ()) (handle px e)
+
+    let activateTool thisTool@Tool{..} = do
+          deactivateCurrentTool
+          tname <- getDynamic (tiName toolInfo) <&> fromRight "--"
+          set toolpick [ text := "▼ " ++ tname]
+          windowFit toolPanel
+          set currentTool [ value := Just thisTool ]
+          showToolConfig <- getDynamic (dyn toolShowConfig)
+          showToolConfig True
+          runToolEventHandler thisTool Activated
+          shouldRefresh <- getDynamic toolRefreshOnActivate
+          when shouldRefresh (runToolEventHandler thisTool Refresh)
+          vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
+
+        activateDefaultTool = do
+          deactivateCurrentTool
+          set toolpick [ text := "▼ Navigate" ]
+          set currentTool [ value := Nothing ]
+
+        deactivateCurrentTool = get currentTool value >>= \case
+          Nothing -> pure ()
+          Just oldTool -> do
+            runToolEventHandler oldTool Deactivated
+            showToolConfig <- getDynamic (dyn $ toolShowConfig oldTool)
+            showToolConfig False
+            vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
+
+        setupToolPicker tools0 = do
+          -- TODO FIXME remove all menu items first
+          void $ menuItem toolPickerMenu [ text := "Navigate\tn"
+                                         , on command := activateDefaultTool
+                                         ]
+          forM_ tools0 $ \thisTool@Tool{..} -> do
+            tname <- getDynamic (tiName toolInfo) <&> fromRight "--"
+            shortcut <- getDynamic (tiShortcut toolInfo)
+            let shorty = if null shortcut then "" else ("\t" ++ shortcut)
+            menuItem toolPickerMenu [ text := tname ++ shorty
+                                    , on command := activateTool thisTool ]
+    watchDynamic vTools setupToolPicker
+    setupToolPicker =<< getDynamic vTools
+
+    toolShortcuts <- fmap Map.unions $ do
+      tools <- getDynamic vTools
+      forM tools $ \tool -> getDynamic (tiShortcut $ toolInfo tool) <&> \case
+        (c : "") -> Map.singleton (toLower c) (activateTool tool)
+        _        -> Map.empty
+
+    -------------------------------------------------------
+    -- Main view
+    -------------------------------------------------------
+
+    lastRenderAction <- newMVar (\_ _ _ _ _ _ -> pure ())
+
+    let getRenderAction = case vCodeWithArgs of
+          CodeWithArgs vGetArgs vCode -> do
+            vGetArgs >>= \case
+              Left err   -> do
+                set warningPanel [ visible := True ]
+                set warning [ tooltip := err ]
+                readMVar lastRenderAction
+              Right vaArgs -> do
+                set warningPanel [ visible := False ]
+                ViewerFunction vf <- getDynamic vCode
+                let action = \(w :: Word32) (h :: Word32) (subsamples :: Word32) (dx :+ dy) (x :+ y) vaBuffer -> do
+                      let vaWidth  = fromIntegral w
+                          vaHeight = fromIntegral h
+                          vaSubsamples = fromIntegral subsamples
+                          vaPoint = (x, y)
+                          vaStep  = (dx, dy)
+                      vf ViewerArgs{..}
+                modifyMVar_ lastRenderAction (\_ -> pure action)
+                pure action
+
     renderId <- newIORef (0 :: Int)
 
     draggedTo <- variable [value := Nothing]
@@ -155,13 +368,12 @@ makeWxComplexViewer
     pendingResize <- variable [value := False]
 
     viewerTile     <- do
-      renderAction <- cvGetFunction
+      renderAction <- getRenderAction
       renderTile' renderId True renderAction (width, height) model
     currentTile    <- variable [value := viewerTile]
     savedTileImage <- variable [value := Nothing]
     lastTileImage  <- variable [value := Nothing]
     animate        <- variable [value := Nothing]
-    currentToolIndex <- variable [value := Nothing]
     useSmoothing <- variable [value := True]
 
     let startAnimatingFrom oldModel = do
@@ -180,12 +392,14 @@ makeWxComplexViewer
           modifyIORef' history (historyAppend newModel)
           jumpViewTo newModel
 
-        jumpViewTo newModel = do
+        jumpViewTo newModel@(Model newCenter (newPixelSize, _)) = do
           oldModel <- get model value
           Size { sizeW = w, sizeH = h } <- get f clientSize
           set model [ value := newModel ]
+          setValue' vCenter    newCenter
+          setValue' vPixelSize newPixelSize
           get currentTile value >>= cancelTile
-          renderAction <- cvGetFunction
+          renderAction <- getRenderAction
           smoothing <- get useSmoothing value
           newViewerTile <- renderTile' renderId smoothing renderAction (w, h) model
           set currentTile [ value := newViewerTile ]
@@ -225,10 +439,10 @@ makeWxComplexViewer
                   Just im -> drawCenteredImage im dc viewRect (w, h)
 
                 mdl <- get model value
-                get currentToolIndex value >>= \case
-                  Just{}  -> paintToolLayer (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands dc
-                  Nothing -> paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) cvGetDrawCommands lastClick draggedTo dc r viewRect
 
+                get currentTool value >>= \case
+                  Just{}  -> paintToolLayer (modelToView mdl) (modelPixelDim mdl) vDrawCmds dc
+                  Nothing -> paintToolLayerWithDragBox (modelToView mdl) (modelPixelDim mdl) vDrawCmds lastClick draggedTo dc r viewRect
                 -- Flush the graphics context
                 graphicsContextDelete gc
 
@@ -305,16 +519,13 @@ makeWxComplexViewer
                                 drawImage dc im (WX.pt
                                               (round $ negate viewCenterX)
                                               (round $ negate viewCenterY)) []
-                paintToolLayer (modelToView midModel) (modelPixelDim midModel) cvGetDrawCommands dc
+                paintToolLayer (modelToView midModel) (modelPixelDim midModel) vDrawCmds dc
 
                 -- Flush the graphics context
                 graphicsContextDelete gc
           ]
 
     lastKnownMouse <- newIORef Nothing
-
-    let getToolEventHandler ix = toolEventHandler (theTools !! ix)
-        runToolEventHandler ix = fromMaybe (pure ()) . getToolEventHandler ix
 
     -- Set click and drag event handlers
     set p [ on mouse   := \case
@@ -330,13 +541,16 @@ makeWxComplexViewer
                       newCenter <- viewToModel pt
                       changeViewTo oldModel { modelCenter = toCoords newCenter }
                 ptz <- viewToModel pt
-                toolClickAction <- get currentToolIndex value <&> \case
+                toolClickAction <- get currentTool value <&> \case
                   Nothing -> recenterAction
-                  Just ix -> case getToolEventHandler ix (Click ptz) of
-                    Nothing -> recenterAction
-                    Just handle -> do
-                      handle
-                      cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
+                  Just tool -> do
+                    Model _ (px, _) <- get model value
+                    handle <- getToolEventHandler tool
+                    case handle px (Click ptz) of
+                      Nothing -> recenterAction
+                      Just action -> do
+                        action
+                        vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
 
                 case dragBox of
                     Nothing  -> toolClickAction
@@ -358,17 +572,19 @@ makeWxComplexViewer
                               then toolClickAction
                               else changeViewTo Model { modelCenter = toCoords newCenter
                                                       , modelPixelDim = (px * scale, py * scale) }
-                      get currentToolIndex value >>= \case
-                        Just ix -> do
+                      get currentTool value >>= \case
+                        Just tool -> do
                           get lastClick value >>= \case
                             Nothing -> pure ()
                             Just (Viewport vstart) -> do
                               zstart <- viewToModel (uncurry Point vstart)
                               z <- viewToModel pt
-                              case getToolEventHandler ix (DragDone z zstart) of
-                                Just handle -> do
-                                  handle
-                                  cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
+                              Model _ (px, _) <- get model value
+                              handle <- getToolEventHandler tool
+                              case handle px (DragDone z zstart) of
+                                Just action -> do
+                                  action
+                                  vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
                                 Nothing -> finishDrag
                         Nothing -> finishDrag
 
@@ -378,7 +594,7 @@ makeWxComplexViewer
 
               MouseLeftDrag pt modifiers | isNoShiftAltControlDown modifiers -> do
                 mpt <- viewToModel pt
-                set status [text := show mpt]
+                setPointerLocation mpt
                 set draggedTo [value := Just $ Viewport (pointX pt, pointY pt)]
                 let dragAction = do
                       dragBox <- getDragBox lastClick draggedTo
@@ -388,19 +604,21 @@ makeWxComplexViewer
 
                       propagateEvent
 
-                get currentToolIndex value >>= \case
+                get currentTool value >>= \case
                   Nothing -> dragAction
 
-                  Just ix -> do
+                  Just tool -> do
                      get lastClick value >>= \case
                        Nothing -> pure ()
                        Just (Viewport vstart) -> do
                          zstart <- viewToModel (uncurry Point vstart)
                          z <- viewToModel pt
-                         case getToolEventHandler ix (Drag z zstart) of
+                         Model _ (px, _) <- get model value
+                         handle <- getToolEventHandler tool
+                         case handle px (Drag z zstart) of
                            Just action -> do
                              action
-                             cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
+                             vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
                            Nothing -> dragAction
                      propagateEvent
 
@@ -408,16 +626,16 @@ makeWxComplexViewer
               MouseMotion pt modifiers | isNoShiftAltControlDown modifiers -> do
                 mpt <- viewToModel pt
                 writeIORef lastKnownMouse (Just mpt)
-                set status [text := show mpt]
+                setPointerLocation mpt
                 propagateEvent
 
               MouseLeftDClick pt modifiers | isNoShiftAltControlDown modifiers -> do
-                get currentToolIndex value >>= \case
+                get currentTool value >>= \case
                    Nothing -> pure ()
-                   Just ix -> do
+                   Just tool -> do
                      z <- viewToModel pt
-                     runToolEventHandler ix (DoubleClick z)
-                     cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
+                     runToolEventHandler tool (DoubleClick z)
+                     vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
                      propagateEvent
 
               -- other mouse events
@@ -464,35 +682,35 @@ makeWxComplexViewer
 
 
     -- Add a timer which will check for repainting requests from WX, ~10Hz
-    _ <- timer f [ interval := 100
-                 , enabled := True
-                 , on command := do
-                     curTile <- get currentTile value
-                     ifModified curTile $ do
-                       viewRect <- windowGetViewRect f
-                       tileImage <- generateTileImage curTile viewRect
-                       saved <- imageCopy tileImage
-                       set savedTileImage [value := Just saved]
-                       triggerRepaint
-                 ]
+    _ <- wxTimer f [ interval := 100
+                   , enabled := True
+                   , on command := do
+                       curTile <- get currentTile value
+                       ifModified curTile $ do
+                         viewRect <- windowGetViewRect f
+                         tileImage <- generateTileImage curTile viewRect
+                         saved <- imageCopy tileImage
+                         set savedTileImage [value := Just saved]
+                         triggerRepaint
+                   ]
 
     -- Add a timer which will check for repainting requests from off the main
     -- UI thread, ~10Hz
-    _ <- timer f [ interval := 100
-                 , enabled := True
-                 , on command := do
-                     needRefresh <- (== Just ()) <$> tryTakeMVar offThreadRefresh
-                     when needRefresh (changeViewTo =<< get model value)
-                 ]
+    _ <- wxTimer f [ interval := 100
+                   , enabled := True
+                   , on command := do
+                       needRefresh <- (== Just ()) <$> tryTakeMVar offThreadRefresh
+                       when needRefresh (changeViewTo =<< get model value)
+                   ]
 
     -- Animation timer. At ~65Hz, check if we are animating between
     -- two views. If so, step the animation and repaint.
-    _ <- timer f [ interval := 16
-                 , enabled := True
-                 , on command := get animate value >>= \case
-                         Nothing -> pure ()
-                         Just _  -> triggerRepaint
-                 ]
+    _ <- wxTimer f [ interval := 16
+                   , enabled := True
+                   , on command := get animate value >>= \case
+                       Nothing -> pure ()
+                       Just _  -> triggerRepaint
+                   ]
 
     -- onResizeTimer is a one-shot timer that fires 100ms after the
     -- frame has been resized. If another resize event comes in during
@@ -500,8 +718,8 @@ makeWxComplexViewer
     -- we kick off a new rendering task to build the contents of the
     -- window. Using a timer lets us avoid starting hundreds of rendering
     -- tasks while the user adjusts their window size.
-    onResizeTimer <- timer f [ interval := 100
-                             , enabled := False ]
+    onResizeTimer <- wxTimer f [ interval := 100
+                               , enabled := False ]
     set onResizeTimer [ on command := do
                               set onResizeTimer [enabled := False] -- one-shot
                               needResize <- get pendingResize value
@@ -511,22 +729,36 @@ makeWxComplexViewer
                       ]
 
     -- Add a timer which checks if the tool layer should receive a refresh event.
-    _ <- timer f [ interval := 50
-                 , enabled := True
-                 , on command := do
-                     needToSendRefresh <- isJust <$> tryTakeMVar needToSendRefreshEvent
-                     when needToSendRefresh $ get currentToolIndex value >>= \case
-                       Nothing -> pure ()
-                       Just ix -> do
-                         runToolEventHandler ix Refresh
-                         cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
-                     ]
+    _ <- wxTimer f [ interval := 50
+                   , enabled := True
+                   , on command := do
+                       needToSendRefresh <- isJust <$> tryTakeMVar needToSendRefreshEvent
+                       when needToSendRefresh $ get currentTool value >>= \case
+                         Nothing -> pure ()
+                         Just tool -> do
+                           runToolEventHandler tool Refresh
+                           vDrawCmdsChanged >>= \tf -> when tf triggerRepaint
+                   ]
 
     set f [ on resize := do
-                  set onResizeTimer [enabled := False]
-                  set pendingResize [value := True]
-                  set onResizeTimer [enabled := True]
-                  propagateEvent ]
+              set onResizeTimer [enabled := False]
+              set pendingResize [value   := True]
+              set onResizeTimer [enabled := True]
+              repositionButtons
+              propagateEvent ]
+
+    -- wxHaskell doesn't seem to expose an "on move" event, so we'll just set up
+    -- a timer to update the viewer's position every so often.
+    _ <- wxTimer f [ interval := 200, enabled := True
+                   , on command := do
+                       Point xpos' ypos' <- get f position
+                       setValue vPosition (Dimensions (xpos', ypos'))
+                   ]
+
+    set p [ on resize := do
+              Size w h <- get p clientSize
+              setValue' vSize (Dimensions (w, h))
+              propagateEvent ]
 
     -------------------------------------------------------
     -- Change tracking
@@ -534,49 +766,81 @@ makeWxComplexViewer
 
     -- For each variable that the viewer code depends on, trigger a repaint whenever
     -- that variable changes.
-    let usedVars = Set.delete (symbolVal cvCoord')
-                 $ execState (usedVarsInCode cvCode') Set.empty
+    stopListening' <- onParameterChanges theViewer requestRefresh
+    set f [ on closing :~ (stopListening' >>) ]
 
-    fromContextM_ (\name _ v ->
-                      when (symbolVal name `Set.member` usedVars)
-                        (v `listenWith` (\_ _ -> requestRefresh))) cvConfig'
+    -------------------------------------------------------
+    -- Navigation actions
+    -------------------------------------------------------
+    let goBack = (historyBack <$> readIORef history) >>= \case
+          Nothing -> wxcBell
+          Just (h', m') -> do
+            writeIORef history h'
+            jumpViewTo m'
+        goForward = (historyForward <$> readIORef history) >>= \case
+          Nothing -> wxcBell
+          Just (h', m') -> do
+            writeIORef history h'
+            jumpViewTo m'
+        goHome = (historyFirst <$> readIORef history) >>= \case
+          Nothing -> requestRefresh
+          Just (h', m') -> do
+            writeIORef history h'
+            jumpViewTo m'
 
     -------------------------------------------------------
     -- Menus
     -------------------------------------------------------
 
     -- Viewer menu
-    viewMenu <- menuPane [text := "&Viewer"]
-    menuItem viewMenu [ text := "Reset view\t^"
-                      , on command := (historyFirst <$> readIORef history) >>= \case
-                          Nothing -> requestRefresh
-                          Just (h', m') -> do
-                            writeIORef history h'
-                            jumpViewTo m'
-                      ]
-    menuItem viewMenu [ text := "Previous view\t<"
-                      , on command := (historyBack <$> readIORef history) >>= \case
-                          Nothing -> wxcBell
-                          Just (h', m') -> do
-                            writeIORef history h'
-                            jumpViewTo m'
-                      ]
-    menuItem viewMenu [ text := "Next view\t>"
-                      , on command := (historyForward <$> readIORef history) >>= \case
-                          Nothing -> wxcBell
-                          Just (h', m') -> do
-                            writeIORef history h'
-                            jumpViewTo m'
-                      ]
-    menuItem viewMenu [ text := "Clone viewer\t2"
-                      , on command := clone
-                      ]
-    menuLine viewMenu
-    smoothingSelection <- menuItem viewMenu [
-      text := "Use subpixel smoothing"
-      , checkable := True
-      , checked := True
-      ]
+    menuItem hamburgerMenu [ text := "Last view\t<", on command := goBack ]
+    menuItem hamburgerMenu [ text := "Next view\t>", on command := goForward ]
+    menuItem hamburgerMenu [ text := "Original view\t^", on command := goHome ]
+    menuItem hamburgerMenu [ text := "Show configuration\t=", on command := raiseConfigWindow ]
+    set p [ on keyboard :~ \old k -> do
+              let mods = keyModifiers k
+              if not (altDown mods) && not (controlDown mods) && not (metaDown mods)
+                then case keyKey k of
+                       KeyChar '<' -> goBack
+                       KeyChar '>' -> goForward
+                       KeyChar '^' -> goHome
+--                       KeyChar '2' -> clone
+                       KeyChar '=' -> raiseConfigWindow
+                       KeyChar 'n' -> activateDefaultTool
+                       KeyChar 'N' -> activateDefaultTool
+                       KeyChar c   -> Map.findWithDefault (old k) (toLower c) toolShortcuts
+                       _ -> old k
+                else old k
+          ]
+--    menuItem hamburgerMenu [ text := "Clone viewer\t2", on command := clone ]
+    menuLine hamburgerMenu
+    menuItem hamburgerMenu [ text := "Take a picture..."
+                           , on command := takePicture f theViewer ]
+    menuItem hamburgerMenu [ text := "Use as preview", enabled := False ]
+    menuLine hamburgerMenu
+    menuLine hamburgerMenu
+    nTools <- length <$> getDynamic vTools
+    showToolPicker  <- menuItem hamburgerMenu [ text := "Show tool picker"
+                                              , checkable := True, checked := nTools > 0 ]
+    showPtrPosition <- menuItem hamburgerMenu [ text := "Show pointer position"
+                                              , checkable := True, checked := False ]
+    menuLine hamburgerMenu
+    menuItem hamburgerMenu [ text := "Save...\tCtrl+S", enabled := True, on command := saveSession ]
+    menuItem hamburgerMenu [ text := "Edit viewer script...\tCtrl+E"
+                           , enabled := True
+                           , on command := do
+                               oldSource <- getDynamic (source $ scriptCode vScript)
+                               set oldScriptValue [ value := oldSource ]
+                               showViewer False
+                               set sePanel [ visible := True ]
+                               windowReLayout f
+                           ]
+    menuItem hamburgerMenu [ text := "Edit viewer tools...", enabled := False ]
+    menuLine hamburgerMenu
+    smoothingSelection <- menuItem hamburgerMenu [ text := "Use subpixel smoothing"
+                                                 , checkable := True
+                                                 , checked := True
+                                                 ]
     set smoothingSelection [
       on command := do
           isChecked <- get smoothingSelection checked
@@ -584,98 +848,89 @@ makeWxComplexViewer
           requestRefresh
       ]
 
-    -- Tool menu
-    tools <- menuPane [text := "&Tool"]
+    set showToolPicker [ on command := do
+                           isChecked <- get showToolPicker checked
+                           set shouldShowToolPicker [ value := isChecked ]
+                           numTools <- length <$> getDynamic vTools
+                           set toolPanel [ visible := isChecked && numTools > 0 ]
+                       , enabled := nTools > 0
+                       ]
 
-    -- Build the configuration window for each tool
-    showToolConfig <- forM (zip [0..] theTools) $ \(ix, Tool{..}) -> case toolConfig of
-      Nothing  -> pure (\_ -> pure ())
-      Just tcfg -> do
-        tf <- frameTool [ text := tiName toolInfo
-                        , visible := False
-                        , style := wxFRAME_TOOL_WINDOW .+. wxRESIZE_BORDER .+. wxCAPTION
-                        ] f
-        WX.windowOnClose tf (set tf [ visible := False ])
-        let buttonPress txt = do
-              runToolEventHandler ix (ButtonPressed txt)
-              cvDrawCommandsChanged >>= \yn -> when yn triggerRepaint
-        tlo <- generateWxLayout buttonPress tf tcfg
-        set tf [ layout := margin 10 $ fill $ tlo ]
-        windowReLayout tf
-        pure (\viz -> do
-                 set tf [ visible := viz ]
-                 -- Un-steal focus from the config window
-                 when viz (set f [ visible := True ]))
+    set showPtrPosition [ on command := do
+                            isChecked <- get showPtrPosition checked
+                            set shouldShowPointerLocation [ value := isChecked ]
+                            set pointerLocation [ visible := isChecked ]
+                        ]
 
-    nav <- menuRadioItem tools [ text := "Navigate\tn"
-                               , help := "Zoom and translate the view"
-                               , on command := do
-                                   set toolStatus [text := "Navigate"]
-                                   -- When the navigate tool is selected, send the
-                                   -- current tool a Deactivated event
-                                   get currentToolIndex value >>= \case
-                                     Nothing -> pure ()
-                                     Just i -> do
-                                       runToolEventHandler i Deactivated
-                                       (showToolConfig !! i) False
-                                       cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
-                                   set currentToolIndex [value := Nothing]
-                               ]
+    -- Build the configuration window and the event handlers for each tool
+    tools <- getDynamic vTools
+    forM_ tools $ \Tool{..} -> do
+      layer <- getDynamic toolDrawLayer
+      getDynamic toolConfig >>= \case
+        Nothing -> do
+          getDynamic (dyn toolEventHandlers) >>= (buildHandler (vDrawTo layer) (SomeContext configValues)) >>= \case
+            Left _  -> setValue' toolEventHandler (\_ _ -> Nothing)
+            Right h -> setValue' toolEventHandler h
+        Just tcfg -> do
+          n <- getDynamic (source $ tiName toolInfo)
+          tf <- frameTool [ text := n
+                          , visible := False
+                          , style := wxFRAME_TOOL_WINDOW .+. wxRESIZE_BORDER .+. wxCAPTION .+. wxCLOSE_BOX
+                          ] f
+          WX.windowOnClose tf (set tf [ visible := False ])
+          let buttonPress txt = do
+                runToolEventHandler Tool{..} (ButtonPressed txt)
+                vDrawCmdsChanged >>= \yn -> when yn triggerRepaint
+          (stopListening, tlo) <- generateWxLayout buttonPress tf (coContents tcfg)
+          set tf [ layout := margin 10 $ fill $ tlo
+                 , on closing :~ (>> stopListening) ]
+          windowReLayout tf
+
+          toolContext0 <- layoutToArgs (coContents tcfg)
+          case toolContext0 <> SomeContext' (Right $ SomeContext configValues) of
+            SomeContext' (Left _) -> setValue' toolEventHandler (\_ _ -> Nothing)
+            SomeContext' (Right toolContext) -> do
+              getDynamic (dyn toolEventHandlers) >>= (buildHandler (vDrawTo layer) toolContext) >>= \case
+                Left _  -> setValue' toolEventHandler (\_ _ -> Nothing)
+                Right h -> setValue' toolEventHandler h
+
+          setValue' toolShowConfig (\viz -> do
+                                       set tf [ visible := viz ]
+                                       -- Un-steal focus from the config window
+                                       when viz (set f [ visible := True ]))
 
     -- Change tracking for variables used in each tool
+      {- FIXME TODO re-add change tracking for tools
     forM_ theTools $ \Tool{..} -> do
-      fromContextM_ (\name _ v ->
-                        when (symbolVal name `Set.member` toolVars) $ do
-                        (v `listenWith` (\_ _ -> do
-                                            -- Don't run the refresh handler here,
-                                            -- we could deadlock since it will also
-                                            -- want to access this variable. Just
-                                            -- queue up a refresh for later.
-                                            void $ tryPutMVar needToSendRefreshEvent ()
-                                        ))) cvConfig'
-      case toolConfig of
+      fromContextM_ (\name _ v -> do
+                        tvs <- getDynamic toolVars
+                        when (symbolVal name `Set.member` tvs) $ do
+                          (v `listenWith` (\_ _ -> do
+                                              -- Don't run the refresh handler here,
+                                              -- we could deadlock since it will also
+                                              -- want to access this variable. Just
+                                              -- queue up a refresh for later.
+                                              void $ tryPutMVar needToSendRefreshEvent ()
+                                          ))) cvConfig'
+      (fmap coContents <$> getDynamic toolConfig) >>= \case
         Nothing -> pure ()
-        Just tconfig -> withDynamicBindings tconfig $ do
-          fromContextM_ (\name _ v ->
-                          when (symbolVal name `Set.member` toolVars) $ do
-                           (v `listenWith` (\_ _ -> do
+        Just tlo -> getDynamic (layoutContext tlo) >>= \case
+          Left err -> putStrLn ("ERROR: " ++ err)
+          Right (SomeContext ctx) ->
+            fromContextM_ (\name _ v -> do
+                          tvs <- getDynamic toolVars
+                          when (symbolVal name `Set.member` tvs) $ do
+                            (v `listenWith` (\_ _ -> do
                                                -- Don't run the refresh handler here,
                                                -- we could deadlock since it will also
                                                -- want to access this variable. Just
                                                -- queue up a refresh for later.
-                                               void $ tryPutMVar needToSendRefreshEvent ())))
+                                                void $ tryPutMVar needToSendRefreshEvent ()))) ctx
+-}
 
-    -- Add each tool to the tool menu
-    forM_  (zip [0..] . map toolInfo $ theTools) $ \(ix, ToolInfo{..}) -> menuRadioItem tools
-          [ text := tiName ++ maybe "" (\c -> "\t" ++ (c : "")) tiShortcut
-          , help := tiShortHelp
-          , on command := do
-              -- When the menu item is selected, send the current tool
-              -- a Deactivated event, and then send the selected tool
-              -- an Activated event.
-              get currentToolIndex value >>= \case
-                Nothing -> pure ()
-                Just i -> do
-                  runToolEventHandler i Deactivated
-                  (showToolConfig !! i) False
-                  cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
-              set toolStatus [text := tiName]
-              set currentToolIndex [value := Just ix]
-              runToolEventHandler ix Activated
-              (showToolConfig !! ix) True
-              when (toolRefreshOnActivate (theTools !! ix)) $
-                runToolEventHandler ix Refresh
-              cvDrawCommandsChanged >>= \tf -> when tf triggerRepaint
-          ]
-
-    -- Select the Navigate tool to start
-    set nav [ checked := True ]
-
-    let menuBarItems =
-          [ viewMenu ] ++
-          [ tools | length theTools > 0 ]
-
-    addMenuBar f menuBarItems
+    addMenuBar f []
+    focusOn p
+    pure (void $ windowClose f True)
 
 -- | A model of the view, in terms of the underlying coordinate system.
 data Model = Model
@@ -882,3 +1137,66 @@ historyAppend :: Model -> History -> History
 historyAppend m h@(History olds m' _)
   | m == m'   = h
   | otherwise = History (m' : olds) m []
+
+takePicture :: Window a -> Viewer -> IO ()
+takePicture f v0 = do
+  d <- dialog f [ text := "Save viewer snapshot"]
+  p <- panel d []
+  mbox <- textEntry p [ text := "1" ]
+  cbox <- checkBox  p [ text := "Use subpixel smoothing?", checkable := True, checked := True ]
+  ok     <- button p [ text := "Ok" ]
+  cancel <- button p [ text := "Cancel" ]
+  p' <- panel p []
+  txt <- staticText p' [ text := "Choose any resolution adjustments for the saved picture" ]
+  set p' [ layout := margin 5 . floatCentre . widget $ txt ]
+  set d [ layout := margin 10 $ fill $ container p $ column 5
+          [ hstretch . expand . margin 5 $ widget p'
+          , row 5 [ margin 3 $ label "Dimension multiplier: ", hfill $ widget mbox, hglue, margin 5 $ widget cbox ]
+          , row 5 [ margin 5 $ widget ok, margin 5 $ widget cancel ]]]
+
+  result <- showModal d $ \done -> do
+    set ok [ on command := do
+               mm <- readMaybe <$> get mbox text
+               s  <- get cbox checked
+               case mm of
+                 Nothing -> done Nothing
+                 Just m  -> if m <= 0 then done Nothing else done (Just (m, s)) ]
+    set cancel [ on command := done Nothing ]
+
+  case result of
+    Nothing -> pure ()
+    Just (multiplier, smooth) -> cloneViewer v0 >>= \vi -> do
+      modifyValue (vSize vi) (\(Dimensions (w, h)) -> Dimensions (w * multiplier, h * multiplier))
+      modifyValue (vPixelSize vi) (/ fromIntegral multiplier)
+
+      mpath <- fileSaveDialog f True True "Save a picture of the current view"
+        [("PNG files",["*.png"]), ("Any file",["*.*"])] "" ".png"
+      case mpath of
+        Nothing   -> pure ()
+        Just path -> void $ snapshotToFile vi smooth path
+
+-- | Like `watchDynamic`, but ensures that the action
+-- runs on the main UI thread. Automatically attaches
+-- the halt action to the closing of `p`, and runs the
+-- action once on construction.
+wxWatchDynamic :: Window b -> Dynamic a -> (a -> IO ()) -> IO ()
+wxWatchDynamic p dv action = do
+  todo <- newMVar []
+  halt <- watchDynamic dv $ \x -> modifyMVar_ todo (\actions -> pure (action x : actions))
+  _ <- wxTimer p [ interval := 100
+                 , enabled := True
+                 , on command := tryTakeMVar todo >>= \case
+                     Nothing -> pure ()
+                     Just actions -> do
+                       putMVar todo []
+                       sequence_ (reverse actions)
+                 ]
+  set p [ on closing :~ \previous -> halt >> previous ]
+  -- Run the action once
+  getDynamic dv >>= action
+
+wxTimer :: Window a -> [Prop Graphics.UI.WX.Timer] -> IO Graphics.UI.WX.Timer
+wxTimer w props = do
+  t <- timer w props
+  set w [ on closing :~ \previous -> timerStop t >> previous ]
+  pure t
