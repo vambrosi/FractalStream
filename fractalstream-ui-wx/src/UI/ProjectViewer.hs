@@ -791,6 +791,34 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (Some
             writeIORef history h'
             jumpViewTo m'
 
+        jumpToView = do
+          oldModel <- get model value
+          let (oldX, oldY) = modelCenter oldModel
+              (oldPx, _)   = modelPixelDim oldModel
+          d <- dialog f [ text := "Jump to view..." ]
+          jp <- panel d []
+          jOk <- button jp [ text := "Ok" ]
+          jCancel <- button jp [ text := "Cancel" ]
+          jCenterX <- textEntry jp [ text := printf "%014f" oldX ]
+          jCenterY <- textEntry jp [ text := printf "%014f" oldY ]
+          jPixel <- textEntry jp [ text := printf "%014f" oldPx]
+          set d [ layout := margin 10 $ fill $ container jp $ column 5
+                  [ row 5 [ label "x = ", expand $ widget jCenterX
+                          , hglue, label "y = ", expand $ widget jCenterY ]
+                  , row 5 [ label "pixel size = ", expand $ widget jPixel ]
+                  , row 5 [ margin 5 $ widget jCancel, hglue, margin 5 $ widget jOk ]]]
+          result <- showModal d $ \onDone -> do
+            set jCancel [ on command := onDone Nothing ]
+            set jOk [ on command := do
+                        mx <- readMaybe <$> get jCenterX text
+                        my <- readMaybe <$> get jCenterY text
+                        mp <- readMaybe <$> get jPixel   text
+                        onDone ((\(x,y,dz) -> Model (x, y) (dz, dz)) <$>
+                                 ((,,) <$> mx <*> my <*> mp)) ]
+          case result of
+            Nothing -> pure ()
+            Just newModel -> changeViewTo newModel
+
     -------------------------------------------------------
     -- Menus
     -------------------------------------------------------
@@ -798,6 +826,7 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (Some
     -- Viewer menu
     menuItem hamburgerMenu [ text := "Last view\t<", on command := goBack ]
     menuItem hamburgerMenu [ text := "Next view\t>", on command := goForward ]
+    menuItem hamburgerMenu [ text := "Jump to view...\t@", on command := jumpToView ]
     menuItem hamburgerMenu [ text := "Original view\t^", on command := goHome ]
     menuItem hamburgerMenu [ text := "Show configuration\t=", on command := raiseConfigWindow ]
     set p [ on keyboard :~ \old k -> do
@@ -807,6 +836,7 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow (Some
                        KeyChar '<' -> goBack
                        KeyChar '>' -> goForward
                        KeyChar '^' -> goHome
+                       KeyChar '@' -> jumpToView
 --                       KeyChar '2' -> clone
                        KeyChar '=' -> raiseConfigWindow
                        KeyChar 'n' -> activateDefaultTool

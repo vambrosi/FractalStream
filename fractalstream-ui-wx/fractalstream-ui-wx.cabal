@@ -86,6 +86,7 @@ executable FractalStream
                        UI.ProjectActions
                        UI.Session
                        UI.Welcome
+                       UI.Widgets
 
   build-depends:       base >=4.8 && <5
                      , fractalstream-core

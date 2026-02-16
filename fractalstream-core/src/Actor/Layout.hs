@@ -47,7 +47,7 @@ import qualified Data.Text as Text
 import Text.Read (readMaybe)
 
 newtype Label = Label String
-  deriving (Show, IsString, FromJSON, ToJSON)
+  deriving (Eq, Ord, Show, IsString, FromJSON, ToJSON)
 
 instance Codec Label where codec = aeson
 

@@ -4,25 +4,21 @@ module UI.Layout
 
 import FractalStream.Prelude hiding (get)
 
-import Data.Color (colorToRGB, grey)
 import Data.DynamicValue
 import Language.Parser.SourceRange (spanOfSourceRange, SourceSpan(..))
 import Language.Parser.Tokenizer (commentRanges)
 import Actor.Layout
 import Data.IORef
-import Text.Printf (printf)
 import qualified Data.Map as Map
 import Control.Concurrent
 
 import UI.CodeEditor
 
 import Graphics.UI.WX hiding (pt, grey, glue, when, tool, Object, Dimensions, Horizontal, Vertical, Layout, Color)
-import qualified Graphics.UI.WXCore.Events as WX
 import qualified Graphics.UI.WX as WX
-import           Graphics.UI.WXCore.WxcClassesAL
 import           Graphics.UI.WXCore.WxcClassesMZ
---import           Graphics.UI.WXCore.WxcDefs
---import Graphics.UI.WXCore.Frame (windowGetScreenPosition)
+
+import UI.Widgets
 
 generateWxLayout :: (String -> IO ())
                  -> Window a
@@ -86,71 +82,29 @@ generateWxLayout buttonPress frame0 wLayout = do
           pure (fill $ margin 5 $ widget nb)
 
         PlainText tv -> liftIO $ do
-          txt <- getDynamic tv
           p' <- panel p []
-          lo <- margin 5 . floatCentre . widget <$> staticText p' [ text := txt ]
-          set p' [layout := lo]
+          txt <- plainTextWidget p' tv
+          set p' [layout := margin 5 . floatCentre . widget $ txt ]
           pure (hstretch . expand . margin 5 $ widget p')
 
         Button tv -> liftIO $ do
-          txt <- getDynamic tv
           p' <- panel p []
-          btn <- button p' [ text := txt
-                           , on command := buttonPress txt ]
+          btn <- buttonWidget p' tv
+          set btn [ on command := get btn text >>= buttonPress ]
           pure (hstretch . expand . container p' $ floatCentre $ margin 5 $ widget btn)
 
-        Selection _l _ pick options -> do
-          --Label lab <- getDynamic l
-          ix <- getDynamic pick
-          opts <- getDynamic options
+        Selection _l v pick options -> do
           p' <- liftIO $ panel p []
-          c <- liftIO $ choice p' [ selection := fromIntegral ix, items := opts ]
-          liftIO $ set c [ on select := do
-                             newIx <- fromIntegral <$> get c selection
-                             setValue pick newIx
-                         ]
-          watch pick $ \newIx -> set c [ selection := fromIntegral newIx ]
+          c <- selectionWidget p' v pick options
           pure (hstretch . expand . container p' $ fill $ widget c)
 
-        ColorPicker l _ col -> do
-          Label lab <- getDynamic l
-          (r0, g0, b0) <- colorToRGB . fromRight grey <$> getDynamic col
-          picker <- liftIO $ do
-            picker <- feed2 [ text := lab, visible := True ] 0 $
-              initialWindow $ \iD rect' ps s -> do
-                e <- colorPickerCtrlCreate p iD (rgb r0 g0 b0) rect' s
-                set e ps
-                pure e
-            let newPick = do
-                  c <- colorPickerCtrlGetColour picker
-                  let r = fromIntegral (colorRed c   :: Word8) / 255.0 :: Double
-                      g = fromIntegral (colorGreen c :: Word8) / 255.0 :: Double
-                      b = fromIntegral (colorBlue c  :: Word8) / 255.0 :: Double
-                  setValue (source col) (printf "rgb(%0.3f, %0.3f, %0.3f)" r g b :: String)
-
-            -- TODO: update picker if color is changed by a script
-
-            WX.windowOnEvent picker [wxEVT_COMMAND_COLOURPICKER_CHANGED] newPick (const newPick)
-            pure picker
-
+        ColorPicker l v col -> do
+          (labelTxt, picker) <- colorWidget p l v col
           pure (hstretch $ expand $ margin 5 $
-                row 5 [ margin 3 (label lab), hfill (widget picker) ])
+                row 5 [ margin 3 $ widget labelTxt, hfill (widget picker) ])
 
-        CheckBox l _ b -> do
-          Label lab <- getDynamic l
-          initial <- getDynamic b
-          cb <- liftIO $ do
-            cb <- checkBox p [ text := lab
-                             , checkable := True
-                             , checked := initial
-                             , visible := True
-                             ]
-            set cb [ on command := do
-                       isChecked <- get cb checked
-                       void (setValue b isChecked)
-                   ]
-            pure cb
-          watch b (\isChecked -> set cb [ checked := isChecked ])
+        CheckBox l v b -> do
+          cb <- checkboxWidget p l v b
           pure (hstretch . expand . margin 5 $ widget cb)
 
         ScriptBox v -> do
@@ -232,60 +186,8 @@ generateWxLayout buttonPress frame0 wLayout = do
           pure (container p' $ fill $ column 5 [ fill $ widget ce, hstretch $ expand $ widget errorText ])
 
         TextBox l v -> do
-          Label lab <- getDynamic l
-          errorMessage <- liftIO $ staticText p [ text := "" ] -- , font := fontFixed, fontSize := 12, color := black ]
-          te <- liftIO $ do
-            initial <- getDynamic (source $ exprValue v)
-            te <- textEntry p [ text := initial
-                              , processEnter := True
-                              , tooltip := ""
-                              ]
-            normalBG <- get te bgcolor
-
-            -- TODO: only refresh if the value has changed
-            let setErrorMessage = \case
-                  Nothing -> do
-                    set te [ bgcolor := normalBG ]
-                    set errorMessage [ text := "" ]
-                    windowReLayout panel0
-                  Just err -> do
-                    set te [ bgcolor := rgb 180 80 (80 :: Int)]
-                    set errorMessage [ text :=  "⚠️", tooltip := err
-                                     , on click := \_ -> do
-                                         tw <- tipWindowCreate frame0 "" 1000
-                                         textCol <- frameIsLight tw <&> \case
-                                           True  -> black
-                                           False -> white
-                                         _ <- staticText tw [ text := err
-                                                            , font := fontFixed
-                                                            , fontSize := 12
-                                                            , color := textCol ]
-                                         windowReLayout tw
-                                         windowRefresh tw True
-                                     ]
-                    windowReLayout panel0
-
-            set te [ on command := do
-                       newText <- get te text
-                       setValue (source $ exprValue v) newText
-                       getDynamic (exprValue v) >>= \case
-                         Left msg -> setErrorMessage (Just msg)
-                         _        -> setErrorMessage Nothing
-                , on focus := \case
-                    True -> propagateEvent
-                    False -> do
-                      newText <- get te text
-                      oldText <- getDynamic (source $ exprValue v)
-                      when (newText /= oldText) $ do
-                        setValue (source $ exprValue v) newText
-                        getDynamic (exprValue v) >>= \case
-                          Left msg -> setErrorMessage (Just msg)
-                          _        -> setErrorMessage Nothing
-                      propagateEvent
-                   ]
-            pure te
-          watch (source $ exprValue v) (\newText -> set te [ text := newText ])
-          pure (hstretch $ expand $ margin 5 $ row 5 [ margin 3 (label lab)
+          (labelTxt, te, errorMessage) <- expressionWidget p l v
+          pure (hstretch $ expand $ margin 5 $ row 5 [ margin 3 (widget labelTxt)
                                                      , hfill (widget te)
                                                      , widget errorMessage ])
 
