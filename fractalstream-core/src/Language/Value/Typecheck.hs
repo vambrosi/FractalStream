@@ -4,6 +4,7 @@ import Prelude hiding (LT)
 import FractalStream.Prelude
 
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 
 import Language.Value
 import Language.Value.Derivative
@@ -640,6 +641,28 @@ types = Map.fromList
   , ("Bool", BooleanT), ("Boolean", BooleanT)
   , ("Color", ColorT), ("Text", TextT)
   ]
+
+-- | Identifiers that may not be used as user-defined function names or
+-- parameter names: language keywords, built-in functions and constants, color
+-- names and modifiers, type names, and reserved output names.
+reservedIdentifiers :: Set String
+reservedIdentifiers = Set.fromList
+  [ "if", "then", "else", "e", "pi", "i", "true", "false", "or", "and", "not"
+  , "escapes", "escaped", "vanishes", "vanished", "iterations", "times", "stuck"
+  , "text", "append", "prepend", "join", "remove", "find", "transform"
+  , "range", "length", "diff"
+  , "while", "iterate", "repeat", "until", "pass", "define", "result", "color"
+  , "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg"
+  , "romao", "bamo", "broco", "corko", "viko"
+  , "ice", "fire", "rose", "wheat", "forest", "ocean"
+  , "winter", "spring", "summer", "fall", "rgb", "mod"
+  ]
+  `Set.union` Map.keysSet colors
+  `Set.union` Map.keysSet commonFunctions
+  `Set.union` Map.keysSet realFunctions
+  `Set.union` Map.keysSet complexFunctions
+  `Set.union` Map.keysSet roundingFunctions
+  `Set.union` Map.keysSet types
 
 ------------------------------------------------------
 -- User-defined functions

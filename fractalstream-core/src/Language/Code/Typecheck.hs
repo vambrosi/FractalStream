@@ -12,6 +12,8 @@ import Language.Parser.SourceRange
 import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck)
 
 import Data.Color (black)
+import Data.Indexed.Functor (indexedFoldM)
+import qualified Data.Set as Set
 
 ------------------------------------------------------
 -- Parsed code
@@ -237,11 +239,39 @@ tcSetCompound targetName cf args sr env
             dflt <- defaultFor sr rty
             letBind sr (cfResultName cf) rty dflt envP $ \envR -> withEnvironment envR $ do
               body  <- atEnv envR (cfBody cf)
+              checkPure cf sr body
               tgtPf <- findVarAtType sr target rty envR
               case someSymbolVal (cfResultName cf) of
                 SomeSymbol res -> do
                   resPf <- findVarAtType sr res rty envR
                   pure (Block [ body, Set tgtPf target (Var res rty resPf) ])
+
+-- | Verify that a compound function body is pure: it may assign only its own
+-- result slot, its parameters, and locals it declares. Assigning any other
+-- (caller/config) variable is rejected. Internal bookkeeping names (loop
+-- counters, @[internal] …@) are bracketed and always allowed.
+checkPure :: CompoundFunction -> SourceRange -> Code env -> TC ()
+checkPure cf sr body =
+  case Set.toList illegal of
+    []        -> pure ()
+    (bad : _) -> throwError (Advice sr
+      ("A function body may not modify `" ++ bad ++ "`; functions must be pure."))
+  where
+    (setVars, letVars) = fnBodyVars body
+    allowed = Set.insert (cfResultName cf)
+            $ Set.union (Set.fromList (cfFreshParams cf)) letVars
+    illegal = Set.filter (\n -> take 1 n /= "[") (setVars `Set.difference` allowed)
+
+-- | Collect the names a code block assigns to (via @Set@) and the names it
+-- declares locally (via @Let@), at any depth.
+fnBodyVars :: Code env -> (Set String, Set String)
+fnBodyVars c = execState (indexedFoldM @Unit gather c) (Set.empty, Set.empty)
+  where
+    gather :: forall e. CodeF Unit e -> State (Set String, Set String) ()
+    gather = \case
+      Set _ name _   -> modify' (\(s, l) -> (Set.insert (symbolVal name) s, l))
+      Let _ name _ _ -> modify' (\(s, l) -> (s, Set.insert (symbolVal name) l))
+      _              -> pure ()
 
 -- | Typecheck each argument in the call-site environment and bind it to the
 -- corresponding fresh parameter name with a @Let@, threading the (growing)

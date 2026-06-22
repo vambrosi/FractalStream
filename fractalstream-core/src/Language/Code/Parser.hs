@@ -17,9 +17,10 @@ import Language.Parser hiding (many)
 import Language.Typecheck
 import Language.Value
 import Language.Value.Parser
-import Language.Value.Typecheck (FunctionContext(..), FunctionInfo(..), noFunctions)
+import Language.Value.Typecheck (FunctionContext(..), FunctionInfo(..), noFunctions, reservedIdentifiers)
 import Language.Code
 import Language.Parser.Tokenizer
+import Language.Parser.SourceRange (SourceRange(..))
 import Language.Code.Typecheck
 
 import Data.Char (isSpace)
@@ -48,7 +49,7 @@ parseCode :: forall env
           -> Either (Either ParseError TCError) (Code env)
 parseCode env splices input = do
   let (defs, mainSrc) = splitDefines input
-  (fctx, cfs) <- first Left (buildFunctionContext env (valueSplices splices) defs)
+  (fctx, cfs) <- buildFunctionContext env (valueSplices splices) defs
   ParsedCode c <- parseParsedCode (splices { functionContext = fctx
                                            , codeFunctions = cfs }) mainSrc
   case c env of TC x -> first Right x
@@ -279,15 +280,22 @@ buildFunctionContext
    . EnvironmentProxy env
   -> ValueSplices
   -> [String]
-  -> Either ParseError (FunctionContext, Map String CompoundFunction)
+  -> Either (Either ParseError TCError) (FunctionContext, Map String CompoundFunction)
 buildFunctionContext env vsplices = go Map.empty Map.empty
   where
     go exprAcc compAcc [] = Right (FunctionContext env exprAcc, compAcc)
     go exprAcc compAcc (blk : rest) = do
       result <- parseOneDefine env vsplices exprAcc compAcc blk
+      let nm = either fiName cfName result
+      when (Map.member nm exprAcc || Map.member nm compAcc) $
+        defError ("The function `" ++ nm ++ "` is already defined.")
       case result of
         Left  fi -> go (Map.insert (fiName fi) fi exprAcc) compAcc rest
         Right cf -> go exprAcc (Map.insert (cfName cf) cf compAcc) rest
+
+-- | A semantic (non-parse) error raised while resolving a definition.
+defError :: String -> Either (Either ParseError TCError) a
+defError msg = Left (Right (Advice NoSourceRange msg))
 
 -- | Parse a single define block. A body that is a single @slot <- expression@
 -- becomes an expression-reducible 'FunctionInfo'; any other (multi-statement)
@@ -300,11 +308,13 @@ parseOneDefine
   -> Map String FunctionInfo
   -> Map String CompoundFunction
   -> String
-  -> Either ParseError (Either FunctionInfo CompoundFunction)
+  -> Either (Either ParseError TCError) (Either FunctionInfo CompoundFunction)
 parseOneDefine env vsplices exprFuncs compFuncs blk = case lines blk of
-  [] -> Left defineParseError
+  [] -> Left (Left defineParseError)
   (headerLine : rawBodyLines) -> do
-    (name, params) <- parseDefineHeader headerLine
+    (name, params) <- first Left (parseDefineHeader headerLine)
+    checkReserved "a function name" name
+    mapM_ (checkReserved "a parameter name" . fst) params
     let bodyLines  = dedent rawBodyLines
         freshes    = [ freshArgName name i | i <- [0 .. length params - 1] ]
         paramMap   = Map.fromList (zip (map fst params) freshes)
@@ -312,8 +322,8 @@ parseOneDefine env vsplices exprFuncs compFuncs blk = case lines blk of
         nonBlank   = filter (not . null . trim) bodyLines
     case nonBlank of
       [_single] -> do
-        body <- parseDefineBody env exprFuncs compNames vsplices name paramMap
-                                (unlines bodyLines)
+        body <- first Left (parseDefineBody env exprFuncs compNames vsplices name paramMap
+                                (unlines bodyLines))
         Right (Left FunctionInfo { fiName        = name
                                  , fiParams      = params
                                  , fiFreshParams = freshes
@@ -323,13 +333,19 @@ parseOneDefine env vsplices exprFuncs compFuncs blk = case lines blk of
             renameMap  = Map.insert name resultName
                        . Map.insert "result" resultName
                        $ paramMap
-        body <- parseCompoundBody env vsplices exprFuncs compFuncs renameMap
-                                  (unlines bodyLines)
+        body <- first Left (parseCompoundBody env vsplices exprFuncs compFuncs renameMap
+                                  (unlines bodyLines))
         Right (Right CompoundFunction { cfName        = name
                                       , cfParams      = params
                                       , cfFreshParams = freshes
                                       , cfResultName  = resultName
                                       , cfBody        = body })
+  where
+    checkReserved role n
+      | n `Set.member` reservedIdentifiers =
+          defError ("`" ++ n ++ "` is a reserved word and can't be used as "
+                    ++ role ++ ".")
+      | otherwise = Right ()
 
 -- | Parse a compound (multi-statement) function body as a code block, with
 -- parameters and the result slot renamed to fresh internal names. Earlier

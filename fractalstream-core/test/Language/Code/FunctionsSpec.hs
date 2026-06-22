@@ -200,3 +200,61 @@ x <- sumTo(x)
 |]
       -- sumTo(5) = 0+1+2+3+4 = 10
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 10
+
+  -- Milestone 6: error cases. Each should produce an error (not hang/crash).
+  describe "error cases" $ do
+
+    it "rejects an arity mismatch" $ do
+      let p = [r|
+define g(t):
+    result <- 2t + 1
+x <- g(x, x)
+|]
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+    it "rejects an unknown function" $ do
+      let p = "x <- nope(x)\n"
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+    it "rejects (rather than loops on) a recursive definition" $ do
+      let p = [r|
+define f(t):
+    result <- f(t)
+x <- f(x)
+|]
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+    it "rejects a duplicate definition" $ do
+      let p = [r|
+define g(t):
+    result <- t
+define g(t):
+    result <- 2t
+x <- g(x)
+|]
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+    it "rejects a reserved word as a function name" $ do
+      let p = [r|
+define cos(t):
+    result <- t
+x <- cos(x)
+|]
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+    it "rejects a reserved word as a parameter name" $ do
+      let p = [r|
+define g(pi):
+    result <- pi
+x <- g(x)
+|]
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+    it "rejects a compound body that modifies an outside variable" $ do
+      let p = [r|
+define bad(t):
+    x <- 99
+    result <- t
+x <- bad(x)
+|]
+      runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
