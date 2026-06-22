@@ -246,21 +246,38 @@ check = withSourceRange
 -- User-defined functions: pre-pass over the source
 ------------------------------------------------------
 
+-- | A snapshot of a top-level variable taken at a function's definition site:
+-- the original variable's name, the fresh variable it is captured into, and its
+-- type. The function's body refers to the snapshot, so later mutations of the
+-- original variable do not affect the function (definition-site /value/ scope).
+type Snapshot = (String, String, SomeType)
+
 -- | Split a script into its top-level @define@ blocks and the remaining
 -- ("main") source. A define block is a top-level (column-0) line whose first
--- word is @define@, together with the indented/blank lines that follow it.
-splitDefines :: String -> ([String], String)
-splitDefines = go [] [] . lines
+-- word is @define@, together with the indented/blank lines that follow it. Each
+-- define is paired with snapshots of the top-level variables (`name : type <-`)
+-- in scope at that point; the snapshots' capturing @Let@s are spliced into the
+-- main source at the define's position (so they run before any later mutation).
+splitDefines :: String -> ([(String, [Snapshot])], String)
+splitDefines input = go (0 :: Int) [] [] [] (lines input)
   where
-    go defs mainLs [] = (reverse defs, unlines (reverse mainLs))
-    go defs mainLs (l : ls)
+    go _ _     defs mainLs [] = (reverse defs, unlines (reverse mainLs))
+    go i decls defs mainLs (l : ls)
       | isTopLevelDefine l =
           let (body, rest) = span isBodyLine ls
-              -- Replace the define block with blank lines in the main source so
-              -- that line numbers (and therefore error positions) stay aligned.
-              blanks = replicate (1 + length body) ""
-          in go (unlines (l : body) : defs) (blanks ++ mainLs) rest
-      | otherwise = go defs (l : mainLs) ls
+              mk (dn, tystr, sty) =
+                let sn = "fsSnap_" ++ show i ++ "_" ++ dn
+                in ((dn, sn, sty), sn ++ " : " ++ tystr ++ " <- " ++ dn)
+              (snaps, snapLines) = unzip (map mk (reverse decls))
+              -- Pad with blank lines so line numbers stay aligned.
+              block = snapLines ++ replicate (1 + length body - length snapLines) ""
+          in go (i + 1) decls ((unlines (l : body), snaps) : defs)
+                (reverse block ++ mainLs) rest
+      | otherwise =
+          let decls' = case (startsWithSpace l, parseTopLevelDecl l) of
+                         (False, Just d) -> d : decls
+                         _               -> decls
+          in go i decls' defs (l : mainLs) ls
 
     isTopLevelDefine l = case words l of
       ("define" : _) -> not (startsWithSpace l)
@@ -271,6 +288,35 @@ splitDefines = go [] [] . lines
     startsWithSpace (c : _) = isSpace c
     startsWithSpace []      = False
 
+-- | Recognize a top-level variable declaration line @name : type <- …@ and
+-- return its name, the (source) type string, and the parsed type.
+parseTopLevelDecl :: String -> Maybe (String, String, SomeType)
+parseTopLevelDecl line =
+  case break ((== LeftArrow) . baseToken) (tokenize line) of
+    (lhs, _arrow : _) -> case break ((== Colon) . baseToken) lhs of
+      (nameToks, _colon : tyToks)
+        | [Identifier nm] <- map baseToken nameToks
+        , Right ty <- parse typeGrammar tyToks
+        -> Just (nm, unwords (map (tokenStr . baseToken) tyToks), withType ty SomeType)
+      _ -> Nothing
+    _ -> Nothing
+  where
+    tokenStr = \case
+      Identifier s -> s
+      OpenParen    -> "("
+      CloseParen   -> ")"
+      _            -> ""
+
+-- | Extend an environment with a list of (name, type) bindings, skipping any
+-- name already present (it would be a shadow, which the main typechecker
+-- rejects anyway).
+extendEnv :: EnvironmentProxy env -> [(String, SomeType)] -> SomeEnvironment
+extendEnv env [] = SomeEnvironment env
+extendEnv env ((nm, SomeType ty) : rest) = case someSymbolVal nm of
+  SomeSymbol name -> case lookupEnv' name env of
+    Absent' pf -> recallIsAbsent pf $ extendEnv (BindingProxy name ty env) rest
+    Found' _ _ -> extendEnv env rest
+
 -- | Parse each define block in order (so later definitions can call earlier
 -- ones), collecting expression-reducible functions into a 'FunctionContext'
 -- (anchored at @env@, the definition-site / script base environment) and
@@ -279,13 +325,13 @@ buildFunctionContext
   :: forall env
    . EnvironmentProxy env
   -> ValueSplices
-  -> [String]
+  -> [(String, [Snapshot])]
   -> Either (Either ParseError TCError) (FunctionContext, Map String CompoundFunction)
 buildFunctionContext env vsplices = go Map.empty Map.empty
   where
     go exprAcc compAcc [] = Right (FunctionContext env exprAcc, compAcc)
-    go exprAcc compAcc (blk : rest) = do
-      result <- parseOneDefine env vsplices exprAcc compAcc blk
+    go exprAcc compAcc ((blk, snaps) : rest) = do
+      result <- parseOneDefine env vsplices exprAcc compAcc snaps blk
       let nm = either fiName cfName result
       when (Map.member nm exprAcc || Map.member nm compAcc) $
         defError ("The function `" ++ nm ++ "` is already defined.")
@@ -307,9 +353,10 @@ parseOneDefine
   -> ValueSplices
   -> Map String FunctionInfo
   -> Map String CompoundFunction
+  -> [Snapshot]
   -> String
   -> Either (Either ParseError TCError) (Either FunctionInfo CompoundFunction)
-parseOneDefine env vsplices exprFuncs compFuncs blk = case lines blk of
+parseOneDefine env vsplices exprFuncs compFuncs snaps blk = case lines blk of
   [] -> Left (Left defineParseError)
   (headerLine : rawBodyLines) -> do
     (name, params) <- first Left (parseDefineHeader headerLine)
@@ -318,21 +365,27 @@ parseOneDefine env vsplices exprFuncs compFuncs blk = case lines blk of
     let bodyLines  = dedent rawBodyLines
         freshes    = [ freshArgName name i | i <- [0 .. length params - 1] ]
         paramMap   = Map.fromList (zip (map fst params) freshes)
+        -- Rename references to top-level variables to their definition-site
+        -- snapshots, and use the snapshots as the function's environment.
+        snapRename = Map.fromList [ (dn, sn)  | (dn, sn, _)  <- snaps ]
+        defSiteEnv = extendEnv env [ (sn, sty) | (_, sn, sty) <- snaps ]
+        renameVars = paramMap `Map.union` snapRename
         compNames  = Map.keysSet compFuncs
         nonBlank   = filter (not . null . trim) bodyLines
     case nonBlank of
       [_single] -> do
-        body <- first Left (parseDefineBody env exprFuncs compNames vsplices name paramMap
+        body <- first Left (parseDefineBody env exprFuncs compNames vsplices name renameVars
                                 (unlines bodyLines))
         Right (Left FunctionInfo { fiName        = name
                                  , fiParams      = params
                                  , fiFreshParams = freshes
-                                 , fiBody        = body })
+                                 , fiBody        = body
+                                 , fiDefEnv      = defSiteEnv })
       _ -> do
         let resultName = freshResultName name
             renameMap  = Map.insert name resultName
                        . Map.insert "result" resultName
-                       $ paramMap
+                       $ renameVars
         body <- first Left (parseCompoundBody env vsplices exprFuncs compFuncs renameMap
                                   (unlines bodyLines))
         Right (Right CompoundFunction { cfName        = name

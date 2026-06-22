@@ -688,6 +688,10 @@ data FunctionInfo = FunctionInfo
     -- ^ The result expression. (Expression-reducible functions only;
     -- compound statement-bodied functions are handled separately in the code
     -- layer — see @Language.Code.Typecheck@.)
+  , fiDefEnv      :: SomeEnvironment
+    -- ^ The environment in scope at the function's @define@ (the script base
+    -- environment plus any top-level variables declared before it). The body's
+    -- free variables resolve here (definition-site scope), not at the call site.
   }
 
 -- | The table of expression-reducible user functions that are in scope,
@@ -720,7 +724,7 @@ tcApply :: forall baseEnv
         -> FunctionInfo
         -> [ParsedValue]
         -> CheckedValue
-tcApply baseEnv fi args sr = go
+tcApply _baseEnv fi args sr = go
   where
     params  = fiParams fi
     freshes = fiFreshParams fi
@@ -757,10 +761,14 @@ tcApply baseEnv fi args sr = go
           triples <- sequence (zipWith3 checkArg params freshes args)
           let substMap = Map.fromList [ (f, r) | (f, _, r) <- triples ]
               freshTys = [ (f, s)               | (f, s, _) <- triples ]
-          withDefEnv freshTys baseEnv $ \(defEnv :: EnvironmentProxy defE) -> do
-            bodyVal <- withEnvironment defEnv (atType (fiBody fi) resultTy)
-                         :: TC (Value '(defE, ty))
-            pure (reindexValueWith substMap (envProxy (Proxy @env)) bodyVal)
+          -- Instantiate the body at the *definition-site* environment extended
+          -- with the parameters, then re-index into the call site.
+          case fiDefEnv fi of
+            SomeEnvironment defSiteEnv ->
+              withDefEnv freshTys defSiteEnv $ \(defEnv :: EnvironmentProxy defE) -> do
+                bodyVal <- withEnvironment defEnv (atType (fiBody fi) resultTy)
+                             :: TC (Value '(defE, ty))
+                pure (reindexValueWith substMap (envProxy (Proxy @env)) bodyVal)
 
 -- | Build the definition-site environment (the fresh parameters on top of the
 -- base environment) and hand it to the continuation. Fresh names are unique and

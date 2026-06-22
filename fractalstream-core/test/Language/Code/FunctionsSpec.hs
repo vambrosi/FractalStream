@@ -119,6 +119,39 @@ x <- h(k)
       -- x starts at 5, so h(k) = k + x = 10 + 5 = 15.
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 15
 
+    it "sees a top-level variable declared before the define" $ do
+      let p = [r|
+a : Z <- 7
+define addA(t):
+    result <- t + a
+x <- addA(x)
+|]
+      -- addA(x) = x + a = 5 + 7 = 12
+      runDefine (Scalar IntegerType 5) p `shouldBe` Right 12
+
+    it "captures the definition-site value, not a later reassignment" $ do
+      let p = [r|
+a : Z <- 7
+define addA(t):
+    result <- t + a
+a <- 100
+x <- addA(x)
+|]
+      -- `a` is 7 when addA is defined; reassigned to 100 afterwards. addA must
+      -- use the definition-time value: addA(5) = 5 + 7 = 12 (not 5 + 100).
+      runDefine (Scalar IntegerType 5) p `shouldBe` Right 12
+
+    it "captures the definition-site value for a compound body too" $ do
+      let p = [r|
+a : Z <- 7
+define addA(t):
+    u : Z <- a
+    result <- t + u
+a <- 100
+x <- addA(x)
+|]
+      runDefine (Scalar IntegerType 5) p `shouldBe` Right 12
+
   -- Milestone 3: differentiation sees the fully-inlined (substituted) tree.
   describe "differentiating through a user function" $ do
 
