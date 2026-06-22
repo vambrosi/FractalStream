@@ -11,6 +11,8 @@ import Language.Draw
 import Language.Parser.SourceRange
 import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck)
 
+import Data.Color (black)
+
 ------------------------------------------------------
 -- Parsed code
 ------------------------------------------------------
@@ -201,3 +203,98 @@ withFresh sr env ty value action = withEnvironment env $ do
       Absent pf -> recallIsAbsent pf $ let_ value <$>
         action (bindNameEnv tmp ty pf env) tmp pf
       _ -> throwError (Internal $ AlreadyDefined sr tmpName)
+
+------------------------------------------------------
+-- Compound (statement-bodied) user functions
+------------------------------------------------------
+
+-- | A user function whose body is a compound block of statements (locals,
+-- loops, conditionals, reassignment) that delivers its result by assigning the
+-- slot. Inlined by /splicing/ the statements at the call site; for now,
+-- callable only in statement position (@target <- f(args)@).
+data CompoundFunction = CompoundFunction
+  { cfName        :: String
+  , cfParams      :: [(String, Maybe SomeType)]
+  , cfFreshParams :: [String]
+  , cfResultName  :: String     -- ^ fresh name the result slot was renamed to
+  , cfBody        :: ParsedCode
+  }
+
+-- | Typecheck @target <- f(args)@ for a compound function @f@: bind each
+-- parameter to its argument with a @Let@, declare the result slot (initialised
+-- to a default), run the (renamed) body, then copy the result into @target@.
+tcSetCompound :: String -> CompoundFunction -> [ParsedValue] -> CheckedCode
+tcSetCompound targetName cf args sr env
+  | length args /= length (cfParams cf) =
+      throwError (Advice sr ("The function " ++ cfName cf ++ " expects "
+        ++ show (length (cfParams cf)) ++ " argument(s), but "
+        ++ show (length args) ++ " were given."))
+  | otherwise = withEnvironment env $ case someSymbolVal targetName of
+      SomeSymbol target ->
+        spliceArgs sr (zip3 (cfFreshParams cf) (map snd (cfParams cf)) args) env $ \envP -> do
+          FoundVar rty _ <- findVar sr target envP
+          withKnownType rty $ do
+            dflt <- defaultFor sr rty
+            letBind sr (cfResultName cf) rty dflt envP $ \envR -> withEnvironment envR $ do
+              body  <- atEnv envR (cfBody cf)
+              tgtPf <- findVarAtType sr target rty envR
+              case someSymbolVal (cfResultName cf) of
+                SomeSymbol res -> do
+                  resPf <- findVarAtType sr res rty envR
+                  pure (Block [ body, Set tgtPf target (Var res rty resPf) ])
+
+-- | Typecheck each argument in the call-site environment and bind it to the
+-- corresponding fresh parameter name with a @Let@, threading the (growing)
+-- environment to the continuation.
+spliceArgs :: forall env
+            . SourceRange
+           -> [(String, Maybe SomeType, ParsedValue)]
+           -> EnvironmentProxy env
+           -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> TC (Code env'))
+           -> TC (Code env)
+spliceArgs _  []                       env k = withEnvironment env (k env)
+spliceArgs sr ((fresh, ann, arg) : rest) env k = withEnvironment env $ do
+  SomeType (pty :: TypeProxy pty) <- inferArgType sr ann arg env
+  withKnownType pty $ do
+    argVal <- atType arg pty :: TC (Value '(env, pty))
+    letBind sr fresh pty argVal env $ \env' -> spliceArgs sr rest env' k
+
+-- | Bind a (fresh) name to a value with a @Let@, extending the environment and
+-- wrapping the continuation's code in that @Let@.
+letBind :: forall env ty
+         . SourceRange -> String -> TypeProxy ty -> Value '(env, ty) -> EnvironmentProxy env
+        -> (forall name. (KnownSymbol name, NotPresent name env)
+              => EnvironmentProxy ('(name, ty) ': env) -> TC (Code ('(name, ty) ': env)))
+        -> TC (Code env)
+letBind sr nm ty v env k = withEnvironment env $ case someSymbolVal nm of
+  SomeSymbol name -> case lookupEnv' name env of
+    Absent' pf -> recallIsAbsent pf $
+      Let bindingEvidence name v <$> k (bindNameEnv name ty pf env)
+    Found' _ _ -> throwError (Internal (AlreadyDefined sr nm))
+
+-- | Infer (or check, if annotated) the type of an argument in the given
+-- environment. The explicit annotations pin the environment.
+inferArgType :: forall env
+              . SourceRange -> Maybe SomeType -> ParsedValue -> EnvironmentProxy env -> TC SomeType
+inferArgType sr ann arg env = withEnvironment env $ case ann of
+  Just (SomeType (pty :: TypeProxy pty)) ->
+    withKnownType pty ((atType arg pty :: TC (Value '(env, pty))) $> SomeType pty)
+  Nothing -> tryEachType (Advice sr ("I couldn't infer the type of an argument."))
+    [ (atType arg IntegerType :: TC (Value '(env, 'IntegerT))) $> SomeType IntegerType
+    , (atType arg RealType    :: TC (Value '(env, 'RealT)))    $> SomeType RealType
+    , (atType arg ComplexType :: TC (Value '(env, 'ComplexT))) $> SomeType ComplexType
+    , (atType arg BooleanType :: TC (Value '(env, 'BooleanT))) $> SomeType BooleanType
+    , (atType arg ColorType   :: TC (Value '(env, 'ColorT)))   $> SomeType ColorType
+    ]
+
+-- | A default value used to initialise a compound function's result slot
+-- before its body runs.
+defaultFor :: forall env ty. KnownEnvironment env => SourceRange -> TypeProxy ty -> TC (Value '(env, ty))
+defaultFor sr = \case
+  IntegerType -> pure (Const (Scalar IntegerType 0))
+  RealType    -> pure (Const (Scalar RealType 0))
+  ComplexType -> pure (Const (Scalar ComplexType 0))
+  BooleanType -> pure (Const (Scalar BooleanType False))
+  ColorType   -> pure (Const (Scalar ColorType black))
+  t           -> throwError (Advice sr ("Functions returning " ++ showType t
+                   ++ " can't be used this way yet."))

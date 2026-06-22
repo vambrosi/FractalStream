@@ -68,7 +68,7 @@ parseValue splices input = do
 parseParsedValue :: Map String ParsedValue
                  -> String
                  -> Either ParseError ParsedValue
-parseParsedValue splices = parse (valueGrammar splices) . tokenize
+parseParsedValue splices = parse (fst <$> valueGrammar EmptyEnvProxy Map.empty Set.empty splices) . tokenize
 
 parseInputValue :: forall env ty. (KnownEnvironment env, KnownType ty)
                 => ValueSplices
@@ -129,12 +129,21 @@ typeGrammar = mdo
   pure toplevel
 
 valueGrammarWithNoSplices :: forall r. Grammar r (Prod r ParsedValue)
-valueGrammarWithNoSplices = valueGrammar Map.empty
+valueGrammarWithNoSplices = fst <$> valueGrammar EmptyEnvProxy Map.empty Set.empty Map.empty
 
-valueGrammar :: forall r
-              . ValueSplices
-             -> Grammar r (Prod r ParsedValue)
-valueGrammar splices = mdo
+-- | Build the value grammar. Returns both the top-level value production and
+-- the argument-list production (a comma-separated list parsed below the
+-- pair/comma level); the latter is reused by the code grammar for the argument
+-- lists of compound function calls.
+valueGrammar :: forall r baseEnv
+              . EnvironmentProxy baseEnv
+             -> Map String FunctionInfo
+             -> Set String
+             -- ^ Names of compound (statement-bodied) functions, reserved here
+             -- so they are not parsed as variables in value position.
+             -> ValueSplices
+             -> Grammar r (Prod r ParsedValue, Prod r [ParsedValue])
+valueGrammar baseEnv funcs compoundNames splices = mdo
 
   let toplevel = cast
 
@@ -228,7 +237,11 @@ valueGrammar splices = mdo
     ]
 
   funAp <- ruleChoice
-    [ check (tcCommonFun
+    [ check ((\fi as -> tcApply baseEnv fi as)
+        <$> (tokenMatch (\case { Identifier n -> Map.lookup n funcs; _ -> Nothing }))
+        <*> (token OpenParen *> argList <* token CloseParen))
+
+    , check (tcCommonFun
         <$> (tokenMatch (\case { Identifier n -> (n,) <$> Map.lookup n commonFunctions;
                                  _ -> Nothing }))
         <*> atomOrFunAp)
@@ -421,6 +434,15 @@ valueGrammar splices = mdo
     tcDiff <$> (token DiffKeyword *> (token OpenParen *> toplevel))
            <*> (token Comma *> toplevel <* token CloseParen)
 
+  -- Arguments are parsed at the `pOr` level (below the comma/pair level), so
+  -- that the commas separating arguments are not also read as pair
+  -- constructors (which would make `f(x, y)` ambiguous). A parenthesized pair
+  -- `f((x, y))` is still accepted via the atom rule.
+  argList <- ruleChoice
+    [ (:) <$> pOr <*> many (token Comma *> pOr)
+    , pure []
+    ]
+
   typ <- typeGrammar
 
   let reserved = (`Set.member` reservedWords)
@@ -436,8 +458,10 @@ valueGrammar splices = mdo
         `Set.union` Map.keysSet complexFunctions
         `Set.union` Map.keysSet roundingFunctions
         `Set.union` Map.keysSet splices
+        `Set.union` Map.keysSet funcs
+        `Set.union` compoundNames
 
-  pure toplevel
+  pure (toplevel, argList)
 
 check :: Prod r CheckedValue -> Prod r ParsedValue
 check = withSourceRange

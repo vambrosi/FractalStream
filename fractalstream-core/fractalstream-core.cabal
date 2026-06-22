@@ -91,6 +91,7 @@ library
                        Language.Value.Parser
                        Language.Value.Typecheck
                        Language.Value.Transform
+                       Language.Value.Reindex
                        Language.Draw
                        Language.Parser
                        Language.Typecheck
@@ -155,5 +156,6 @@ test-suite spec
                     , Language.Value.EvaluatorSpec
                     , Language.Value.ParserSpec
                     , Language.Code.ParserSpec
+                    , Language.Code.FunctionsSpec
                     , Language.Effect.ListSpec
   build-tool-depends: hspec-discover:hspec-discover == 2.*

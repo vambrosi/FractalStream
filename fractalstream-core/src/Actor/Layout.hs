@@ -404,7 +404,9 @@ layoutToSplices :: Layout -> Dynamic (Either String Splices)
 layoutToSplices = fmap (fmap finish) . go
   where
     finish :: [Either (String, ParsedCode) (String, ParsedValue)] -> Splices
-    finish = (\(xs, ys) -> Splices (Map.fromList xs) (Map.fromList ys)) . partitionEithers
+    finish = (\(xs, ys) -> noSplices { codeSplices  = Map.fromList xs
+                                     , valueSplices = Map.fromList ys })
+           . partitionEithers
 
     go :: Layout -> Dynamic (Either String [Either (String, ParsedCode) (String, ParsedValue)])
     go = \case
