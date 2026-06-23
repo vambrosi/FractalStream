@@ -157,5 +157,6 @@ test-suite spec
                     , Language.Value.ParserSpec
                     , Language.Code.ParserSpec
                     , Language.Code.FunctionsSpec
+                    , Language.Code.SolveSpec
                     , Language.Effect.ListSpec
   build-tool-depends: hspec-discover:hspec-discover == 2.*

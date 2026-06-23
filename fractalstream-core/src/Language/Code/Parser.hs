@@ -169,6 +169,19 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
         <*> ((lit "while" $> True) <|> (lit "until" $> False))
         <*> value
         <*> optional upTo)
+    , check
+      (tcSolve
+        <$> (lit "solve" *> ident <* token RightArrow)
+        <*> value
+        <*> optional (lit "within" *> value)
+        <*> optional upTo) <?> "solve statement"
+    , check
+      (tcPreimage
+        <$> (lit "preimage" *> ident <* token RightArrow)
+        <*> value
+        <*> (lit "of" *> value)
+        <*> optional (lit "within" *> value)
+        <*> optional upTo) <?> "preimage statement"
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 

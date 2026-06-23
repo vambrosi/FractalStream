@@ -9,6 +9,7 @@ module Actor.Viewer.Types
   -- ** Re-exports
   , InternalIterations
   , InternalStuck
+  , InternalSolution
   , InternalIterationLimit
   , InternalEscapeRadius
   , InternalVanishingRadius
@@ -26,6 +27,7 @@ type InternalDY  = "[internal] dy"
 type InternalViewerEnv env =
     ( '(InternalIterations, 'IntegerT) ':
       '(InternalStuck, 'BooleanT) ':
+      '(InternalSolution, 'ComplexT) ':
       '(InternalIterationLimit, 'IntegerT) ':
       '(InternalEscapeRadius, 'RealT) ':
       '(InternalVanishingRadius, 'RealT) ':

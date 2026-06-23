@@ -243,6 +243,7 @@ parseViewerScript mpx ViewerContext{..} (CodeString src) = do
     env' :: EnvironmentProxy (InternalViewerEnv env) <-
       (     declareE InternalIterations      IntegerType
         <=< declareE InternalStuck           BooleanType
+        <=< declareE InternalSolution        ComplexType
         <=< declareE InternalIterationLimit  IntegerType
         <=< declareE InternalEscapeRadius    RealType
         <=< declareE InternalVanishingRadius RealType
@@ -300,8 +301,9 @@ parseViewerScript mpx ViewerContext{..} (CodeString src) = do
 
       -- Now bind all of the bookkeeping variables
       let (_, code') = (env', code)
-                     & letInEnv (Const (Scalar typeProxy 0))
-                     & letInEnv (Const (Scalar typeProxy False))
+                     & letInEnv (Const (Scalar typeProxy 0))      -- iterations
+                     & letInEnv (Const (Scalar typeProxy False))  -- stuck
+                     & letInEnv (Const (Scalar typeProxy 0))      -- solution
                      & letInEnv (fromMaybe (Const (Scalar typeProxy 100)) vcIterLimit)
                      & letInEnv (fromMaybe (Const (Scalar typeProxy 10.0)) vcEscapes)
                      & letInEnv (fromMaybe (Const (Scalar typeProxy 0.0001)) vcVanishes)

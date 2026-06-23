@@ -9,7 +9,8 @@ import Language.Value.Parser
 import Language.Code
 import Language.Draw
 import Language.Parser.SourceRange
-import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck)
+import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck, InternalSolution)
+import Language.Value.Derivative (derivative)
 
 import Data.Color (black)
 import Data.Indexed.Functor (indexedFoldM)
@@ -103,6 +104,123 @@ tcIterate var expr isWhile cond upto sr env = do
   let body = ParsedCode (\e -> withEnvironment e $ tcSet var expr sr e)
       tc = if isWhile then tcWhile else tcUntil
   tc cond upto body sr env
+
+------------------------------------------------------
+-- solve / preimage (Newton root-finding statements)
+------------------------------------------------------
+
+-- | Default convergence tolerance on @|F|@ when no @within@ clause is given.
+solveTolerance :: Double
+solveTolerance = 1e-10
+
+-- | @solve z -> F@: find a root of @F = 0@ by a counted Newton iteration
+-- seeded from @z@'s current value, and store it in the internal @solution@
+-- variable. The unknown @z@ itself is left unchanged (it stays the seed /
+-- coordinate), mirroring how @stuck@/@iterations@ report a loop's outcome
+-- without disturbing its inputs.
+--
+-- Lowers to the same loop shape as 'tcIterate' (fresh counter + limit,
+-- @iterations@/@stuck@ bookkeeping), with a fixed body (the Newton step
+-- @z <- z - F/F'@) and exit condition (@|F| <= tol@). Because @F@ is written in
+-- terms of @z@, the iteration runs on @z@ and the original value is saved
+-- first and restored afterwards. @F'@ is obtained symbolically via 'derivative'
+-- w.r.t. @Var z@, so @F@ must be a differentiable closed-form expression.
+-- @solution@ is complex; for a real unknown the (real) root is widened with
+-- @R2C@. @stuck@ is true iff Newton did not converge within the budget.
+tcSolve :: String              -- ^ the unknown variable's name
+        -> ParsedValue         -- ^ the equation body @F@
+        -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause)
+        -> Maybe ParsedValue   -- ^ optional iteration limit (@up to N times@)
+        -> CheckedCode
+tcSolve var pF mtol mlimit sr (env :: EnvironmentProxy env) = do
+
+  SomeSymbol zname <- pure (someSymbolVal var)
+  FoundVar (zty :: TypeProxy zty) zpfEnv <- findVar sr zname env
+
+  -- Save the unknown's current value so we can restore it after solving.
+  withFresh sr env zty (Var zname zty zpfEnv) $ \envS (saveName :: Proxy saveName) pfS -> recallIsAbsent pfS $
+   withFresh sr envS IntegerType 0 $ \env' (counterName :: Proxy counterName) pf0 -> recallIsAbsent pf0 $ do
+
+    limitValue <- case mlimit of
+      Just (ParsedValue _ limitFun) -> limitFun IntegerType
+      Nothing -> tcVar internalIterationLimit sr IntegerType
+
+    withFresh sr env' IntegerType limitValue $ \env'' (limitName :: Proxy limitName) pf' -> recallIsAbsent pf' $ do
+
+      pf <- findVarAtType sr counterName IntegerType env''
+      let counter, limit ::
+            Value '( '(limitName, 'IntegerT) ': '(counterName, 'IntegerT) ': '(saveName, zty) ': env, 'IntegerT)
+          counter = Var counterName IntegerType pf
+          limit =   Var limitName IntegerType   (bindName limitName IntegerType pf')
+
+      zpf    <- findVarAtType sr zname    zty         env''
+      savePf <- findVarAtType sr saveName zty         env''
+
+      -- The Newton step, the absolute residual |F|, and the (complex) value to
+      -- store as `solution`, built at the unknown's type (Real or Complex).
+      -- Both halves use the overloaded Num/Fractional instances on Value, so
+      -- the body is identical apart from Abs/R2C and the type.
+      (newtonStep, absF, solutionVal) <- case zty of
+        ComplexType -> do
+          f  <- atType pF ComplexType
+          f' <- diffClosedForm sr var (Var zname ComplexType zpf) f
+          pure ( Set zpf zname (Var zname ComplexType zpf - f / f')
+               , AbsC f
+               , Var zname ComplexType zpf )
+        RealType -> do
+          f  <- atType pF RealType
+          f' <- diffClosedForm sr var (Var zname RealType zpf) f
+          pure ( Set zpf zname (Var zname RealType zpf - f / f')
+               , AbsF f
+               , R2C (Var zname RealType zpf) )
+        _ -> throwError (Advice sr ("`solve`/`preimage` needs a real or complex unknown, but `"
+               ++ var ++ "` is " ++ showType zty ++ "."))
+
+      tol <- case mtol of
+        Just pv -> atType pv RealType
+        Nothing -> pure (Const (Scalar RealType solveTolerance))
+
+      let converged = Not (LTF tol absF)              -- |F| <= tol
+          c' = And (Not converged) (counter `LTI` limit)
+          b' = Block [ newtonStep, Set pf counterName (counter + 1) ]
+          iterations = Proxy @InternalIterations
+          stuck      = Proxy @InternalStuck
+          solution   = Proxy @InternalSolution
+      ipf  <- findVarAtType sr iterations IntegerType env''
+      spf  <- findVarAtType sr stuck      BooleanType env''
+      solpf <- findVarAtType sr solution  ComplexType env''
+      pure $ Block
+        [ IfThenElse c' (DoWhile c' b') NoOp
+        , Set ipf  iterations counter
+        , Set spf  stuck      (Eql IntegerType counter limit)
+        , Set solpf solution  solutionVal              -- publish the root
+        , Set zpf  zname      (Var saveName zty savePf) ]  -- restore the unknown
+
+-- | Differentiate a closed-form equation body, turning the internal
+-- 'DiffNotImplemented' (thrown on loops / unsupported nodes) into a clear
+-- user-facing error: this is the boundary with the future non-closed-form work.
+diffClosedForm :: SourceRange -> String -> Value et -> Value et -> TC (Value et)
+diffClosedForm sr var z f = catchError (derivative sr z sr f) $ \case
+  DiffNotImplemented{} -> throwError (Advice sr
+    ("`solve`/`preimage` needs a differentiable closed-form equation, but the body for `"
+     ++ var ++ "` contains a loop or an unsupported construct."))
+  err -> throwError err
+
+-- | @preimage z -> F of v@: find a solution of @F = v@ near @z@'s current
+-- value, leaving @z@ unchanged and publishing the result in @solution@. Pure
+-- sugar for @solve z -> F - v@ (same machinery; @v@ is
+-- constant w.r.t. @z@, so @F'@ is unchanged).
+tcPreimage :: String -> ParsedValue -> ParsedValue
+           -> Maybe ParsedValue -> Maybe ParsedValue -> CheckedCode
+tcPreimage var pF pV = tcSolve var (subParsed pF pV)
+
+-- | The 'ParsedValue' @F - v@ (real or complex), used to desugar @preimage@.
+subParsed :: ParsedValue -> ParsedValue -> ParsedValue
+subParsed pF@(ParsedValue sr _) pV = ParsedValue sr $ \case
+  ComplexType -> (-) <$> atType pF ComplexType <*> atType pV ComplexType
+  RealType    -> (-) <$> atType pF RealType    <*> atType pV RealType
+  ty          -> throwError (Surprise sr "the body of `preimage`"
+                   (an (SomeType ty)) (Expected "a real or complex number"))
 
 tcPoint :: KnownEnvironment env => ParsedValue -> TC (Value '(env, 'Pair 'RealT 'RealT))
 tcPoint p@(ParsedValue sr _) =

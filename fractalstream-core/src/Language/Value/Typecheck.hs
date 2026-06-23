@@ -478,6 +478,13 @@ internalIterationLimit      = "[internal] iteration limit"
 type InternalIterationLimit = "[internal] iteration limit"
 type InternalStuck = "[internal] stuck"
 internalStuck      = "[internal] stuck"
+-- | The implicit output variable that @solve@/@preimage@ write the root into.
+-- Named like @color@ (a plain, user-facing identifier rather than a bracketed
+-- @[internal] …@ name) so scripts can read it directly as @solution@ — there is
+-- no keyword token for it the way there is for @stuck@/@iterations@.
+internalSolution      :: String
+internalSolution      = "solution"
+type InternalSolution = "solution"
 
 tcText :: [ParsedValue] -> CheckedValue
 tcText args sr = \case
@@ -652,6 +659,7 @@ reservedIdentifiers = Set.fromList
   , "text", "append", "prepend", "join", "remove", "find", "transform"
   , "range", "length", "diff"
   , "while", "iterate", "repeat", "until", "pass", "define", "result", "color"
+  , "solve", "preimage", "of", "within", "solution"
   , "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg"
   , "romao", "bamo", "broco", "corko", "viko"
   , "ice", "fire", "rose", "wheat", "forest", "ocean"
