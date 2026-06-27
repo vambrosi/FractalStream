@@ -164,7 +164,7 @@ withContEnvProxy :: Maybe (ContinuationScript env)
                  -> (forall contOutputEnv. EnvironmentProxy contOutputEnv -> IO r)
                  -> IO r
 withContEnvProxy Nothing                              k = k EmptyEnvProxy
-withContEnvProxy (Just (ContinuationScript proxy _ _ _)) k = k proxy
+withContEnvProxy (Just (ContinuationScript proxy _ _ _ _)) k = k proxy
 
 withJittedViewer :: forall env t. (MissingViewerArgs env, KnownEnvironment env)
                  => LLVMJit

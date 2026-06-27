@@ -28,7 +28,7 @@ import Language.Typecheck
 import Language.Parser.SourceRange
 import Language.Code.Parser
 
-import Data.Aeson (FromJSON(..), ToJSON(..), withObject, (.:), object, (.=))
+import Data.Aeson (FromJSON(..), ToJSON(..), withObject, (.:), (.:?), (.!=), object, (.=))
 import qualified Data.Map as Map
 
 -- | Raw (pre-type-checked) description of one prep script output variable.
@@ -77,12 +77,18 @@ data ContinuationRaw = ContinuationRaw
   , crAnchor  :: String           -- ^ initial guess for the unknown at point 0
   , crOutputs :: [PrepOutputSpec]
   , crCode    :: String
+  , crDownsample :: Int           -- ^ field-grid spacing in pixels per axis: the
+                                  --   pass solves one point per @d x d@ block and
+                                  --   the viewer reads the nearest one (d=1 is full
+                                  --   resolution). A coarser grid is much faster but
+                                  --   blockier; default 16 (one solve per 16x16 block).
   } deriving (Eq, Show)
 
 instance FromJSON ContinuationRaw where
   parseJSON = withObject "continuation" $ \o ->
     ContinuationRaw <$> o .: "unknown" <*> o .: "anchor"
                     <*> o .: "outputs" <*> o .: "code"
+                    <*> o .:? "downsampling-factor" .!= 16
 
 instance ToJSON ContinuationRaw where
   toJSON ContinuationRaw{..} = object
@@ -90,6 +96,7 @@ instance ToJSON ContinuationRaw where
     , "anchor"  .= crAnchor
     , "outputs" .= crOutputs
     , "code"    .= crCode
+    , "downsampling-factor" .= crDownsample
     ]
 
 instance Codec ContinuationRaw where codec = aeson
@@ -155,8 +162,8 @@ data MergedViewer where
                -> EnvironmentProxy contOutputEnv
                -> Context DynamicValue combinedEnv
                -> Maybe String                            -- ^ prep code string
-               -> Maybe (String, Complex Double -> Complex Double, String)
-                  -- ^ (unknown, anchor-as-function-of-coord, cont code)
+               -> Maybe (String, Complex Double -> Complex Double, Int, String)
+                  -- ^ (unknown, anchor-as-function-of-coord, downsampling factor, cont code)
                -> MergedViewer
 
 -- | The continuation anchor: either the coordinate itself (@anchor: c@, becomes
@@ -182,7 +189,7 @@ buildMergedViewer configCtx mPrepRaw mContRaw coordName =
     Right (MergedPrep prepEnvProxy ctx1 mPrepCode) -> case mContRaw of
       Nothing ->
         Right (MergedViewer prepEnvProxy EmptyEnvProxy ctx1 mPrepCode Nothing)
-      Just (ContinuationRaw unknown anchorStr contOutputs contCode) ->
+      Just (ContinuationRaw unknown anchorStr contOutputs contCode downsample) ->
         case anchorFunction coordName anchorStr of
           Left err -> Left err
           Right anchorVal -> case buildPrepCtxFromSpecs contOutputs of
@@ -198,7 +205,7 @@ buildMergedViewer configCtx mPrepRaw mContRaw coordName =
                       withEnvironment (contextToEnv contCtx) $
                         withEnvironment (contextToEnv ctx3) $
                           Right (MergedViewer prepEnvProxy (contextToEnv contCtx)
-                                   ctx3 mPrepCode (Just (unknown, anchorVal, contCode)))
+                                   ctx3 mPrepCode (Just (unknown, anchorVal, downsample, contCode)))
 
 data ComplexViewer = ComplexViewer
   { cvTitle :: Parsed String
@@ -357,10 +364,10 @@ instance CodecWith ScriptDependencies ComplexViewer where
                              -- the same machinery in the same (merged) env.
                              mContScript <- case mContInfo of
                                Nothing -> pure Nothing
-                               Just (unknownName, anchorVal, contSrc) -> do
+                               Just (unknownName, anchorVal, downsample, contSrc) -> do
                                  contCode <- parseViewerScript mpx args (CodeString contSrc)
                                  pure (Just (ContinuationScript contOutputEnvProxy
-                                               unknownName anchorVal contCode))
+                                               unknownName anchorVal downsample contCode))
                              pure (SomeViewerWithContext combinedCtx mPrepScript mContScript viewerCode)
                       of
                         Nothing -> pure . const . Left . (NoSourceRange,) $ "INTERNAL ERROR: redefined internal argument"

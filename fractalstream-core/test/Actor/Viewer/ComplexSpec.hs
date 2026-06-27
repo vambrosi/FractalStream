@@ -42,6 +42,7 @@ expected = ContinuationRaw
       , PrepOutputSpec "converged" "Boolean" "false"
       ]
   , crCode = "solve w -> w^2 - w + c\nroot <- solution\nconverged <- not stuck\n"
+  , crDownsample = 16  -- default (downsampling-factor omitted in the YAML below)
   }
 
 -- | A full single-viewer project whose body reads a continuation output

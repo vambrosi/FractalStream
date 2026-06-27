@@ -26,6 +26,7 @@ module Actor.Field
   , pointCoord
   , serpentineOrder
   , reprojectIndex
+  , coarsenGeometry
     -- * Continuation driver
   , runContinuationField
     -- * Reading a computed field at render time
@@ -144,6 +145,20 @@ pointCoord :: FieldGeometry -> Int -> Int -> Complex Double
 pointCoord fg col row =
   (fgOriginX fg + fromIntegral col * fgDX fg)
   :+ (fgOriginY fg + fromIntegral row * fgDY fg)
+
+-- | Coarsen a (full-resolution, one-point-per-pixel) field grid by a per-axis
+-- factor @d@: the field then holds one point per @d x d@ block (steps @d@x larger,
+-- dimensions @d@x smaller). Point 0 still sits on pixel 0, so the per-pixel read's
+-- nearest-grid reprojection maps each pixel to its nearest coarse point. @d <= 1@
+-- leaves the grid at full resolution.
+coarsenGeometry :: Int -> FieldGeometry -> FieldGeometry
+coarsenGeometry d g
+  | d <= 1    = g
+  | otherwise = g { fgDX = fgDX g * fromIntegral d
+                  , fgDY = fgDY g * fromIntegral d
+                  , fgWidth  = ceilDiv (fgWidth g)  d
+                  , fgHeight = ceilDiv (fgHeight g) d }
+  where ceilDiv a b = (a + b - 1) `div` b
 
 -- | Map a model coordinate to the nearest field point's flat index, or
 -- 'Nothing' if it falls outside the field grid. Inverse of 'pointCoord' (rounded

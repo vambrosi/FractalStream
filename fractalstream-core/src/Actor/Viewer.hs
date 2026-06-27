@@ -87,6 +87,7 @@ data ContinuationScript (env :: Environment) where
                      -> (Complex Double -> Complex Double)
                           -- ^ anchor: the unknown's seed at point 0, as a function
                           --   of that point's coordinate (@const k@ or @id@ for @c@)
+                     -> Int                             -- ^ field-grid downsampling factor (pixels/axis)
                      -> Code (ViewerEnv env)            -- ^ continuation code, typed in the body env
                      -> ContinuationScript env
 

@@ -26,7 +26,7 @@ import Actor.Viewer
 import Actor.Viewer.Complex
 import Actor.Field
   (mallocFieldArrays, runContinuationField, ContinuationField(..),
-   FieldGeometry(..), overrideComplexByName)
+   FieldGeometry(..), overrideComplexByName, coarsenGeometry)
 -- import Language.Type ( TypeProxy(..) )
 import Data.Color (grey)
 import Language.Environment
@@ -264,11 +264,14 @@ makeComplexViewer project jit mkViewer someContext configArgs showConfig rerunSe
           -- tile from live config args; the caller frees it once its tile is done.
           let vContinuationField = case mcont of
                 Nothing -> Nothing
-                Just (ContinuationScript outEnv unkName anchor contCode) -> Just $ \geom -> do
+                Just (ContinuationScript outEnv unkName anchor downsample contCode) -> Just $ \geom0 -> do
                   eargs <- vGetArgs
                   case eargs of
                     Left _ -> pure Nothing
                     Right argsCtx -> do
+                      -- Solve on a coarser grid (one point per downsample x downsample
+                      -- block); the per-pixel read reprojects to the nearest point.
+                      let geom = coarsenGeometry downsample geom0
                       arrays <- mallocFieldArrays outEnv (fgWidth geom * fgHeight geom)
                       let mkCtx contCoord seed =
                               Bind (Proxy @InternalX)  RealType  (realPart contCoord)
