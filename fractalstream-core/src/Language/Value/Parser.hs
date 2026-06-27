@@ -173,13 +173,17 @@ valueGrammar baseEnv funcs compoundNames splices = mdo
     , pOr
     ]
 
+  -- These two are the only labelled productions in the value grammar, so they
+  -- are what a stuck value-parse reports as "expected". Label them with the
+  -- user-facing "a value" (rather than the grammar-internal "disjunction"/
+  -- "conjunction") so the error reads "...expecting a value" instead of jargon.
   pOr <- ruleChoice
-    [ check (tcOr <$> (pAnd <* token Or_) <*> pOr <?> "disjunction")
+    [ check (tcOr <$> (pAnd <* token Or_) <*> pOr <?> "a value")
     , pAnd
     ]
 
   pAnd <- ruleChoice
-    [ check (tcAnd <$> (pNot <* token And_) <*> pAnd <?> "conjunction")
+    [ check (tcAnd <$> (pNot <* token And_) <*> pAnd <?> "a value")
     , pNot
     ]
 

@@ -1,0 +1,46 @@
+# `preimage` test: solve f(w) = z for w, with f a user-defined (expression) function,
+# then colour by the root's argument.
+#
+#   preimage w -> sq(w) of z   solves   sq(w) = z   i.e.   w^2 = z   ->   w = sqrt(z)
+#
+# Seeded from w = z, Newton converges to the principal square-root branch, so
+# arg(solution) = arg(z)/2: the colour wheel turns at HALF the angular speed of a
+# plain `rainbow(arg z)` (z must wind around the origin twice for one colour cycle).
+#
+# Features exercised: `preimage ... of <value>`, an expression `define` used inside
+# the preimage target, `solution`/`stuck`.
+#
+# EXPECTED:
+#   A smooth colour wheel completing ONE cycle per TWO turns of z about the origin
+#   (half-speed), with a single branch-cut line where the two square roots meet.
+#
+# WHAT AN ERROR LOOKS LIKE:
+#   - Full-speed wheel (one cycle per turn) -> preimage solved the wrong equation.
+#   - Flat / black everywhere               -> Newton never converged (always stuck).
+
+viewer:
+  style: complex-plane
+  title: "Square-root branch via preimage"
+  size: 512x512
+  resizable: true
+  z-coord: z
+  initial-center: 0
+  initial-pixel-size: 1/128
+  iteration-limit: maxIters
+  code: |
+    define sq(w):
+        sq <- w^2
+
+    w : C <- z
+    preimage w -> sq(w) of z
+    color <- if stuck then black else rainbow(arg solution / (2 pi))
+
+configuration:
+  title: Configuration
+  size: 400x120
+  vertical-contents:
+    - text-entry:
+        label: "Max. iterations:"
+        value: "100"
+        type: Z
+        variable: maxIters

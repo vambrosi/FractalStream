@@ -10,6 +10,7 @@ import Language.Code
 import Language.Code.InterpretIO
 import Language.Value.Evaluator (HaskellValue)
 import Actor.Viewer
+import Actor.Field (ContinuationField(..), overrideFromField, reprojectIndex)
 import Data.Indexed.Functor
 import Data.Color (colorToRGB, grey)
 
@@ -18,9 +19,13 @@ import Data.IORef
 
 interpretViewer :: forall env t. MissingViewerArgs env
                 => Maybe (PrepScript env)
+                -> Maybe (ContinuationScript env)
                 -> Code (ViewerEnv env)
                 -> (ViewerFunction env -> IO t) -> IO t
-interpretViewer mPrepScript body action = do
+-- The pure backend reads the continuation field per pixel via
+-- 'vaContinuationField' (see below), so it needs nothing from the
+-- 'ContinuationScript' at compile time.
+interpretViewer mPrepScript _mContScript body action = do
   let env = toIndex body
   withEnvironment env $ action $ ViewerFunction $ \ViewerArgs{..} -> do
     let (x0, y0) = vaPoint
@@ -38,6 +43,16 @@ interpretViewer mPrepScript body action = do
 
         iorefs :: Context IORefTypeOfBinding (ViewerEnv env) <-
           mapContextM (\_ _ -> newIORef) context
+
+        -- If a continuation field was computed for this tile, override the
+        -- published output bindings with the field's value at this pixel
+        -- (found by reprojecting the pixel coordinate onto the field grid).
+        case vaContinuationField of
+          Nothing -> pure ()
+          Just (ContinuationField outEnv arrays geom) ->
+            case reprojectIndex geom (x :+ y) of
+              Nothing  -> pure ()
+              Just idx -> overrideFromField env outEnv arrays idx iorefs
 
         (r, g, b) <- fmap colorToRGB . flip evalStateT iorefs $ do
           update bindingEvidence (Proxy @InternalX) RealType x

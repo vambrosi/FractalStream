@@ -1,0 +1,58 @@
+# Smooth (Green's-function) escape-rate picture of the Mandelbrot set, drawn with
+# a MULTI-STATEMENT user-defined function: `define` with local variables and a
+# `while` loop, called in statement position. This is the same shape as
+# saddledrop-full's `potential`, so it exercises/de-risks that machinery on its own.
+#
+# For parameter c, iterate x <- x^2 + c from x = 0 until escape; the smooth
+# potential log|x| / 2^n approximates the Green function G+(c) of the Mandelbrot
+# set (0 inside, growing outside).
+#
+# Features exercised: compound user-defined function (locals + `while` + reassignment)
+# called as `r <- greenRate(c)`, config variables, `log`, `cycle`, integer power.
+#
+# EXPECTED:
+#   The Mandelbrot set in black, surrounded by smooth blue->white level sets of the
+#   escape rate. No hard integer bands, no seams.
+#
+# WHAT AN ERROR LOOKS LIKE:
+#   - Flat / structureless     -> the function body or loop didn't run.
+#   - Hard integer "bands"     -> the smooth log(|x|)/2^n term is wrong.
+#   - All black                -> the escape test never triggers.
+
+viewer:
+  style: complex-plane
+  title: "Mandelbrot escape rate (compound function + while loop)"
+  size: 512x512
+  resizable: true
+  z-coord: c
+  initial-center: "-0.5"
+  initial-pixel-size: 1/128
+  escape-radius: escapeR
+  iteration-limit: maxIters
+  code: |
+    define greenRate(c0):
+        x : C <- 0
+        n : Z <- 0
+        while |x| < escapeR and n < maxIters:
+            x <- x^2 + c0
+            n <- n + 1
+        greenRate <- if |x| >= escapeR then log(|x|) / (2 ^ n) else 0
+
+    r : R <- 0
+    r <- greenRate(c)
+    color <- if r <= 0 then black else cycle(r, blue, white)
+
+configuration:
+  title: Configuration
+  size: 400x160
+  vertical-contents:
+    - text-entry:
+        label: "Max. iterations:"
+        value: "100"
+        type: Z
+        variable: maxIters
+    - text-entry:
+        label: "Escape radius:"
+        value: "10"
+        type: R
+        variable: escapeR

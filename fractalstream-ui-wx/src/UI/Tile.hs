@@ -6,6 +6,7 @@ module UI.Tile ( Tile()
                , renderTile
                , cancelTile
                , tileRect
+               , tileFieldGeometry
                , ifModified
                , ifElseModified
                , withSynchedTileBuffer
@@ -16,6 +17,7 @@ import FractalStream.Prelude
 import Task.Block
 import Task.Concurrent
 import Data.Planar
+import Actor.Field (ContinuationField, freeContinuationField, FieldGeometry(..))
 
 import Data.Color
 
@@ -41,11 +43,19 @@ data Tile = Tile
       -- ^ The worker thread which is drawing this tile.
     , shouldRedrawTile :: MVar ()
       -- ^ A value which signals that the tile needs to be redrawn.
+    , tileField        :: Maybe ContinuationField
+      -- ^ The continuation field this tile's kernel reads, if any. Owned by the
+      --   tile and freed by 'cancelTile' after the worker has terminated.
     }
 
--- | Cancel the tile, but don't wait for it to finish
+-- | Cancel the tile, but don't wait for it to finish. Frees the tile's
+-- continuation field (if any) only *after* the worker has actually stopped, so
+-- no in-flight render reads freed memory (mirrors the arena drain-before-free
+-- discipline in the LLVM backend).
 cancelTile :: Tile -> IO ()
-cancelTile = void . forkIO . cancel . tileWorker
+cancelTile tile = void . forkIO $ do
+  cancel (tileWorker tile)
+  maybe (pure ()) freeContinuationField (tileField tile)
 
 withSynchedTileBuffer :: Tile -> (Ptr Word8 -> IO b) -> IO b
 withSynchedTileBuffer tile action = synchedWith (tileBuffer tile) (`withForeignPtr` action)
@@ -79,10 +89,13 @@ renderTile :: Bool -- ^ Use smoothing?
            -> Rectangle (Double, Double)
               -- ^ The region of the dynamical plane corresponding
               --   to this tile.
+           -> Maybe ContinuationField
+              -- ^ The continuation field the action reads (already baked into
+              --   the action); owned by this tile and freed on 'cancelTile'.
            -> IO Tile      -- ^ An action which allocates the tile and
                            --   forks a task which draws into it.
 
-renderTile smooth renderingAction (width, height) mRect = do
+renderTile smooth renderingAction (width, height) mRect field = do
 
     -- Allocate an red/green/blue pixel byte for each point in the tile
     buf <- mallocForeignPtrBytes (3 * width * height)
@@ -119,4 +132,25 @@ renderTile smooth renderingAction (width, height) mRect = do
                 , tileBuffer = managedBuf
                 , tileWorker = worker
                 , shouldRedrawTile = redraw
+                , tileField = field
                 }
+
+-- | The continuation field grid for a tile: same pixel→model mapping the block
+-- renderer uses (so a kernel can reproject each pixel coordinate back to a field
+-- index). Kept consistent with 'renderTile' by sharing 'iRect'/'coordToModel'.
+tileFieldGeometry :: (Int, Int) -> Rectangle (Double, Double) -> FieldGeometry
+tileFieldGeometry (width, height) mRect =
+  let iRect = rectangle (ImagePoint (0,0))
+                        (ImagePoint (fromIntegral width, fromIntegral height))
+      coordToModel = convertRect iRect mRect . fromCoords
+      (mRectWidth, mRectHeight) = dimensions mRect
+      (ox, oy) = coordToModel (0, 0)
+  in FieldGeometry { fgOriginX = ox, fgOriginY = oy
+                   , fgDX = mRectWidth / fromIntegral width
+                     -- The renderer steps a pixel's y as `y0 - row*deltaY`, and
+                     -- the block's deltaY is itself negative, so the field's
+                     -- per-row step is `-deltaY` = +(mRectHeight/height). Using
+                     -- the wrong sign reprojects every row but the first out of
+                     -- bounds (they then read the output defaults).
+                   , fgDY = mRectHeight / fromIntegral height
+                   , fgWidth = width, fgHeight = height }

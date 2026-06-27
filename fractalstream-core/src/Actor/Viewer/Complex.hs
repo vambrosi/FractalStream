@@ -1,6 +1,10 @@
 {-# language OverloadedStrings, RequiredTypeArguments #-}
 module Actor.Viewer.Complex
   ( ComplexViewer(..)
+  , PrepOutputSpec(..)
+  , PrepRaw(..)
+  , ContinuationRaw(..)
+  , anchorFunction
 --  , listenForChanges
   ) where
 
@@ -32,7 +36,7 @@ data PrepOutputSpec = PrepOutputSpec
   { posVariable :: String
   , posType     :: String
   , posDefault  :: String
-  } deriving (Eq)
+  } deriving (Eq, Show)
 
 instance FromJSON PrepOutputSpec where
   parseJSON = withObject "prep output" $ \o ->
@@ -49,7 +53,7 @@ instance ToJSON PrepOutputSpec where
 data PrepRaw = PrepRaw
   { prOutputs :: [PrepOutputSpec]
   , prCode    :: String
-  } deriving (Eq)
+  } deriving (Eq, Show)
 
 instance FromJSON PrepRaw where
   parseJSON = withObject "preparation" $ \o ->
@@ -62,6 +66,33 @@ instance ToJSON PrepRaw where
     ]
 
 instance Codec PrepRaw where codec = aeson
+
+-- | Raw (pre-type-checked) continuation script. Like 'PrepRaw' (reuses the same
+-- 'PrepOutputSpec' output declarations and a code block), but additionally names
+-- the continued unknown and the first-point anchor. The engine seeds 'crUnknown'
+-- from the previous point's published solution as it walks the tile; 'crAnchor'
+-- supplies the unknown's initial guess at the very first point only.
+data ContinuationRaw = ContinuationRaw
+  { crUnknown :: String           -- ^ the continued variable
+  , crAnchor  :: String           -- ^ initial guess for the unknown at point 0
+  , crOutputs :: [PrepOutputSpec]
+  , crCode    :: String
+  } deriving (Eq, Show)
+
+instance FromJSON ContinuationRaw where
+  parseJSON = withObject "continuation" $ \o ->
+    ContinuationRaw <$> o .: "unknown" <*> o .: "anchor"
+                    <*> o .: "outputs" <*> o .: "code"
+
+instance ToJSON ContinuationRaw where
+  toJSON ContinuationRaw{..} = object
+    [ "unknown" .= crUnknown
+    , "anchor"  .= crAnchor
+    , "outputs" .= crOutputs
+    , "code"    .= crCode
+    ]
+
+instance Codec ContinuationRaw where codec = aeson
 
 -- | Existential packaging of both 'prepOutputEnv' and 'combinedEnv' so that
 -- both type variables are simultaneously in scope when constructing
@@ -110,6 +141,65 @@ buildMergedPrep configCtx (Just (PrepRaw outputs codeStr)) =
           withEnvironment (contextToEnv combinedCtx) $
             Right (MergedPrep (contextToEnv prepCtx) combinedCtx (Just codeStr))
 
+-- | Like 'MergedPrep', but also folds in the continuation outputs and the
+-- continued unknown. 'combinedEnv' is config ++ prep outputs ++ continuation
+-- outputs ++ {unknown}; the body and the continuation code are both parsed in it.
+-- Exposes the prep output env, the continuation output env (the field arrays),
+-- and — when a continuation block is present — the unknown name, parsed anchor,
+-- and continuation code string.
+data MergedViewer where
+  MergedViewer :: ( KnownEnvironment prepOutputEnv
+                  , KnownEnvironment contOutputEnv
+                  , KnownEnvironment combinedEnv )
+               => EnvironmentProxy prepOutputEnv
+               -> EnvironmentProxy contOutputEnv
+               -> Context DynamicValue combinedEnv
+               -> Maybe String                            -- ^ prep code string
+               -> Maybe (String, Complex Double -> Complex Double, String)
+                  -- ^ (unknown, anchor-as-function-of-coord, cont code)
+               -> MergedViewer
+
+-- | The continuation anchor: either the coordinate itself (@anchor: c@, becomes
+-- @id@) or a constant expression (becomes @const k@). @coordName@ is the viewer's
+-- z-coordinate variable name. Fuller anchor expressions (e.g. @c/2@) are future.
+anchorFunction :: String -> String -> Either String (Complex Double -> Complex Double)
+anchorFunction coordName anchorStr
+  | unwords (words anchorStr) == unwords (words coordName) = Right id
+  | otherwise = case parseConstant' ComplexType anchorStr of
+      Left err -> Left ("continuation anchor: " ++ err)
+      Right k  -> Right (const k)
+
+buildMergedViewer :: forall configEnv
+                   . KnownEnvironment configEnv
+                  => Context DynamicValue configEnv
+                  -> Maybe PrepRaw
+                  -> Maybe ContinuationRaw
+                  -> String                 -- ^ z-coordinate variable name
+                  -> Either String MergedViewer
+buildMergedViewer configCtx mPrepRaw mContRaw coordName =
+  case buildMergedPrep configCtx mPrepRaw of
+    Left err -> Left err
+    Right (MergedPrep prepEnvProxy ctx1 mPrepCode) -> case mContRaw of
+      Nothing ->
+        Right (MergedViewer prepEnvProxy EmptyEnvProxy ctx1 mPrepCode Nothing)
+      Just (ContinuationRaw unknown anchorStr contOutputs contCode) ->
+        case anchorFunction coordName anchorStr of
+          Left err -> Left err
+          Right anchorVal -> case buildPrepCtxFromSpecs contOutputs of
+            Left err -> Left err
+            Right (SomeContext contCtx) ->
+              case buildPrepCtxFromSpecs [PrepOutputSpec unknown "C" "0"] of
+                Left err -> Left err
+                Right (SomeContext unkCtx) -> case ctx1 <#> contCtx of
+                  Left err -> Left err
+                  Right ctx2 -> case ctx2 <#> unkCtx of
+                    Left err -> Left err
+                    Right ctx3 ->
+                      withEnvironment (contextToEnv contCtx) $
+                        withEnvironment (contextToEnv ctx3) $
+                          Right (MergedViewer prepEnvProxy (contextToEnv contCtx)
+                                   ctx3 mPrepCode (Just (unknown, anchorVal, contCode)))
+
 data ComplexViewer = ComplexViewer
   { cvTitle :: Parsed String
   , cvSize :: Variable Dimensions
@@ -123,6 +213,7 @@ data ComplexViewer = ComplexViewer
   , cvVanishRadius :: Parsed (Maybe ParsedValue)
   , cvIterationLimit :: Parsed (Maybe ParsedValue)
   , cvPrep :: Variable (Maybe PrepRaw)
+  , cvContinuation :: Variable (Maybe ContinuationRaw)
   , cvCode :: Mapped CodeString (Either (SourceRange, String) SomeViewerWithContext)
   --, cvOverlay :: Variable (Maybe String)
   , cvTools :: Variable [Tool]
@@ -153,6 +244,7 @@ instance CodecWith ScriptDependencies ComplexViewer where
       s  -> fmap Just . left (`ppFullError` s) . parseParsedValue Map.empty $ s
 
     prep   <-cvPrep-< keyWithDefaultValue Nothing "preparation"
+    cont   <-cvContinuation-< keyWithDefaultValue Nothing "continuation"
 
     code   <-cvCode-< mapped (key "code") $ \use -> do
       let complain err = pure . const . Left . (NoSourceRange,)
@@ -164,11 +256,16 @@ instance CodecWith ScriptDependencies ComplexViewer where
           Left err -> complain err
           Right (SomeContext (configCtx :: Context DynamicValue configEnv)) -> do
             mPrepRaw <- dyn (use prep)
-            case buildMergedPrep configCtx mPrepRaw of
+            mContRaw <- dyn (use cont)
+            -- z-coord name, for resolving `anchor: c` (coordinate-relative). If
+            -- the coord errored it surfaces later via vcCoord; "" is a safe filler.
+            coordName <- either (const "") id <$> dyn (use coord)
+            case buildMergedViewer configCtx mPrepRaw mContRaw coordName of
               Left err -> complain err
-              Right (MergedPrep (prepEnvProxy :: EnvironmentProxy prepOutputEnv)
-                                (combinedCtx :: Context DynamicValue combinedEnv)
-                                mPrepCodeStr) -> do
+              Right (MergedViewer (prepEnvProxy :: EnvironmentProxy prepOutputEnv)
+                                  (contOutputEnvProxy :: EnvironmentProxy contOutputEnv)
+                                  (combinedCtx :: Context DynamicValue combinedEnv)
+                                  mPrepCodeStr mContInfo) -> do
                 let env = contextToEnv combinedCtx
                     vcContext = combinedCtx
                     assertAbsentViewerArgs :: forall e t
@@ -255,7 +352,16 @@ instance CodecWith ScriptDependencies ComplexViewer where
                                        & letInEnv (fromMaybe (Const (Scalar typeProxy 0.0001)) (vcVanishes args))
                                  pure (Just (PrepScript prepEnvProxy prepCode))
                              viewerCode <- parseViewerScript mpx args (CodeString viewerSrc)
-                             pure (SomeViewerWithContext combinedCtx mPrepScript viewerCode)
+                             -- The continuation code is coordinate-aware and uses
+                             -- `solve` exactly like a viewer body, so it parses with
+                             -- the same machinery in the same (merged) env.
+                             mContScript <- case mContInfo of
+                               Nothing -> pure Nothing
+                               Just (unknownName, anchorVal, contSrc) -> do
+                                 contCode <- parseViewerScript mpx args (CodeString contSrc)
+                                 pure (Just (ContinuationScript contOutputEnvProxy
+                                               unknownName anchorVal contCode))
+                             pure (SomeViewerWithContext combinedCtx mPrepScript mContScript viewerCode)
                       of
                         Nothing -> pure . const . Left . (NoSourceRange,) $ "INTERNAL ERROR: redefined internal argument"
                         Just fn -> pure fn
@@ -270,4 +376,4 @@ instance CodecWith ScriptDependencies ComplexViewer where
 
     tools  <-cvTools-< optionalField "tools" (newVariable []) (fmap null . getDynamic) $ do
       codecWith ctx'
-    build ComplexViewer title size pos resize center pxSize coord pixel esc van iter prep code tools
+    build ComplexViewer title size pos resize center pxSize coord pixel esc van iter prep cont code tools

@@ -24,6 +24,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Planar
 
 import UI.Tile
+import Actor.Field (ContinuationField)
 import UI.Layout
 import UI.Widgets
 
@@ -414,7 +415,7 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow confi
 
     lastRenderAction <- newMVar (\_ _ _ _ _ _ -> pure ())
 
-    let getRenderAction = case vCodeWithArgs of
+    let getRenderAction (field :: Maybe ContinuationField) = case vCodeWithArgs of
           CodeWithArgs vGetArgs _ vCode -> do
             vGetArgs >>= \case
               Left err   -> do
@@ -430,9 +431,18 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow confi
                           vaSubsamples = fromIntegral subsamples
                           vaPoint = (x, y)
                           vaStep  = (dx, dy)
+                          vaContinuationField = field
                       vf ViewerArgs{..}
                 modifyMVar_ lastRenderAction (\_ -> pure action)
                 pure action
+
+    -- Run the continuation field pass once for a tile of the given size at the
+    -- current view, producing a freshly-allocated field (or Nothing if the
+    -- viewer has no continuation block). The tile that reads it owns it.
+    let computeTileField (w, h) = do
+          mdl <- get model value
+          let geom = tileFieldGeometry (w, h) (modelToRect @(Double,Double) (w, h) mdl)
+          maybe (pure Nothing) ($ geom) vContinuationField
 
     renderId <- newIORef (0 :: Int)
 
@@ -441,8 +451,9 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow confi
     pendingResize <- variable [value := False]
 
     viewerTile     <- do
-      renderAction <- getRenderAction
-      renderTile' renderId True renderAction (width, height) model
+      field <- computeTileField (width, height)
+      renderAction <- getRenderAction field
+      renderTile' renderId True renderAction (width, height) model field
     currentTile    <- variable [value := viewerTile]
     savedTileImage <- variable [value := Nothing]
     lastTileImage  <- variable [value := Nothing]
@@ -472,9 +483,10 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow confi
           setValue' vCenter    newCenter
           setValue' vPixelSize newPixelSize
           get currentTile value >>= cancelTile
-          renderAction <- getRenderAction
+          field <- computeTileField (w, h)
+          renderAction <- getRenderAction field
           smoothing <- get useSmoothing value
-          newViewerTile <- renderTile' renderId smoothing renderAction (w, h) model
+          newViewerTile <- renderTile' renderId smoothing renderAction (w, h) model field
           set currentTile [ value := newViewerTile ]
           startAnimatingFrom oldModel
           void $ tryPutMVar needToSendRefreshEvent ()
@@ -1083,14 +1095,15 @@ renderTile' :: Valued w
             -> BlockComputeAction
             -> (Int, Int)
             -> w Model
+            -> Maybe ContinuationField
             -> IO Tile
-renderTile' renderId smooth action dim model = do
+renderTile' renderId smooth action dim model field = do
     iD <- atomicModifyIORef' renderId (\x -> (x + 1, x + 1))
     modelRect <- modelToRect dim <$> get model value
     let action' p q r x y c = do
             curId <- readIORef renderId
             if (curId == iD) then action p q r x y c else pure ()
-    renderTile smooth action' dim modelRect
+    renderTile smooth action' dim modelRect field
 
 drawCenteredImage :: Image b -> DC d -> Rect -> (Int,Int) -> IO ()
 drawCenteredImage img dc windowRect (width, height) = do
