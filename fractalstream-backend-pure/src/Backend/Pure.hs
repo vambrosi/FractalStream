@@ -10,7 +10,7 @@ import Language.Code
 import Language.Code.InterpretIO
 import Language.Value.Evaluator (HaskellValue)
 import Actor.Viewer
-import Actor.Field (ContinuationField(..), overrideFromField, reprojectIndex)
+import Actor.Field (ContinuationField(..), overrideFromField, reprojectIndex, markHasSeed)
 import Data.Indexed.Functor
 import Data.Color (colorToRGB, grey)
 
@@ -19,13 +19,9 @@ import Data.IORef
 
 interpretViewer :: forall env t. MissingViewerArgs env
                 => Maybe (PrepScript env)
-                -> Maybe (ContinuationScript env)
                 -> Code (ViewerEnv env)
                 -> (ViewerFunction env -> IO t) -> IO t
--- The pure backend reads the continuation field per pixel via
--- 'vaContinuationField' (see below), so it needs nothing from the
--- 'ContinuationScript' at compile time.
-interpretViewer mPrepScript _mContScript body action = do
+interpretViewer mPrepScript body action = do
   let env = toIndex body
   withEnvironment env $ action $ ViewerFunction $ \ViewerArgs{..} -> do
     let (x0, y0) = vaPoint
@@ -52,7 +48,11 @@ interpretViewer mPrepScript _mContScript body action = do
           Just (ContinuationField outEnv arrays geom) ->
             case reprojectIndex geom (x :+ y) of
               Nothing  -> pure ()
-              Just idx -> overrideFromField env outEnv arrays idx iorefs
+              Just idx -> do
+                overrideFromField env outEnv arrays idx iorefs
+                -- Mark that a field seed is available, so a `continuing` solve
+                -- seeds from it rather than the cold-start anchor.
+                markHasSeed env iorefs
 
         (r, g, b) <- fmap colorToRGB . flip evalStateT iorefs $ do
           update bindingEvidence (Proxy @InternalX) RealType x

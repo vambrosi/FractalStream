@@ -141,6 +141,11 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
 
   upTo <- rule (lit "up" *> lit "to" *> value <* token TimesKeyword)
 
+  -- Optional `continuing seed` modifier on `solve`/`preimage`: when present, the
+  -- solve is block-seeded from a precomputed coarse field (continuity across the
+  -- plane) instead of from the unknown's per-pixel value.
+  continuingSeed <- rule (((lit "continuing" *> lit "seed") $> True) <|> pure False)
+
   elseIf <- ruleChoice
     [ ((token Else *> colon *> nl) *> block) <?> "else clause"
     , check
@@ -174,14 +179,16 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
         <$> (lit "solve" *> ident <* token RightArrow)
         <*> value
         <*> optional (lit "within" *> value)
-        <*> optional upTo) <?> "solve statement"
+        <*> optional upTo
+        <*> continuingSeed) <?> "solve statement"
     , check
       (tcPreimage
         <$> (lit "preimage" *> ident <* token RightArrow)
         <*> value
         <*> (lit "of" *> value)
         <*> optional (lit "within" *> value)
-        <*> optional upTo) <?> "preimage statement"
+        <*> optional upTo
+        <*> continuingSeed) <?> "preimage statement"
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 

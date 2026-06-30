@@ -9,7 +9,7 @@ import Language.Value.Parser
 import Language.Code
 import Language.Draw
 import Language.Parser.SourceRange
-import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck, InternalSolution)
+import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck, InternalSolution, InternalContSeed, InternalHasSeed)
 import Language.Value.Derivative (derivative)
 
 import Data.Color (black)
@@ -131,8 +131,16 @@ tcSolve :: String              -- ^ the unknown variable's name
         -> ParsedValue         -- ^ the equation body @F@
         -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause)
         -> Maybe ParsedValue   -- ^ optional iteration limit (@up to N times@)
+        -> Bool                -- ^ @continuing seed@: block-seed from a coarse field
         -> CheckedCode
-tcSolve var pF mtol mlimit sr (env :: EnvironmentProxy env) = do
+-- When @continuing@ is set (`solve … continuing seed`), the unknown is seeded
+-- from the engine's continuation field rather than its per-pixel value: the
+-- lowering reads the incoming seed from @[internal] continuation seed@ (when
+-- @[internal] continuation has seed@ is true; otherwise it keeps the unknown's
+-- current value as the cold-start anchor) and writes the result back into the
+-- same variable so the field captures the cell's solution. The pre-pass and the
+-- per-pixel render fill those variables (RW3–RW5).
+tcSolve var pF mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
 
   SomeSymbol zname <- pure (someSymbolVal var)
   FoundVar (zty :: TypeProxy zty) zpfEnv <- findVar sr zname env
@@ -186,15 +194,44 @@ tcSolve var pF mtol mlimit sr (env :: EnvironmentProxy env) = do
           iterations = Proxy @InternalIterations
           stuck      = Proxy @InternalStuck
           solution   = Proxy @InternalSolution
+          stuckCond  = Eql IntegerType counter limit   -- hit the budget => didn't converge
+          nan        = 0/0 :: Double
+          nanSolution = Const (Scalar ComplexType (nan :+ nan))
       ipf  <- findVarAtType sr iterations IntegerType env''
       spf  <- findVarAtType sr stuck      BooleanType env''
       solpf <- findVarAtType sr solution  ComplexType env''
-      pure $ Block
+
+      -- For a `continuing` solve: seed the unknown from the continuation field
+      -- variable (prefix) when a seed is available, and capture the result back
+      -- into it (suffix) so the field stores this cell's solution.
+      (contPrefix, contSuffix) <- if continuing
+        then case zty of
+          ComplexType -> do
+            cpf <- findVarAtType sr (Proxy @InternalContSeed) ComplexType env''
+            hpf <- findVarAtType sr (Proxy @InternalHasSeed)  BooleanType env''
+            let seedInject =
+                  IfThenElse (Var (Proxy @InternalHasSeed) BooleanType hpf)
+                    (Set zpf zname (Var (Proxy @InternalContSeed) ComplexType cpf))
+                    NoOp
+                captureSol =
+                  Set cpf (Proxy @InternalContSeed)
+                    (Var solution ComplexType solpf)
+            pure ([seedInject], [captureSol])
+          _ -> throwError (Advice sr
+                 "`solve … continuing seed` currently supports a complex unknown only.")
+        else pure ([], [])
+
+      pure $ Block $ contPrefix ++
         [ IfThenElse c' (DoWhile c' b') NoOp
         , Set ipf  iterations counter
-        , Set spf  stuck      (Eql IntegerType counter limit)
-        , Set solpf solution  solutionVal              -- publish the root
+        , Set spf  stuck      stuckCond
+        -- Publish the root, or NaN if Newton did not converge, so a failure
+        -- propagates into anything that reads `solution` instead of leaving a
+        -- plausible-looking last iterate.
+        , Set solpf solution
+            (withEnvironment env'' $ ITE ComplexType stuckCond nanSolution solutionVal)
         , Set zpf  zname      (Var saveName zty savePf) ]  -- restore the unknown
+        ++ contSuffix
 
 -- | Differentiate a closed-form equation body, turning the internal
 -- 'DiffNotImplemented' (thrown on loops / unsupported nodes) into a clear
@@ -211,7 +248,7 @@ diffClosedForm sr var z f = catchError (derivative sr z sr f) $ \case
 -- sugar for @solve z -> F - v@ (same machinery; @v@ is
 -- constant w.r.t. @z@, so @F'@ is unchanged).
 tcPreimage :: String -> ParsedValue -> ParsedValue
-           -> Maybe ParsedValue -> Maybe ParsedValue -> CheckedCode
+           -> Maybe ParsedValue -> Maybe ParsedValue -> Bool -> CheckedCode
 tcPreimage var pF pV = tcSolve var (subParsed pF pV)
 
 -- | The 'ParsedValue' @F - v@ (real or complex), used to desugar @preimage@.

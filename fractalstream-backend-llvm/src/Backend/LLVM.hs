@@ -39,6 +39,8 @@ import Language.Value.Evaluator (HaskellValue)
 import Language.Value.Transform
 import Language.Code
 import Language.Code.InterpretIO (interpretToIOWithLastValues)
+import Language.Value.Typecheck (internalContSeed, InternalContSeed)
+import qualified Data.Set as Set
 import Actor.Viewer
 import Actor.Field
   (withPrepArrays, writePrepOutputsFromMap, noPrepDraw,
@@ -159,25 +161,29 @@ withPrepEnvProxy :: Maybe (PrepScript env)
 withPrepEnvProxy Nothing                       k = k EmptyEnvProxy
 withPrepEnvProxy (Just (PrepScript proxy _))   k = k proxy
 
--- | Like 'withPrepEnvProxy' but for the continuation output environment.
-withContEnvProxy :: Maybe (ContinuationScript env)
-                 -> (forall contOutputEnv. EnvironmentProxy contOutputEnv -> IO r)
-                 -> IO r
-withContEnvProxy Nothing                              k = k EmptyEnvProxy
-withContEnvProxy (Just (ContinuationScript proxy _ _ _ _)) k = k proxy
+-- | The continuation output environment for a viewer with a `solve … continuing
+-- seed` is the single internal continuation-seed variable; we detect it by that
+-- variable's use in the (typechecked) code. No continuing solve ⇒ empty env ⇒ no
+-- field parameters in the compiled kernel.
+withAutoContEnvProxy :: Code env'
+                     -> (forall contOutputEnv. EnvironmentProxy contOutputEnv -> IO r)
+                     -> IO r
+withAutoContEnvProxy code k
+  | internalContSeed `Set.member` execState (usedVarsInCode code) Set.empty
+    = k (envProxy (Proxy @('[ '(InternalContSeed, 'ComplexT) ])))
+  | otherwise = k EmptyEnvProxy
 
 withJittedViewer :: forall env t. (MissingViewerArgs env, KnownEnvironment env)
                  => LLVMJit
                  -> Maybe (PrepScript env)
-                 -> Maybe (ContinuationScript env)
                  -> Code (ViewerEnv env)
                  -> (ViewerFunction env -> IO t) -> IO t
-withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript mContScript code0 action = do
+withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript code0 action = do
   -- Do some basic AST-level optimizations first
   let code = transformValues (integerPowers . avoidSqrt) code0
   name <- modifyMVar nextId (\n -> pure (n + 1, "kernel_" ++ show n))
   withPrepEnvProxy mPrepScript $ \prepEnvProxy ->
-   withContEnvProxy mContScript $ \contEnvProxy -> do
+   withAutoContEnvProxy code $ \contEnvProxy -> do
     m <- either error pure (compileRenderer' prepEnvProxy contEnvProxy (fromString name) code)
     withContext $ \ctx ->
       withModuleFromAST ctx m $ \md -> do

@@ -29,9 +29,13 @@ module Actor.Field
   , coarsenGeometry
     -- * Continuation driver
   , runContinuationField
+  , runAutoContinuationField
+  , coarsenGeometryCentered
+  , overrideBoolByName
     -- * Reading a computed field at render time
   , ContinuationField(..)
   , overrideFromField
+  , markHasSeed
     -- * Persistent field allocation + context helpers
   , mallocFieldArrays
   , freeContinuationField
@@ -45,7 +49,7 @@ import Language.Environment
 import Language.Code (Code)
 import Language.Code.InterpretIO (interpretToIOWithLastValues, ScalarIORefM, IORefTypeOfBinding)
 import Language.Value.Evaluator (HaskellValue)
-import Language.Value.Typecheck (InternalStuck)
+import Language.Value.Typecheck (InternalStuck, InternalContSeed, InternalHasSeed)
 import Language.Draw (DrawHandler(..))
 import Data.Color (colorToRGB)
 
@@ -160,6 +164,24 @@ coarsenGeometry d g
                   , fgHeight = ceilDiv (fgHeight g) d }
   where ceilDiv a b = (a + b - 1) `div` b
 
+-- | Like 'coarsenGeometry', but place each coarse point at the *centre* of its
+-- @d x d@ cell (origin shifted by half a cell) instead of the cell's corner. The
+-- nearest-grid read then maps every pixel to the seed inside its own cell — no
+-- cross-block bleed — and the seed is the representative centre of the points it
+-- serves.
+coarsenGeometryCentered :: Int -> FieldGeometry -> FieldGeometry
+coarsenGeometryCentered d g
+  | d <= 1    = g
+  | otherwise =
+      let half = 0.5 * fromIntegral d
+      in g { fgOriginX = fgOriginX g + half * fgDX g
+           , fgOriginY = fgOriginY g + half * fgDY g
+           , fgDX = fgDX g * fromIntegral d
+           , fgDY = fgDY g * fromIntegral d
+           , fgWidth  = ceilDiv (fgWidth g)  d
+           , fgHeight = ceilDiv (fgHeight g) d }
+  where ceilDiv a b = (a + b - 1) `div` b
+
 -- | Map a model coordinate to the nearest field point's flat index, or
 -- 'Nothing' if it falls outside the field grid. Inverse of 'pointCoord' (rounded
 -- to the nearest grid point). This is how a per-pixel kernel reads a tile field:
@@ -245,6 +267,49 @@ runContinuationField outputEnv code anchorAt mkContext geom arrays =
               Just (SomeHaskellType BooleanType b) -> b
               _                                    -> False
 
+-- | The pre-pass for an automatic (`solve … continuing seed`) continuation: run
+-- the *viewer code* itself at each (centred, coarse) cell in serpentine order,
+-- threading the continued seed across cells, and store each cell's solution.
+--
+-- @mkContext coord mSeed@ builds the cell's context: @mSeed = Just s@ for a
+-- threaded cell (set @[internal] continuation seed@ = @s@ and @… has seed@ =
+-- True) or @Nothing@ for a cold-start cell (@has seed@ = False, so the solve uses
+-- the unknown's current value as the anchor). The field's single output is
+-- @[internal] continuation seed@, which the continuing-solve lowering overwrites
+-- with this cell's solution (NaN if it didn't converge). A non-converged cell is
+-- stored as NaN but does not poison the thread — the last converged solution is
+-- carried forward.
+runAutoContinuationField
+  :: forall env outputEnv
+   . EnvironmentProxy outputEnv
+  -> Code env
+  -> (Complex Double -> Maybe (Complex Double) -> Context HaskellValue env)
+  -> FieldGeometry
+  -> [Ptr Word8]
+  -> IO ()
+runAutoContinuationField outputEnv code mkContext geom arrays =
+    go Nothing (serpentineOrder (fgWidth geom) (fgHeight geom))
+  where
+    go :: Maybe (Complex Double) -> [(Int, Int)] -> IO ()
+    go _         []               = pure ()
+    go mLastGood ((col, row):pts) = do
+      iorefs <- mapContextM (\_ _ -> newIORef)
+                  (mkContext (pointCoord geom col row) mLastGood)
+      (lastVals, _) <- execStateT
+        (interpretToIOWithLastValues noPrepDraw code)
+        (Map.empty, iorefs)
+      writePrepOutputsFromMap outputEnv arrays lastVals (fieldIndex geom col row)
+      go (nextGood lastVals mLastGood) pts
+
+    -- Thread the captured solution (the field output @contSeed@) forward, unless
+    -- it is NaN (did not converge), in which case keep the last good one.
+    nextGood :: Map.Map String SomeHaskellType
+             -> Maybe (Complex Double) -> Maybe (Complex Double)
+    nextGood vals lastGood = case Map.lookup (symbolVal (Proxy @InternalContSeed)) vals of
+      Just (SomeHaskellType ComplexType v)
+        | not (isNaN (realPart v)) -> Just v
+      _                            -> lastGood
+
 -- | A computed continuation field handed to the render pass: the published
 -- output variables, one flat byte array per output (env order), and the grid
 -- geometry. The per-pixel kernel reprojects its coordinate onto this grid and
@@ -278,6 +343,15 @@ overrideFromField fullEnv outputEnv arrays idx ctx = go outputEnv arrays
       go env' ptrs
     go _ _ = pure ()
 
+-- | Set the continuation @hasSeed@ flag to True in a render context (called per
+-- pixel when a field is present, so the continuing-solve seeds from the field's
+-- value rather than falling back to the cold-start anchor). No-op if the viewer
+-- has no continuing solve (the variable is still in the env, just unused).
+markHasSeed :: EnvironmentProxy fullEnv -> Context IORefTypeOfBinding fullEnv -> IO ()
+markHasSeed fullEnv ctx = case lookupEnv (Proxy @InternalHasSeed) BooleanType fullEnv of
+  Found pf -> writeIORef (getBinding ctx pf) True
+  _        -> pure ()
+
 -- | Allocate one zeroed @Ptr Word8@ array per variable in @env@, sized for
 -- @nPoints@. Unlike 'withPrepArrays' (stack-scoped), these are heap-allocated
 -- and persist until 'freeContinuationField' is called — needed because the field
@@ -306,3 +380,13 @@ overrideComplexByName nm v = \case
   Bind name ty val rest -> case ty of
     ComplexType | symbolVal name == nm -> Bind name ty v    (overrideComplexByName nm v rest)
     _                                  -> Bind name ty val  (overrideComplexByName nm v rest)
+
+-- | Replace the value of the boolean-typed binding named @nm@ in a runtime
+-- context (used to set the continuation @hasSeed@ flag per cell).
+overrideBoolByName
+  :: String -> Bool -> Context HaskellValue e -> Context HaskellValue e
+overrideBoolByName nm v = \case
+  EmptyContext -> EmptyContext
+  Bind name ty val rest -> case ty of
+    BooleanType | symbolVal name == nm -> Bind name ty v   (overrideBoolByName nm v rest)
+    _                                  -> Bind name ty val (overrideBoolByName nm v rest)

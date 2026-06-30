@@ -28,6 +28,7 @@ import Unsafe.Coerce (unsafeCoerce)
 
 import Language.Type
 import Language.Code
+import Language.Value.Typecheck (internalHasSeed)
 import Data.Indexed.Functor
 
 toParameterList :: EnvironmentProxy env -> [(AST.Type, ParameterName)]
@@ -482,6 +483,13 @@ compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
             tooSmall <- icmp P.SLT g1 (C.int32 0)
             gIdx     <- select tooSmall (C.int32 0) g1
             overwritePrepOutputs contOutputEnv contArrayPtrs gIdx argMap
+            -- A continuation field is present (nCont > 0): mark hasSeed = True so
+            -- a `continuing` solve seeds from the field rather than the anchor.
+            when (nCont > 0) $ case Map.lookup internalHasSeed argMap of
+              Just (SomePtrOp BooleanType ptrOp) -> do
+                trueBit <- trunc (C.int8 1) AST.i1
+                storeOperand (BooleanOp trueBit) ptrOp
+              _ -> pure ()
 
           runReaderT (compileCode getExtern code) args
           (cr0, cg0, cb0) <- case getBinding args pfOutput of

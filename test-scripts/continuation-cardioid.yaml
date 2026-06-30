@@ -1,16 +1,17 @@
-# Main cardioid of the Mandelbrot set via `continuation` of the attracting ("alpha")
-# fixed point of f_c(z) = z^2 + c, using a `coordinate` anchor (`anchor: c`) and the
-# optional `within` / `up to ... times` controls on `solve`.
+# Main cardioid of the Mandelbrot set via `solve … continuing seed`, exercising
+# the optional `within` / `up to … times` controls on a *continuing* solve.
 #
 #   alpha is a solution to  w^2 - w + c = 0.  multiplier = |f_c'(alpha)| = |2 alpha|.
 #   |2 alpha| < 1  <=>  c is in the main cardioid (attracting fixed point) -> black.
 #
-# `anchor: c` seeds the very first pixel's Newton from the coordinate itself — a
-# good guess since alpha ~ c for small c — and continuation then carries that
-# branch across the whole plane (serpentine, neighbour-seeded).
+# `w : C <- c` is the cold-start anchor (used only at the first cell of the coarse
+# field; alpha ~ c for small c). `continuing seed` then carries that branch across
+# the whole plane (centred, coarse, serpentine, neighbour-seeded) and refines each
+# pixel from the nearest cell. The modifiers come last:
+#   solve w -> F within <tol> up to <N> times continuing seed
 #
-# Features tested: `continuation:` block, `anchor: c`, reading `solution`/`stuck`,
-# `solve ... within <tol> up to <N> times`, failure flag (`ok`) handled in the body.
+# Features tested: `continuing seed`, `within <tol>`, `up to <N> times`, reading
+# `solution`/`stuck`. Non-convergence -> `solution = NaN` -> handled by `if stuck`.
 #
 # EXPECTED:
 #   Main cardioid in black, smooth blue->white exterior level sets, NO row seams.
@@ -23,32 +24,19 @@
 
 viewer:
   style: complex-plane
-  title: "Main cardioid via continuation (anchor: c)"
+  title: "Main cardioid (continuing seed, within/up to)"
   size: 512x512
   resizable: true
   z-coord: c
   initial-center: "-0.4"
   initial-pixel-size: 1/200
   iteration-limit: maxIters
-
-  continuation:
-    unknown: w
-    anchor: c
-    outputs:
-      - variable: mult
-        type: R
-        default: "0"
-      - variable: ok
-        type: Boolean
-        default: "false"
-    code: |
-      solve w -> w^2 - w + c within 0.0000000001 up to 60 times
-      mult <- |2 * solution|
-      ok   <- not stuck
-
   code: |
-    if not ok:
-        color <- grey
+    w : C <- c
+    solve w -> w^2 - w + c within 0.0000000001 up to 60 times continuing seed
+    mult : R <- |2 * solution|
+    if stuck:
+        color <- black
     else if mult < 1:
         color <- black
     else:

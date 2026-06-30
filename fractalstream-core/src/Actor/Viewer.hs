@@ -10,7 +10,6 @@ module Actor.Viewer
   , MissingViewerArgs
   , SomeViewerWithContext(..)
   , PrepScript(..)
-  , ContinuationScript(..)
   , PrepArrayPtr
   , PrepArrays(..)
   , ViewerCompiler(..)
@@ -68,28 +67,8 @@ data SomeViewerWithContext where
      . MissingViewerArgs env
     => Context DynamicValue env
     -> Maybe (PrepScript env)
-    -> Maybe (ContinuationScript env)
     -> Code (ViewerEnv env)
     -> SomeViewerWithContext
-
--- | A continuation script that runs once per tile (a single-threaded, serpentine
--- pre-pass) before the parallel block renders. Like 'PrepScript' it publishes a
--- set of output variables (here @contOutputEnv@, e.g. @root@/@converged@) that the
--- compiled body reads; unlike prep it is coordinate-aware and threads a continued
--- unknown from point to point. The code is parsed in the same @ViewerEnv env@ as
--- the body (so it can @solve@ and set the outputs); the unknown variable is bound
--- in @env@ and seeded by the engine, starting from @anchor@ at the first point.
-data ContinuationScript (env :: Environment) where
-  ContinuationScript :: forall contOutputEnv env
-                      . KnownEnvironment contOutputEnv
-                     => EnvironmentProxy contOutputEnv  -- ^ published outputs (field arrays)
-                     -> String                          -- ^ continued unknown variable name
-                     -> (Complex Double -> Complex Double)
-                          -- ^ anchor: the unknown's seed at point 0, as a function
-                          --   of that point's coordinate (@const k@ or @id@ for @c@)
-                     -> Int                             -- ^ field-grid downsampling factor (pixels/axis)
-                     -> Code (ViewerEnv env)            -- ^ continuation code, typed in the body env
-                     -> ContinuationScript env
 
 -- | A preparation script that runs per-pixel in Haskell before the compiled viewer
 -- kernel. Its outputs are written into flat arrays that the kernel reads inside its
@@ -257,7 +236,6 @@ newtype ViewerCompiler = ViewerCompiler
   { withCompiledViewer :: forall env t
                         . (MissingViewerArgs env, KnownEnvironment env)
                        => Maybe (PrepScript env)
-                       -> Maybe (ContinuationScript env)
                        -> Code (ViewerEnv env)
                        -> (ViewerFunction env -> IO t)
                        -> IO t }

@@ -25,8 +25,10 @@ import Actor.Tool (Tool)
 import Actor.Viewer
 import Actor.Viewer.Complex
 import Actor.Field
-  (mallocFieldArrays, runContinuationField, ContinuationField(..),
-   FieldGeometry(..), overrideComplexByName, coarsenGeometry)
+  (mallocFieldArrays, runAutoContinuationField, ContinuationField(..),
+   FieldGeometry(..), overrideComplexByName, overrideBoolByName,
+   coarsenGeometryCentered)
+import Language.Value.Typecheck (internalContSeed, internalHasSeed, InternalContSeed)
 -- import Language.Type ( TypeProxy(..) )
 import Data.Color (grey)
 import Language.Environment
@@ -185,7 +187,7 @@ makeComplexViewer project jit mkViewer someContext configArgs showConfig rerunSe
         vSize     = cvSize
         vPosition = cvPosition
 
-    let scriptCode = cvCode <&> right (\(SomeViewerWithContext _ _ _ c) -> SomeCode c)
+    let scriptCode = cvCode <&> right (\(SomeViewerWithContext _ _ c) -> SomeCode c)
     scriptName <- newMapped (pure $ \n -> if null n then Left "Script title must be non-empty" else Right n)
                   vTitle
     scriptEnv <- newVariable (SomeEnvironment endOfDecls)
@@ -210,7 +212,7 @@ makeComplexViewer project jit mkViewer someContext configArgs showConfig rerunSe
         putStrLn ("Can't build viewer: " ++ err)
         void $ mkViewer project showConfig configArgs rerunSetup rebuildScript Viewer{..}
 
-      Right (SomeViewerWithContext context mprep mcont code) -> do
+      Right (SomeViewerWithContext context mprep code) -> do
 
         let env = contextToEnv context
             prepUsedVars = case mprep of
@@ -258,32 +260,36 @@ makeComplexViewer project jit mkViewer someContext configArgs showConfig rerunSe
           withSelectTool <- if coord `Map.member` envToMap env then (:) <$> makeSelectTool coord else pure id
           let vTools = withSelectTool <$> dyn cvTools
 
-          -- The continuation field pass: host-side (interpreted) for either
-          -- backend in the MVP — only the per-pixel read differs (the compiled
-          -- read is a later, add-allocator milestone). Builds a fresh field per
-          -- tile from live config args; the caller frees it once its tile is done.
-          let vContinuationField = case mcont of
-                Nothing -> Nothing
-                Just (ContinuationScript outEnv unkName anchor downsample contCode) -> Just $ \geom0 -> do
-                  eargs <- vGetArgs
-                  case eargs of
+          -- Automatic continuation: if the viewer code contains a
+          -- `solve … continuing seed` (detected by its use of the internal
+          -- continuation-seed variable), run the viewer code itself as a coarse,
+          -- centred, serpentine pre-pass (one solve per 8x8 cell = 4 per 16x16
+          -- block), threading the seed and storing each cell's solution. The
+          -- per-pixel render then seeds the solve from the nearest cell. Field
+          -- pass is host-side (interpreted) for both backends.
+          let hasContinuing =
+                internalContSeed `Set.member` execState (usedVarsInCode code) Set.empty
+              contSeedEnv = envProxy (Proxy @('[ '(InternalContSeed, 'ComplexT) ]))
+              autoDownsample = 8 :: Int   -- 4 seed points per 16x16 block
+              vContinuationField
+                | not hasContinuing = Nothing
+                | otherwise = Just $ \geom0 -> vGetArgs >>= \case
                     Left _ -> pure Nothing
                     Right argsCtx -> do
-                      -- Solve on a coarser grid (one point per downsample x downsample
-                      -- block); the per-pixel read reprojects to the nearest point.
-                      let geom = coarsenGeometry downsample geom0
-                      arrays <- mallocFieldArrays outEnv (fgWidth geom * fgHeight geom)
-                      let mkCtx contCoord seed =
-                              Bind (Proxy @InternalX)  RealType  (realPart contCoord)
-                            $ Bind (Proxy @InternalY)  RealType  (imagPart contCoord)
+                      let geom = coarsenGeometryCentered autoDownsample geom0
+                      arrays <- mallocFieldArrays contSeedEnv (fgWidth geom * fgHeight geom)
+                      let mkCtx cellCoord mSeed =
+                              Bind (Proxy @InternalX)  RealType  (realPart cellCoord)
+                            $ Bind (Proxy @InternalY)  RealType  (imagPart cellCoord)
                             $ Bind (Proxy @InternalDX) RealType  (fgDX geom)
                             $ Bind (Proxy @InternalDY) RealType  (negate (fgDY geom))
                             $ Bind (Proxy @"color")    ColorType grey
-                            $ overrideComplexByName unkName seed argsCtx
-                      runContinuationField outEnv contCode anchor mkCtx geom arrays
-                      pure (Just (ContinuationField outEnv arrays geom))
+                            $ overrideBoolByName    internalHasSeed  (isJust mSeed)
+                            $ overrideComplexByName internalContSeed (fromMaybe (0 :+ 0) mSeed) argsCtx
+                      runAutoContinuationField contSeedEnv code mkCtx geom arrays
+                      pure (Just (ContinuationField contSeedEnv arrays geom))
 
-          withCompiledViewer jit mprep mcont code $ \fun -> do
+          withCompiledViewer jit mprep code $ \fun -> do
             let vCodeWithArgs = CodeWithArgs vGetArgs (Just code) (pure fun)
             -- FIXME, we should grab the "close this window" action and do something with it
             void $ mkViewer project showConfig configArgs rerunSetup rebuildScript Viewer{..}
