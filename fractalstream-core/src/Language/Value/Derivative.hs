@@ -1,7 +1,7 @@
 {-# language AllowAmbiguousTypes, UndecidableInstances #-}
 
 module Language.Value.Derivative
-  (derivative) where
+  (derivative, derivativeWith) where
 
 import FractalStream.Prelude
 
@@ -12,7 +12,35 @@ import Language.Value
 
 -- Computes the partial derivative of a Value et with respect to z
 derivative :: SourceRange -> Value et -> SourceRange -> Value et -> TC (Value et)
-derivative _ (Var zName _ _) sr2 = indexedFoldWithOriginalM derivativeRules
+derivative _ (Var zName zty _) sr2 = derivativeWith (symbolVal zName) shadowOf sr2
+  where
+    -- The only tracked variable is `z` itself, with shadow 1; everything
+    -- else (including a same-typed `Var` with a different name) is constant.
+    shadowOf :: forall et'. Value et' -> Maybe (Value et')
+    shadowOf (Var name ty _)
+      | symbolVal name == symbolVal zName = case (ty, zty) of
+          (ComplexType, ComplexType) -> Just (Const (Scalar ComplexType 1))
+          (RealType, RealType)       -> Just (Const (Scalar RealType 1))
+          _                          -> Nothing
+    shadowOf _ = Nothing
+derivative sr1 _ _ = \_ -> throwError $ DiffInputMustBeVariable sr1
+
+-- | Computes the derivative of a @Value et@ via a caller-supplied rule for
+-- free variables ('shadowOf'): for each @Var@ node encountered, it either
+-- supplies that variable's derivative directly (e.g. a tracked loop
+-- variable's running shadow), or returns 'Nothing' to treat the variable as
+-- locally constant (derivative 0). 'derivative' is the special case where
+-- exactly one named variable is tracked, with shadow 1.
+--
+-- @blameName@ is only used to fill in the "with respect to ..." slot of the
+-- 'DiffNotImplemented' error when an unsupported node is hit; it does not
+-- affect which nodes are supported.
+derivativeWith :: String
+               -> (forall et'. Value et' -> Maybe (Value et'))
+               -> SourceRange
+               -> Value et
+               -> TC (Value et)
+derivativeWith blameName shadowOf sr2 = indexedFoldWithOriginalM derivativeRules
   where
     derivativeRules :: forall s. ValueF (FIX ValueF :*: FIX ValueF) s -> TC (Value s)
     derivativeRules = \case
@@ -22,17 +50,16 @@ derivative _ (Var zName _ _) sr2 = indexedFoldWithOriginalM derivativeRules
         ComplexType -> pure 0
         RealType    -> pure 0
         IntegerType -> pure 0
-        _           -> throwError $ DiffNotImplemented sr2 $ symbolVal zName
+        _           -> throwError $ DiffNotImplemented sr2 blameName
 
-      -- | Other variables are assumed to be constant with respect to z
-      Var name ty _ -> case ty of
-        ComplexType -> if symbolVal name == symbolVal zName
-                       then pure $ Const $ Scalar ComplexType 1
-                       else pure $ Const $ Scalar ComplexType 0
-        RealType    -> if symbolVal name == symbolVal zName
-                       then pure $ Const $ Scalar RealType 1
-                       else pure $ Const $ Scalar RealType 0
-        _           -> throwError $ DiffNotImplemented sr2 $ symbolVal zName
+      -- | A free variable is differentiated via the caller-supplied shadow,
+      -- defaulting to constant (0) if it isn't tracked.
+      Var name ty pf -> case shadowOf (Var name ty pf) of
+        Just d  -> pure d
+        Nothing -> case ty of
+          ComplexType -> pure $ Const $ Scalar ComplexType 0
+          RealType    -> pure $ Const $ Scalar RealType 0
+          _           -> throwError $ DiffNotImplemented sr2 blameName
 
       -- | Basic algebra
 
@@ -90,6 +117,4 @@ derivative _ (Var zName _ _) sr2 = indexedFoldWithOriginalM derivativeRules
       R2C  (_, dx) -> pure $ R2C dx
       C2R2 (_, dx) -> pure $ C2R2 dx
 
-      _ -> throwError $ DiffNotImplemented sr2 $ symbolVal zName
-
-derivative sr1 _ _ = \_ -> throwError $ DiffInputMustBeVariable sr1
+      _ -> throwError $ DiffNotImplemented sr2 blameName

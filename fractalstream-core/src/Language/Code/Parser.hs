@@ -189,6 +189,13 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
         <*> optional (lit "within" *> value)
         <*> optional upTo
         <*> continuingSeed) <?> "preimage statement"
+    , check
+      (tcCritical
+        <$> (lit "critical" *> ident <* token RightArrow)
+        <*> value
+        <*> optional (lit "within" *> value)
+        <*> optional upTo
+        <*> continuingSeed) <?> "critical statement"
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 

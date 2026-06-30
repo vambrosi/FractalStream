@@ -106,41 +106,43 @@ tcIterate var expr isWhile cond upto sr env = do
   tc cond upto body sr env
 
 ------------------------------------------------------
--- solve / preimage (Newton root-finding statements)
+-- solve / preimage / critical (Newton root-finding statements)
 ------------------------------------------------------
 
 -- | Default convergence tolerance on @|F|@ when no @within@ clause is given.
 solveTolerance :: Double
 solveTolerance = 1e-10
 
--- | @solve z -> F@: find a root of @F = 0@ by a counted Newton iteration
--- seeded from @z@'s current value, and store it in the internal @solution@
--- variable. The unknown @z@ itself is left unchanged (it stays the seed /
--- coordinate), mirroring how @stuck@/@iterations@ report a loop's outcome
--- without disturbing its inputs.
---
--- Lowers to the same loop shape as 'tcIterate' (fresh counter + limit,
--- @iterations@/@stuck@ bookkeeping), with a fixed body (the Newton step
--- @z <- z - F/F'@) and exit condition (@|F| <= tol@). Because @F@ is written in
--- terms of @z@, the iteration runs on @z@ and the original value is saved
--- first and restored afterwards. @F'@ is obtained symbolically via 'derivative'
--- w.r.t. @Var z@, so @F@ must be a differentiable closed-form expression.
--- @solution@ is complex; for a real unknown the (real) root is widened with
--- @R2C@. @stuck@ is true iff Newton did not converge within the budget.
-tcSolve :: String              -- ^ the unknown variable's name
-        -> ParsedValue         -- ^ the equation body @F@
-        -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause)
-        -> Maybe ParsedValue   -- ^ optional iteration limit (@up to N times@)
-        -> Bool                -- ^ @continuing seed@: block-seed from a coarse field
-        -> CheckedCode
--- When @continuing@ is set (`solve … continuing seed`), the unknown is seeded
--- from the engine's continuation field rather than its per-pixel value: the
--- lowering reads the incoming seed from @[internal] continuation seed@ (when
--- @[internal] continuation has seed@ is true; otherwise it keeps the unknown's
--- current value as the cold-start anchor) and writes the result back into the
--- same variable so the field captures the cell's solution. The pre-pass and the
+-- | The equation a Newton statement runs on, and its derivative: given the
+-- unknown's type and its current value (@Var z@, at whatever environment the
+-- loop ends up working in), produce @(F, F')@ for 'tcSolve' or @(g, g')@ (the
+-- gradient and its own derivative) for 'tcCritical'. @var@/the equation body
+-- are captured by closure at the call site, not threaded through here.
+type NewtonEquation =
+  forall env' ty. (KnownEnvironment env', KnownType ty)
+    => SourceRange -> TypeProxy ty -> Value '(env', ty) -> TC (Value '(env', ty), Value '(env', ty))
+
+-- | The Newton-iteration lowering shared by 'tcSolve' and 'tcCritical': fresh
+-- counter + limit (mirroring 'tcGenericLoop'), save/restore of the unknown,
+-- @iterations@/@stuck@/@solution@ bookkeeping, and the @continuing seed@
+-- prefix/suffix. The two statements differ only in which equation Newton
+-- runs on ('NewtonEquation') and the wording of two error messages.
+tcNewton :: String              -- ^ name for the "needs a real or complex unknown" error (backtick-quoted, e.g. @"`solve`/`preimage`"@)
+         -> String              -- ^ short name for the "… continuing seed" error (e.g. @"solve"@)
+         -> NewtonEquation      -- ^ the equation to converge on, and its derivative
+         -> String              -- ^ the unknown variable's name
+         -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause)
+         -> Maybe ParsedValue   -- ^ optional iteration limit (@up to N times@)
+         -> Bool                -- ^ @continuing seed@: block-seed from a coarse field
+         -> CheckedCode
+-- When @continuing@ is set, the unknown is seeded from the engine's
+-- continuation field rather than its per-pixel value: the lowering reads the
+-- incoming seed from @[internal] continuation seed@ (when @[internal]
+-- continuation has seed@ is true; otherwise it keeps the unknown's current
+-- value as the cold-start anchor) and writes the result back into the same
+-- variable so the field captures the cell's solution. The pre-pass and the
 -- per-pixel render fill those variables (RW3–RW5).
-tcSolve var pF mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
+tcNewton tyErrName contErrName mkEqn var mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
 
   SomeSymbol zname <- pure (someSymbolVal var)
   FoundVar (zty :: TypeProxy zty) zpfEnv <- findVar sr zname env
@@ -164,31 +166,29 @@ tcSolve var pF mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
       zpf    <- findVarAtType sr zname    zty         env''
       savePf <- findVarAtType sr saveName zty         env''
 
-      -- The Newton step, the absolute residual |F|, and the (complex) value to
+      -- The Newton step, the absolute residual, and the (complex) value to
       -- store as `solution`, built at the unknown's type (Real or Complex).
       -- Both halves use the overloaded Num/Fractional instances on Value, so
       -- the body is identical apart from Abs/R2C and the type.
-      (newtonStep, absF, solutionVal) <- case zty of
+      (newtonStep, absEq, solutionVal) <- case zty of
         ComplexType -> do
-          f  <- atType pF ComplexType
-          f' <- diffClosedForm sr var (Var zname ComplexType zpf) f
-          pure ( Set zpf zname (Var zname ComplexType zpf - f / f')
-               , AbsC f
+          (eq, eq') <- mkEqn sr ComplexType (Var zname ComplexType zpf)
+          pure ( Set zpf zname (Var zname ComplexType zpf - eq / eq')
+               , AbsC eq
                , Var zname ComplexType zpf )
         RealType -> do
-          f  <- atType pF RealType
-          f' <- diffClosedForm sr var (Var zname RealType zpf) f
-          pure ( Set zpf zname (Var zname RealType zpf - f / f')
-               , AbsF f
+          (eq, eq') <- mkEqn sr RealType (Var zname RealType zpf)
+          pure ( Set zpf zname (Var zname RealType zpf - eq / eq')
+               , AbsF eq
                , R2C (Var zname RealType zpf) )
-        _ -> throwError (Advice sr ("`solve`/`preimage` needs a real or complex unknown, but `"
+        _ -> throwError (Advice sr (tyErrName ++ " needs a real or complex unknown, but `"
                ++ var ++ "` is " ++ showType zty ++ "."))
 
       tol <- case mtol of
         Just pv -> atType pv RealType
         Nothing -> pure (Const (Scalar RealType solveTolerance))
 
-      let converged = Not (LTF tol absF)              -- |F| <= tol
+      let converged = Not (LTF tol absEq)              -- |eq| <= tol
           c' = And (Not converged) (counter `LTI` limit)
           b' = Block [ newtonStep, Set pf counterName (counter + 1) ]
           iterations = Proxy @InternalIterations
@@ -201,9 +201,9 @@ tcSolve var pF mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
       spf  <- findVarAtType sr stuck      BooleanType env''
       solpf <- findVarAtType sr solution  ComplexType env''
 
-      -- For a `continuing` solve: seed the unknown from the continuation field
-      -- variable (prefix) when a seed is available, and capture the result back
-      -- into it (suffix) so the field stores this cell's solution.
+      -- For a `continuing` statement: seed the unknown from the continuation
+      -- field variable (prefix) when a seed is available, and capture the
+      -- result back into it (suffix) so the field stores this cell's solution.
       (contPrefix, contSuffix) <- if continuing
         then case zty of
           ComplexType -> do
@@ -218,20 +218,73 @@ tcSolve var pF mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
                     (Var solution ComplexType solpf)
             pure ([seedInject], [captureSol])
           _ -> throwError (Advice sr
-                 "`solve … continuing seed` currently supports a complex unknown only.")
+                 ("`" ++ contErrName ++ " … continuing seed` currently supports a complex unknown only."))
         else pure ([], [])
 
       pure $ Block $ contPrefix ++
         [ IfThenElse c' (DoWhile c' b') NoOp
         , Set ipf  iterations counter
         , Set spf  stuck      stuckCond
-        -- Publish the root, or NaN if Newton did not converge, so a failure
+        -- Publish the result, or NaN if Newton did not converge, so a failure
         -- propagates into anything that reads `solution` instead of leaving a
         -- plausible-looking last iterate.
         , Set solpf solution
             (withEnvironment env'' $ ITE ComplexType stuckCond nanSolution solutionVal)
         , Set zpf  zname      (Var saveName zty savePf) ]  -- restore the unknown
         ++ contSuffix
+
+-- | @solve z -> F@: find a root of @F = 0@ by a counted Newton iteration
+-- seeded from @z@'s current value, and store it in the internal @solution@
+-- variable. The unknown @z@ itself is left unchanged (it stays the seed /
+-- coordinate), mirroring how @stuck@/@iterations@ report a loop's outcome
+-- without disturbing its inputs.
+--
+-- Lowers via 'tcNewton' (fresh counter + limit, @iterations@/@stuck@
+-- bookkeeping, save/restore of @z@), running Newton directly on @F@: the
+-- step is @z <- z - F/F'@, exit condition @|F| <= tol@. @F'@ is obtained
+-- symbolically via 'derivative' w.r.t. @Var z@, so @F@ must be a
+-- differentiable closed-form expression. @solution@ is complex; for a real
+-- unknown the (real) root is widened with @R2C@. @stuck@ is true iff Newton
+-- did not converge within the budget.
+tcSolve :: String              -- ^ the unknown variable's name
+        -> ParsedValue         -- ^ the equation body @F@
+        -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause)
+        -> Maybe ParsedValue   -- ^ optional iteration limit (@up to N times@)
+        -> Bool                -- ^ @continuing seed@: block-seed from a coarse field
+        -> CheckedCode
+tcSolve var pF = tcNewton "`solve`/`preimage`" "solve" mkEqn var
+  where
+    mkEqn :: NewtonEquation
+    mkEqn sr ty z = do
+      f  <- atType pF ty
+      f' <- diffClosedForm sr var z f
+      pure (f, f')
+
+-- | @critical z -> F@: find a critical point of @F@ as a function of @z@ (a
+-- @z@ where @dF/dz = 0@) by a counted Newton iteration on the gradient,
+-- seeded from @z@'s current value, and store it in the internal @solution@
+-- variable. This is \"@solve@ on the gradient\": where 'tcSolve' differentiates
+-- its equation once (for the Newton step) and converges on @F@ itself,
+-- 'tcCritical' differentiates @F@ /twice/ — once to get the gradient @g =
+-- dF/dz@ (the equation it solves) and once more to get @g' = d²F/dz²@ (the
+-- Newton step's slope) — and converges on @|g|@. Otherwise identical to
+-- 'tcSolve' (via the same 'tcNewton'): same loop shape, same save/restore of
+-- the unknown, same @solution@/@stuck@/@iterations@ bookkeeping, and the
+-- same @continuing seed@ modifier.
+tcCritical :: String              -- ^ the unknown variable's name
+           -> ParsedValue         -- ^ the function body @F@ whose critical point we seek
+           -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause, on @|dF/dz|@)
+           -> Maybe ParsedValue   -- ^ optional iteration limit (@up to N times@)
+           -> Bool                -- ^ @continuing seed@: block-seed from a coarse field
+           -> CheckedCode
+tcCritical var pF = tcNewton "`critical`" "critical" mkEqn var
+  where
+    mkEqn :: NewtonEquation
+    mkEqn sr ty z = do
+      f  <- atType pF ty
+      g  <- diffClosedForm sr var z f
+      g' <- diffClosedForm sr var z g
+      pure (g, g')
 
 -- | Differentiate a closed-form equation body, turning the internal
 -- 'DiffNotImplemented' (thrown on loops / unsupported nodes) into a clear

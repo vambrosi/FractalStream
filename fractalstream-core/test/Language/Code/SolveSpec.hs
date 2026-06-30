@@ -188,3 +188,35 @@ solve z -> g(z)
       case runC (1 :+ 1) (1 :+ 0) 100 "solve z -> conj(z) + c" of
         Right _ -> expectationFailure "expected a closed-form error, but solve succeeded"
         Left e  -> e `shouldSatisfy` isInfixOf "closed-form"
+
+  -- `critical` is `solve` on the gradient: it finds z where dF/dz = 0.
+  describe "critical (Newton on the gradient, closed-form)" $ do
+
+    it "parses `critical z -> (z - 3)^2`" $
+      runC (0 :+ 0) (0 :+ 0) 100 "critical z -> (z - 3)^2" `shouldSatisfy` isRight
+
+    it "converges to the critical point of (z - 3)^2 at z = 3" $
+      rootC (runC (0 :+ 0) (0 :+ 0) 100 "critical z -> (z - 3)^2")
+        `shouldConvergeTo` (3 :+ 0)
+
+    it "converges to a critical point of cos(z) (a multiple of pi)" $
+      -- cos'(z) = -sin(z) = 0 at z = k*pi; seeded near 0, lands on k = 0.
+      case rootC (runC (0.3 :+ 0) (0 :+ 0) 100 "critical z -> cos(z)") of
+        Left e  -> expectationFailure e
+        Right z -> magnitude (sin z) `shouldSatisfy` (< 1e-7)
+
+    it "is not stuck when it converges within the budget" $
+      stuckOf (runC (0 :+ 0) (0 :+ 0) 100 "critical z -> (z - 3)^2")
+        `shouldBe` Right False
+
+    it "leaves the unknown z unchanged (the critical point goes to `solution`)" $
+      seedC (runC (0 :+ 0) (0 :+ 0) 100 "critical z -> (z - 3)^2")
+        `shouldConvergeTo` (0 :+ 0)
+
+    it "converges to the critical point of a real function (x - 2)^2 at x = 2" $
+      runR 0 0 100 "critical x -> (x - 2)^2" `shouldConvergeToR` 2
+
+    it "rejects a non-differentiable (non-closed-form) body with a clear error" $
+      case runC (1 :+ 1) (1 :+ 0) 100 "critical z -> conj(z) + c" of
+        Right _ -> expectationFailure "expected a closed-form error, but critical succeeded"
+        Left e  -> e `shouldSatisfy` isInfixOf "closed-form"

@@ -673,7 +673,7 @@ reservedIdentifiers = Set.fromList
   , "text", "append", "prepend", "join", "remove", "find", "transform"
   , "range", "length", "diff"
   , "while", "iterate", "repeat", "until", "pass", "define", "result", "color"
-  , "solve", "preimage", "of", "within", "solution", "continuing"
+  , "solve", "preimage", "critical", "of", "within", "solution", "continuing"
   , "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg"
   , "romao", "bamo", "broco", "corko", "viko"
   , "ice", "fire", "rose", "wheat", "forest", "ocean"
