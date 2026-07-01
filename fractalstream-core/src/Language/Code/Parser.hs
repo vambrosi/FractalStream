@@ -22,6 +22,7 @@ import Language.Code
 import Language.Parser.Tokenizer
 import Language.Parser.SourceRange (SourceRange(..))
 import Language.Code.Typecheck
+import Language.Code.Dual (tcSolveCompound)
 
 import Data.Char (isSpace)
 import Data.List (stripPrefix)
@@ -181,6 +182,13 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
         <*> optional (lit "within" *> value)
         <*> optional upTo
         <*> continuingSeed) <?> "solve statement"
+    , check
+      (tcSolveCompound
+        <$> (lit "solve" *> ident <* token RightArrow)
+        <*> compoundCall
+        <*> optional (lit "within" *> value)
+        <*> optional upTo
+        <*> continuingSeed) <?> "solve statement (compound function)"
     , check
       (tcPreimage
         <$> (lit "preimage" *> ident <* token RightArrow)
