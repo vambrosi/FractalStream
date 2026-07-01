@@ -84,6 +84,8 @@ library
                        Language.Code.InterpretIO
                        Language.Code.Parser
                        Language.Code.Typecheck
+                       Language.Code.Reindex
+                       Language.Code.Dual
                        Language.Type
                        Language.Environment
                        Language.Value
@@ -162,5 +164,7 @@ test-suite spec
                     , Language.Code.ParserSpec
                     , Language.Code.FunctionsSpec
                     , Language.Code.SolveSpec
+                    , Language.Code.ReindexSpec
+                    , Language.Code.DualSpec
                     , Language.Effect.ListSpec
   build-tool-depends: hspec-discover:hspec-discover == 2.*
