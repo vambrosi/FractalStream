@@ -22,7 +22,7 @@ import Language.Code
 import Language.Parser.Tokenizer
 import Language.Parser.SourceRange (SourceRange(..))
 import Language.Code.Typecheck
-import Language.Code.Dual (tcSolveCompound)
+import Language.Code.Dual (tcSolveCompound, tcCriticalCompound)
 
 import Data.Char (isSpace)
 import Data.List (stripPrefix)
@@ -204,6 +204,13 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
         <*> optional (lit "within" *> value)
         <*> optional upTo
         <*> continuingSeed) <?> "critical statement"
+    , check
+      (tcCriticalCompound
+        <$> (lit "critical" *> ident <* token RightArrow)
+        <*> compoundCall
+        <*> optional (lit "within" *> value)
+        <*> optional upTo
+        <*> continuingSeed) <?> "critical statement (compound function)"
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 
