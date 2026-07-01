@@ -49,6 +49,17 @@ spec = do
       parseC 2 "diff(z, exp(z^2) / e^4)" `shouldBe` Right (4 :+ 0)
       parseC 2 "diff(z, log(z^2))" `shouldBe` Right (1.0 :+ 0.0)
 
+    -- `diff` on a *complex* variable uses the Wirtinger derivative ∂F/∂z,
+    -- which agrees exactly with the ordinary holomorphic derivative
+    -- whenever F is holomorphic (so every case above is unaffected), but
+    -- is additionally defined for non-holomorphic operations like `im`
+    -- (`Re`/`Im`/`|.|`/`conj`) -- deliberately, so `critical` can find
+    -- critical points of real-valued (non-holomorphic) potentials, not
+    -- just holomorphic ones. `d(Im z)/dz = 1/(2i) = -i/2`, a constant,
+    -- independent of z.
+    it "differentiates non-holomorphic operations via the Wirtinger derivative" $
+      parseC 1 "diff(z, im z)" `shouldBe` Right (0 :+ (-0.5))
+
     it "throws errors when trying to differentiate non-numeric variables" $ do
       parseR 0 "diff(x, 2x+1 < 1)" `shouldBe` Left (unlines
         ["  diff(x, 2x+1 < 1)"
@@ -57,16 +68,14 @@ spec = do
         ,"I expected a real number here, but the result of a comparison is a truth value."])
 
     it "throws errors when trying to differentiate non-differentiable functions" $ do
+      -- Still unsupported: `|x|` for a *real* x doesn't go through the
+      -- Wirtinger path at all (only a complex differentiation variable
+      -- does), so this is unchanged.
       parseR 0 "diff(x, |x|)" `shouldBe` Left (unlines
         ["  diff(x, |x|)"
         ,"          ^^^"
         ,""
         ,"The derivative of this function with respect to x is not implemented."])
-      parseC 1 "diff(z, im z)" `shouldBe` Left (unlines
-        ["  diff(z, im z)"
-        ,"          ^^^^"
-        ,""
-        ,"The derivative of this function with respect to z is not implemented."])
 
     it "throws errors when first argument is not a variable" $ do
       parseR 0 "diff(2, x)" `shouldBe` Left (unlines

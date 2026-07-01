@@ -12,7 +12,6 @@ import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Draw
 
-import Data.List (isInfixOf)
 import Text.RawString.QQ
 
 -- | Run a script with a complex unknown @z@ and a complex parameter @c@ in
@@ -184,10 +183,21 @@ solve z -> g(z)
 |]
       rootC (runC (1 :+ 0) ((-4) :+ 0) 100 p) `shouldConvergeTo` (2 :+ 0)
 
-    it "rejects a non-differentiable (non-closed-form) body with a clear error" $
-      case runC (1 :+ 1) (1 :+ 0) 100 "solve z -> conj(z) + c" of
-        Right _ -> expectationFailure "expected a closed-form error, but solve succeeded"
-        Left e  -> e `shouldSatisfy` isInfixOf "closed-form"
+    -- `conj` used to be unsupported (closed-form error). Under the
+    -- Wirtinger derivative it's well-defined -- ∂(conj z)/∂z = 0, since z̄
+    -- is exactly what Wirtinger ∂/∂z holds constant -- but that exposes a
+    -- real (pre-existing, not new) sharp edge: `g' = 0` identically here,
+    -- so Newton's step divides by zero. `g = conj(z) + c` itself is NOT
+    -- identically zero (it depends on z), so the first convergence check
+    -- fails and the loop actually runs, hits the zero derivative, and `z`
+    -- becomes NaN. The NaN-comparison gotcha already documented elsewhere
+    -- then reports `stuck = False` -- a confidently-wrong answer, not a
+    -- caught error. See AGENT.md; revisit once a general
+    -- degenerate-derivative guard is worth building.
+    it "silently produces NaN for a purely anti-holomorphic body (Newton divides by a zero derivative)" $
+      case rootC (runC (1 :+ 1) (1 :+ 0) 100 "solve z -> conj(z) + c") of
+        Left e  -> expectationFailure e
+        Right z -> realPart z `shouldSatisfy` isNaN
 
   -- `critical` is `solve` on the gradient: it finds z where dF/dz = 0.
   describe "critical (Newton on the gradient, closed-form)" $ do
@@ -216,7 +226,16 @@ solve z -> g(z)
     it "converges to the critical point of a real function (x - 2)^2 at x = 2" $
       runR 0 0 100 "critical x -> (x - 2)^2" `shouldConvergeToR` 2
 
-    it "rejects a non-differentiable (non-closed-form) body with a clear error" $
-      case runC (1 :+ 1) (1 :+ 0) 100 "critical z -> conj(z) + c" of
-        Right _ -> expectationFailure "expected a closed-form error, but critical succeeded"
-        Left e  -> e `shouldSatisfy` isInfixOf "closed-form"
+    -- Same underlying cause as `solve`'s version of this test, but a
+    -- *different* symptom: `critical` needs g = dF/dz, and for F = conj(z)
+    -- + c, that's 0 identically (not just at this seed -- conj is
+    -- anti-holomorphic everywhere), so the very first convergence check
+    -- (|g| <= tol, checked before any iteration) already passes. The loop
+    -- never runs at all, so it never even reaches the divide-by-zero in
+    -- g/g' -- `solution` just comes back as the unchanged seed, reported
+    -- as "not stuck" and 0 iterations. Silently wrong in a different way
+    -- than `solve`'s NaN, but the same root cause.
+    it "trivially \"succeeds\" without iterating for a purely anti-holomorphic body (its gradient is identically 0)" $ do
+      let result = runC (1 :+ 1) (1 :+ 0) 100 "critical z -> conj(z) + c"
+      rootC result `shouldConvergeTo` (1 :+ 1)
+      stuckOf result `shouldBe` Right False

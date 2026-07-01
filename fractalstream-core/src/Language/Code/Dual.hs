@@ -23,6 +23,9 @@ module Language.Code.Dual
   , dValue
   , dualizeCode
   , spliceCompoundDual
+  , dValueWirtinger
+  , dualizeCodeWirtinger
+  , spliceCompoundDualWirtinger
   , tcSolveCompound
   , tcCriticalCompound
   ) where
@@ -32,7 +35,7 @@ import Language.Value
 import Language.Value.Typecheck
   ( ParsedValue(..), atType, tcVar, internalIterationLimit
   , InternalIterations, InternalStuck, InternalSolution )
-import Language.Value.Derivative (derivativeWith)
+import Language.Value.Derivative (derivativeWith, wirtingerWith)
 import Language.Value.Reindex (reindexValue)
 import Language.Code
 import Language.Code.Reindex (reindexCode)
@@ -154,6 +157,71 @@ dualizeCode sr blame gen tracked code0 = case code0 of
   Lookup{}      -> throwError (Advice sr "dualizeCode: list operations are not supported.")
   ForEach{}     -> throwError (Advice sr "dualizeCode: list operations are not supported.")
 
+-- | Wirtinger analogue of 'dValue': the derivative is always complex,
+-- regardless of @v@'s own type (see
+-- 'Language.Value.Derivative.wirtingerWith' -- this is exactly that
+-- generalization, applied through a tracked shadow instead of a single
+-- fixed target). Needed because a compound function's body can be
+-- real-valued partway through (a Green potential's final @log(|x|)@, say)
+-- while still being differentiated with respect to a complex seed. A
+-- tracked variable's shadow is looked up at 'ComplexType', not its own
+-- type -- under this convention every shadow is complex, never "whatever
+-- type the original variable happened to be".
+dValueWirtinger :: String -> Tracked -> SourceRange -> Value et -> TC (Value '(Env et, 'ComplexT))
+dValueWirtinger blame tracked sr v = wirtingerWith blame shadowOf sr v
+  where
+    shadowOf :: forall et'. Value et' -> Maybe (Value '(Env et', 'ComplexT))
+    shadowOf (Var name _ _) = case Map.lookup (symbolVal name) tracked of
+      Nothing -> Nothing
+      Just shadowNm -> case someSymbolVal shadowNm of
+        SomeSymbol sname -> case lookupEnv sname ComplexType (envProxy Proxy) of
+          Found pf' -> Just (Var sname ComplexType pf')
+          _         -> Nothing
+    shadowOf _ = Nothing
+
+-- | Wirtinger analogue of 'dualizeCode': structurally identical, but every
+-- shadow 'dualizeCodeWirtinger' introduces is declared at 'ComplexType'
+-- (via 'dValueWirtinger'), regardless of the tracked variable's own type --
+-- see 'dValueWirtinger'.
+dualizeCodeWirtinger :: SourceRange -> String -> String -> Tracked -> Code env -> TC (Code env)
+dualizeCodeWirtinger sr blame gen tracked code0 = case code0 of
+
+  Let pf name v body
+    | isDifferentiable (typeOfValue v) -> do
+        let ty  = typeOfValue v
+            env = envProxy Proxy
+        dv <- dValueWirtinger blame tracked sr v
+        letBind sr (symbolVal name) ty v env $ \env1 ->
+          letBind sr (freshShadowName gen (symbolVal name)) ComplexType (reindexValue env1 dv) env1 $ \env2 ->
+            dualizeCodeWirtinger sr blame gen
+              (Map.insert (symbolVal name) (freshShadowName gen (symbolVal name)) tracked)
+              (reindexCode env2 body)
+    | otherwise -> Let pf name v <$> dualizeCodeWirtinger sr blame gen tracked body
+
+  Set pf name v -> case Map.lookup (symbolVal name) tracked of
+    Just shadowNm | isDifferentiable (typeOfValue v) -> do
+      dv <- dValueWirtinger blame tracked sr v
+      case someSymbolVal shadowNm of
+        SomeSymbol sname -> case lookupEnv sname ComplexType (envProxy Proxy) of
+          Found spf -> pure (Block [ Set spf sname dv, Set pf name v ])
+          _ -> throwError (Advice sr
+                 ("dualizeCodeWirtinger: internal error, `" ++ symbolVal name
+                   ++ "` is tracked but its shadow is missing."))
+    _ -> pure (Set pf name v)
+
+  Block stmts -> Block <$> traverse (dualizeCodeWirtinger sr blame gen tracked) stmts
+
+  NoOp -> pure NoOp
+
+  DoWhile cond body -> DoWhile cond <$> dualizeCodeWirtinger sr blame gen tracked body
+
+  IfThenElse cond yes no ->
+    IfThenElse cond <$> dualizeCodeWirtinger sr blame gen tracked yes <*> dualizeCodeWirtinger sr blame gen tracked no
+
+  DrawCommand{} -> throwError (Advice sr "dualizeCodeWirtinger: draw commands are not supported.")
+  Lookup{}      -> throwError (Advice sr "dualizeCodeWirtinger: list operations are not supported.")
+  ForEach{}     -> throwError (Advice sr "dualizeCodeWirtinger: list operations are not supported.")
+
 -- | Bind each argument to a compound function call to a fresh name (as
 -- 'Language.Code.Typecheck.spliceArgs' does for an ordinary, non-dual
 -- call), and additionally bind its derivative (with respect to @tracked0@,
@@ -236,6 +304,80 @@ spliceCompoundDual sr blame gen tracked0 cf args ty env k
                     resPf  <- findVarAtType sr res       ty envRD
                     dresPf <- findVarAtType sr dresProxy ty envRD
                     restCode <- k envRD (Var res ty resPf) (Var dresProxy ty dresPf)
+                    pure (Block [ dbody, restCode ])
+
+-- | Wirtinger analogue of 'spliceArgsDual': every argument's shadow is
+-- declared at 'ComplexType' (via 'dValueWirtinger'), regardless of the
+-- argument's own type -- see 'dValueWirtinger'.
+spliceArgsDualWirtinger
+  :: forall env
+   . SourceRange
+  -> String
+  -> String
+  -> Tracked
+  -> [(String, Maybe SomeType, ParsedValue)]
+  -> EnvironmentProxy env
+  -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Tracked -> TC (Code env'))
+  -> TC (Code env)
+spliceArgsDualWirtinger _  _     _   tracked0 [] env k = withEnvironment env (k env tracked0)
+spliceArgsDualWirtinger sr blame gen tracked0 ((fresh, ann, arg) : rest) env k = withEnvironment env $ do
+  SomeType (pty :: TypeProxy pty) <- inferArgType sr ann arg env
+  withKnownType pty $ do
+    argVal <- atType arg pty :: TC (Value '(env, pty))
+    dArg   <- dValueWirtinger blame tracked0 sr argVal
+    letBind sr fresh pty argVal env $ \env1 -> case pty of
+      ComplexType ->
+        letBind sr (freshShadowName gen fresh) ComplexType (reindexValue env1 dArg) env1 $ \env2 ->
+          spliceArgsDualWirtinger sr blame gen tracked0 rest env2
+            (\envF trackedF -> k envF (Map.insert fresh (freshShadowName gen fresh) trackedF))
+      RealType ->
+        letBind sr (freshShadowName gen fresh) ComplexType (reindexValue env1 dArg) env1 $ \env2 ->
+          spliceArgsDualWirtinger sr blame gen tracked0 rest env2
+            (\envF trackedF -> k envF (Map.insert fresh (freshShadowName gen fresh) trackedF))
+      _ -> spliceArgsDualWirtinger sr blame gen tracked0 rest env1 k
+
+-- | Wirtinger analogue of 'spliceCompoundDual': @F@ (the compound
+-- function's own result) stays at its own natural type @ty@ (whatever the
+-- caller asks for, same as before -- typically still forced to the
+-- unknown's type, e.g. by R2C-widening a real result, since that widening
+-- is harmless: 'wirtingerWith''s @R2C@ rule is a pass-through, and its
+-- fold already reaches every nested node's own type regardless of what the
+-- top-level type tag says). Only @F'@ (the shadow) is forced to
+-- 'ComplexType' unconditionally -- see 'dValueWirtinger'.
+spliceCompoundDualWirtinger
+  :: SourceRange
+  -> String
+  -> String
+  -> Tracked
+  -> CompoundFunction
+  -> [ParsedValue]
+  -> TypeProxy ty
+  -> EnvironmentProxy env
+  -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Value '(env', ty) -> Value '(env', 'ComplexT) -> TC (Code env'))
+  -> TC (Code env)
+spliceCompoundDualWirtinger sr blame gen tracked0 cf args ty env k
+  | length args /= length (cfParams cf) =
+      throwError (Advice sr ("The function " ++ cfName cf ++ " expects "
+        ++ show (length (cfParams cf)) ++ " argument(s), but "
+        ++ show (length args) ++ " were given."))
+  | otherwise = withEnvironment env $
+      spliceArgsDualWirtinger sr blame gen tracked0
+        (zip3 (cfFreshParams cf) (map snd (cfParams cf)) args) env $ \envP tracked ->
+        withKnownType ty $ do
+          dflt <- defaultFor sr ty
+          letBind sr (cfResultName cf) ty dflt envP $ \envR -> withEnvironment envR $ do
+            dfltShadow <- defaultFor sr ComplexType
+            let dres = freshShadowName gen (cfResultName cf)
+            letBind sr dres ComplexType dfltShadow envR $ \envRD -> withEnvironment envRD $ do
+                body  <- atEnv envRD (cfBody cf)
+                checkPure cf sr body
+                dbody <- dualizeCodeWirtinger sr blame gen
+                           (Map.insert (cfResultName cf) dres tracked) body
+                case (someSymbolVal (cfResultName cf), someSymbolVal dres) of
+                  (SomeSymbol res, SomeSymbol dresProxy) -> do
+                    resPf  <- findVarAtType sr res       ty          envRD
+                    dresPf <- findVarAtType sr dresProxy ComplexType envRD
+                    restCode <- k envRD (Var res ty resPf) (Var dresProxy ComplexType dresPf)
                     pure (Block [ dbody, restCode ])
 
 -- | @solve z -> f(args)@ where @f@ is a compound (looped) function: the
@@ -321,7 +463,7 @@ tcSolveCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentProx
                     nan        = 0/0 :: Double
                     nanSolution = Const (Scalar ComplexType (nan :+ nan))
 
-                    doSplice = spliceCompoundDual sr var (symbolVal dzName) tracked0 cf args ComplexType envZ $
+                    doSplice = spliceCompoundDualWirtinger sr var (symbolVal dzName) tracked0 cf args ComplexType envZ $
                       \envI f f' -> do
                         fPfI  <- findVarAtType sr fName  ComplexType envI
                         dfPfI <- findVarAtType sr dfName ComplexType envI
@@ -506,12 +648,12 @@ tcCriticalCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentP
                      withFresh sr envFDD ComplexType dz1Dflt $ \envZ1 (dz1 :: Proxy dz1) dz1Abs -> recallIsAbsent dz1Abs $ do
                        dz2Dflt <- pure (Const (Scalar ComplexType 1))
                        withFresh sr envZ1 ComplexType dz2Dflt $ \envZ2 (dz2 :: Proxy dz2) dz2Abs -> recallIsAbsent dz2Abs $ do
-                         fos <- spliceCompoundDual sr var (symbolVal dz1) (Map.singleton var (symbolVal dz1)) cf args ComplexType envZ2 $
+                         fos <- spliceCompoundDualWirtinger sr var (symbolVal dz1) (Map.singleton var (symbolVal dz1)) cf args ComplexType envZ2 $
                            \envI f f' -> do
                              fPfI  <- findVarAtType sr fName  ComplexType envI
                              dfPfI <- findVarAtType sr dfName ComplexType envI
                              pure (Block [ Set fPfI fName f, Set dfPfI dfName f' ])
-                         dualizeCode sr var (symbolVal dz2)
+                         dualizeCodeWirtinger sr var (symbolVal dz2)
                            (Map.fromList [ (var, symbolVal dz2), (symbolVal dfName, symbolVal ddfName) ])
                            fos
 
