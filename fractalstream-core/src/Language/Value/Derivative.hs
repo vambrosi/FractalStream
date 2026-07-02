@@ -257,6 +257,46 @@ wirtingerWith blameName shadowOf sr2 v =
       -- boundary between branches.
       ITE _ (c, _) (_, dyes) (_, dno) -> pure $ ITE ComplexType c dyes dno
 
+      -- | Boolean/comparison operations: 'indexedFoldWithOriginalM' folds
+      -- *every* child of a node -- including a condition -- before a rule's
+      -- callback even runs, regardless of whether that rule ends up using
+      -- the folded value (e.g. 'ITE'-s rule above discards its condition's
+      -- folded derivative, `(c, _)`, but the fold still has to produce
+      -- *something* for it first). Booleans are never tracked, so their
+      -- Wirtinger derivative is always 0, same reasoning as the Integer
+      -- rules below -- needed for any `if`/`while` whose condition isn't a
+      -- bare comparison-free boolean (e.g. `|x| >= escapeR`).
+      Or{}  -> pure 0
+      And{} -> pure 0
+      Not{} -> pure 0
+      Eql{} -> pure 0
+      NEq{} -> pure 0
+      LTI{} -> pure 0
+      LTF{} -> pure 0
+
+      -- | Integer arithmetic: 'isDifferentiable' (Language.Code.Dual) never
+      -- tracks an Integer-typed variable, so an Integer-typed subexpression
+      -- -- built from any mix of these constructors -- can never depend on
+      -- the seed, by induction from its leaves (an untracked 'Var' or a
+      -- 'Const' both already fold to 0 above). Its Wirtinger derivative is
+      -- therefore always 0, unconditionally -- covering this explicitly
+      -- (rather than relying on the catch-all below) matters because an
+      -- Integer subexpression can still appear *nested inside* a larger
+      -- Real/Complex expression that genuinely is being differentiated
+      -- (e.g. `2^n` for an Integer loop counter `n`, used in `x / 2^n`).
+      RoundF{}   -> pure 0
+      FloorF{}   -> pure 0
+      CeilingF{} -> pure 0
+      AddI{}     -> pure 0
+      SubI{}     -> pure 0
+      MulI{}     -> pure 0
+      DivI{}     -> pure 0
+      ModI{}     -> pure 0
+      PowI{}     -> pure 0
+      AbsI{}     -> pure 0
+      NegI{}     -> pure 0
+      Length{}   -> pure 0
+
       -- | Type conversions: dx is already complex (Integer/Real are never
       -- tracked seeds, and Complex is already this fold's target), so these
       -- are pass-throughs, not further conversions.

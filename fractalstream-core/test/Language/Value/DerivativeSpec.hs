@@ -60,6 +60,19 @@ spec = do
     it "differentiates non-holomorphic operations via the Wirtinger derivative" $
       parseC 1 "diff(z, im z)" `shouldBe` Right (0 :+ (-0.5))
 
+    -- Regression: 'indexedFoldWithOriginalM' folds *every* child of a node
+    -- -- including an `if`'s condition -- before a rule's callback runs,
+    -- regardless of whether that rule uses the folded value (the `ITE`
+    -- rule discards its condition's derivative outright). A condition
+    -- that's just a bare comparison (`|z| >= 1`, desugared to some
+    -- combination of `<`/`Not`/`Or`) used to hit the catch-all here,
+    -- since nothing gave the fold *anything* to produce for a
+    -- boolean-typed subexpression. `wirtingerWith` needs explicit (`0`)
+    -- rules for every boolean/comparison constructor for this reason, not
+    -- because a condition's derivative is ever actually used.
+    it "differentiates an `if` whose condition is a non-trivial comparison" $
+      parseC 2 "diff(z, if |z| >= 1 then z else 0)" `shouldBe` Right (1 :+ 0)
+
     it "throws errors when trying to differentiate non-numeric variables" $ do
       parseR 0 "diff(x, 2x+1 < 1)" `shouldBe` Left (unlines
         ["  diff(x, 2x+1 < 1)"
