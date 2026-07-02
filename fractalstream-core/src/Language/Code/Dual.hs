@@ -100,6 +100,245 @@ isDifferentiable = \case
   RealType    -> True
   _           -> False
 
+-- ---------------------------------------------------------------------------
+-- Sharing: lift an expensive, multiply-referenced subexpression (a
+-- division's denominator, an absolute value's argument, a power's
+-- exponent) out into its own statement before differentiating a statement's
+-- RHS, so it's computed -- and differentiated -- exactly once, however many
+-- times the surrounding expression's derivative rule needs to refer to it
+-- (e.g. the quotient rule needs the denominator three times: once in
+-- @y*dx@, twice more in @y*y@). Left inline, one expensive subexpression
+-- (say, a complex power computed via log/exp) can end up recompiled dozens
+-- of times over in the generated code once 'tcCriticalCompound''s second
+-- differentiation pass re-differentiates the first pass's own output. See
+-- the "Sharing" section of AGENT.md for the LLVM-dump evidence this was
+-- built to fix.
+--
+-- 'extractIfNontrivial' actually performs the extraction (giving the new
+-- statement its own shadow via 'dValue', exactly as 'dualizeCode' already
+-- does for any other statement, so its derivative is tracked correctly by
+-- whatever comes after -- including a second differentiation pass, since
+-- the extracted statement is just an ordinary tracked statement to it, no
+-- different from one the original script itself declared).
+-- 'extractIfNontrivialWirtinger' is the same, but via 'dValueWirtinger'
+-- (shadow always complex) -- see 'dValueWirtinger''s haddock.
+--
+-- 'liftSharedGeneric' is the structural recursion -- walk a 'Value',
+-- looking for a division/absolute-value/power node, recursing into every
+-- operand along the way (so a shared subexpression buried inside an
+-- @if@'s condition or a further nested operation is still found). It's
+-- shared between 'liftShared' and 'liftSharedWirtinger' (the only
+-- difference between them is which @extract@ action they use); only real
+-- and complex arithmetic, transcendental functions, comparisons, and
+-- if/then/else are covered -- the constructors that can actually appear
+-- inside the kind of numeric expression this is built for. Anything else
+-- (lists, pairs, colors, text, ...) is left untouched.
+extractIfNontrivial
+  :: forall env ty
+   . SourceRange -> String -> String
+  -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
+  -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Tracked -> Value '(env', ty) -> TC (Code env'))
+  -> TC (Code env)
+extractIfNontrivial sr blame gen env tracked ty v k = case v of
+  Var{}   -> k env tracked v
+  Const{} -> k env tracked v
+  _ -> withEnvironment env $ do
+    let tmpName = "[internal] shared #" ++ show (length $ fromEnvironment env (\_ _ -> ()))
+    dv <- dValue blame tracked sr v
+    letBind sr tmpName ty v env $ \env1 ->
+      letBind sr (freshShadowName gen tmpName) ty (reindexValue env1 dv) env1 $ \env2 ->
+        case someSymbolVal tmpName of
+          SomeSymbol name -> do
+            pf <- findVarAtType sr name ty env2
+            withKnownType ty $
+              k env2 (Map.insert tmpName (freshShadowName gen tmpName) tracked) (Var name ty pf)
+
+extractIfNontrivialWirtinger
+  :: forall env ty
+   . SourceRange -> String -> String
+  -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
+  -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Tracked -> Value '(env', ty) -> TC (Code env'))
+  -> TC (Code env)
+extractIfNontrivialWirtinger sr blame gen env tracked ty v k = case v of
+  Var{}   -> k env tracked v
+  Const{} -> k env tracked v
+  _ -> withEnvironment env $ do
+    let tmpName = "[internal] shared #" ++ show (length $ fromEnvironment env (\_ _ -> ()))
+    dv <- dValueWirtinger blame tracked sr v
+    letBind sr tmpName ty v env $ \env1 ->
+      letBind sr (freshShadowName gen tmpName) ComplexType (reindexValue env1 dv) env1 $ \env2 ->
+        case someSymbolVal tmpName of
+          SomeSymbol name -> do
+            pf <- findVarAtType sr name ty env2
+            withKnownType ty $
+              k env2 (Map.insert tmpName (freshShadowName gen tmpName) tracked) (Var name ty pf)
+
+liftSharedGeneric
+  :: forall env ty
+   . SourceRange -> String -> String
+  -> (forall e t. EnvironmentProxy e -> Tracked -> TypeProxy t -> Value '(e, t)
+      -> (forall e'. KnownEnvironment e' => EnvironmentProxy e' -> Tracked -> Value '(e', t) -> TC (Code e'))
+      -> TC (Code e))
+  -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
+  -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Tracked -> Value '(env', ty) -> TC (Code env'))
+  -> TC (Code env)
+liftSharedGeneric sr blame gen extract env tracked _ty v0 k = case v0 of
+
+  -- The three "sharing" operators.
+  DivF x y -> go env tracked RealType x $ \envX trackedX x' ->
+    go envX trackedX RealType (reindexValue envX y) $ \envY trackedY y' ->
+      extract envY trackedY RealType y' $ \envY' trackedY' y'' ->
+        k envY' trackedY' (DivF (reindexValue envY' x') y'')
+
+  DivC x y -> go env tracked ComplexType x $ \envX trackedX x' ->
+    go envX trackedX ComplexType (reindexValue envX y) $ \envY trackedY y' ->
+      extract envY trackedY ComplexType y' $ \envY' trackedY' y'' ->
+        k envY' trackedY' (DivC (reindexValue envY' x') y'')
+
+  PowF x n -> go env tracked RealType x $ \envX trackedX x' ->
+    go envX trackedX RealType (reindexValue envX n) $ \envN trackedN n' ->
+      extract envN trackedN RealType n' $ \envN' trackedN' n'' ->
+        k envN' trackedN' (PowF (reindexValue envN' x') n'')
+
+  PowC x n -> go env tracked ComplexType x $ \envX trackedX x' ->
+    go envX trackedX ComplexType (reindexValue envX n) $ \envN trackedN n' ->
+      extract envN trackedN ComplexType n' $ \envN' trackedN' n'' ->
+        k envN' trackedN' (PowC (reindexValue envN' x') n'')
+
+  AbsF x -> go env tracked RealType x $ \envX trackedX x' ->
+    extract envX trackedX RealType x' $ \envX' trackedX' x'' ->
+      k envX' trackedX' (AbsF x'')
+
+  AbsC x -> go env tracked ComplexType x $ \envX trackedX x' ->
+    extract envX trackedX ComplexType x' $ \envX' trackedX' x'' ->
+      k envX' trackedX' (AbsC x'')
+
+  -- Everything else: plain recursion into every child, then rebuild with
+  -- the same constructor.
+  AddF x y -> rec2 RealType RealType x y AddF
+  SubF x y -> rec2 RealType RealType x y SubF
+  MulF x y -> rec2 RealType RealType x y MulF
+  ModF x y -> rec2 RealType RealType x y ModF
+  Arctan2F x y -> rec2 RealType RealType x y Arctan2F
+
+  AddC x y -> rec2 ComplexType ComplexType x y AddC
+  SubC x y -> rec2 ComplexType ComplexType x y SubC
+  MulC x y -> rec2 ComplexType ComplexType x y MulC
+
+  AddI x y -> rec2 IntegerType IntegerType x y AddI
+  SubI x y -> rec2 IntegerType IntegerType x y SubI
+  MulI x y -> rec2 IntegerType IntegerType x y MulI
+  DivI x y -> rec2 IntegerType IntegerType x y DivI
+  ModI x y -> rec2 IntegerType IntegerType x y ModI
+  PowI x y -> rec2 IntegerType IntegerType x y PowI
+
+  Or  x y -> rec2 BooleanType BooleanType x y Or
+  And x y -> rec2 BooleanType BooleanType x y And
+
+  Eql t x y -> rec2 t t x y (Eql t)
+  NEq t x y -> rec2 t t x y (NEq t)
+  LTI x y -> rec2 IntegerType IntegerType x y LTI
+  LTF x y -> rec2 RealType RealType x y LTF
+
+  NegF x -> rec1 RealType x NegF
+  RoundF x -> rec1 RealType x RoundF
+  FloorF x -> rec1 RealType x FloorF
+  CeilingF x -> rec1 RealType x CeilingF
+  ExpF x -> rec1 RealType x ExpF
+  LogF x -> rec1 RealType x LogF
+  SqrtF x -> rec1 RealType x SqrtF
+  SinF x -> rec1 RealType x SinF
+  CosF x -> rec1 RealType x CosF
+  TanF x -> rec1 RealType x TanF
+  SinhF x -> rec1 RealType x SinhF
+  CoshF x -> rec1 RealType x CoshF
+  TanhF x -> rec1 RealType x TanhF
+  ArcsinF x -> rec1 RealType x ArcsinF
+  ArccosF x -> rec1 RealType x ArccosF
+  ArctanF x -> rec1 RealType x ArctanF
+  ArcsinhF x -> rec1 RealType x ArcsinhF
+  ArccoshF x -> rec1 RealType x ArccoshF
+  ArctanhF x -> rec1 RealType x ArctanhF
+
+  NegC x -> rec1 ComplexType x NegC
+  ArgC x -> rec1 ComplexType x ArgC
+  ReC x -> rec1 ComplexType x ReC
+  ImC x -> rec1 ComplexType x ImC
+  ConjC x -> rec1 ComplexType x ConjC
+  ExpC x -> rec1 ComplexType x ExpC
+  LogC x -> rec1 ComplexType x LogC
+  SqrtC x -> rec1 ComplexType x SqrtC
+  SinC x -> rec1 ComplexType x SinC
+  CosC x -> rec1 ComplexType x CosC
+  TanC x -> rec1 ComplexType x TanC
+  SinhC x -> rec1 ComplexType x SinhC
+  CoshC x -> rec1 ComplexType x CoshC
+  TanhC x -> rec1 ComplexType x TanhC
+
+  AbsI x -> rec1 IntegerType x AbsI
+  NegI x -> rec1 IntegerType x NegI
+  Not x -> rec1 BooleanType x Not
+
+  I2R x -> rec1 IntegerType x I2R
+  R2C x -> rec1 RealType x R2C
+
+  ITE t c yes no ->
+    go env tracked BooleanType c $ \envC trackedC c' ->
+      go envC trackedC t (reindexValue envC yes) $ \envY trackedY yes' ->
+        go envY trackedY t (reindexValue envY no) $ \envN trackedN no' ->
+          k envN trackedN (ITE t (reindexValue envN c') (reindexValue envN yes') no')
+
+  -- Anything else (constants, variables, lists, pairs, colors, text,
+  -- LocalLet, ...) is left untouched -- not a source of the measured
+  -- blowup, and several of these bind their own local names, which would
+  -- need their own care to lift through safely.
+  _ -> withEnvironment env $ k env tracked v0
+
+ where
+  -- `where` is deliberately indented *less* than the `case` alternatives
+  -- above (column 2, not 3) -- at the same column, GHC's layout rule would
+  -- try to parse `where` as one more case alternative instead of closing
+  -- the `case` block and attaching to this whole equation.
+  go :: forall e t. EnvironmentProxy e -> Tracked -> TypeProxy t -> Value '(e, t)
+     -> (forall e'. KnownEnvironment e' => EnvironmentProxy e' -> Tracked -> Value '(e', t) -> TC (Code e'))
+     -> TC (Code e)
+  go = liftSharedGeneric sr blame gen extract
+
+  rec1 :: forall cty
+        . TypeProxy cty -> Value '(env, cty)
+       -> (forall e. KnownEnvironment e => Value '(e, cty) -> Value '(e, ty))
+       -> TC (Code env)
+  rec1 cty x rebuild = go env tracked cty x $ \env' tracked' x' -> k env' tracked' (rebuild x')
+
+  rec2 :: forall cty1 cty2
+        . TypeProxy cty1 -> TypeProxy cty2 -> Value '(env, cty1) -> Value '(env, cty2)
+       -> (forall e. KnownEnvironment e => Value '(e, cty1) -> Value '(e, cty2) -> Value '(e, ty))
+       -> TC (Code env)
+  rec2 cty1 cty2 x y rebuild =
+    go env tracked cty1 x $ \envX trackedX x' ->
+      go envX trackedX cty2 (reindexValue envX y) $ \envY trackedY y' ->
+        k envY trackedY (rebuild (reindexValue envY x') y')
+
+-- | Lift shared subexpressions out of a statement's RHS before
+-- differentiating it with 'dValue' (same-type shadow) -- see
+-- 'liftSharedGeneric'.
+liftShared :: forall env ty
+            . SourceRange -> String -> String
+           -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
+           -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Tracked -> Value '(env', ty) -> TC (Code env'))
+           -> TC (Code env)
+liftShared sr blame gen = liftSharedGeneric sr blame gen (extractIfNontrivial sr blame gen)
+
+-- | Lift shared subexpressions out of a statement's RHS before
+-- differentiating it with 'dValueWirtinger' (always-complex shadow) -- see
+-- 'liftSharedGeneric'.
+liftSharedWirtinger :: forall env ty
+                      . SourceRange -> String -> String
+                     -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
+                     -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Tracked -> Value '(env', ty) -> TC (Code env'))
+                     -> TC (Code env)
+liftSharedWirtinger sr blame gen = liftSharedGeneric sr blame gen (extractIfNontrivialWirtinger sr blame gen)
+
 -- | Transform a 'Code' so that every Real/Complex @Let@/@Set@-bound
 -- variable named in @tracked@ (extended with a fresh shadow as new @Let@s
 -- are discovered) gets a shadow holding its running derivative with
@@ -122,28 +361,32 @@ dualizeCode sr blame gen tracked code0 = case code0 of
     | isDifferentiable (typeOfValue v) -> do
         let ty  = typeOfValue v
             env = envProxy Proxy
-        dv <- dValue blame tracked sr v
-        letBind sr (symbolVal name) ty v env $ \env1 ->
-          letBind sr (freshShadowName gen (symbolVal name)) ty (reindexValue env1 dv) env1 $ \env2 ->
-            dualizeCode sr blame gen
-              (Map.insert (symbolVal name) (freshShadowName gen (symbolVal name)) tracked)
-              (reindexCode env2 body)
+        liftShared sr blame gen env tracked ty v $ \env0 tracked0 v' -> do
+          dv <- dValue blame tracked0 sr v'
+          letBind sr (symbolVal name) ty v' env0 $ \env1 ->
+            letBind sr (freshShadowName gen (symbolVal name)) ty (reindexValue env1 dv) env1 $ \env2 ->
+              dualizeCode sr blame gen
+                (Map.insert (symbolVal name) (freshShadowName gen (symbolVal name)) tracked0)
+                (reindexCode env2 body)
     | otherwise -> Let pf name v <$> dualizeCode sr blame gen tracked body
 
-  Set pf name v -> case Map.lookup (symbolVal name) tracked of
+  Set _pf name v -> case Map.lookup (symbolVal name) tracked of
     Just shadowNm | isDifferentiable (typeOfValue v) -> do
       let ty = typeOfValue v
-      dv <- dValue blame tracked sr v
-      case someSymbolVal shadowNm of
-        SomeSymbol sname -> case lookupEnv sname ty (envProxy Proxy) of
-          -- `dv` (and `v`, if `v` reads `name` itself, e.g. `w <- w * x`)
-          -- is evaluated against `name`'s OLD value, so the shadow must
-          -- be updated before `name` itself is overwritten below.
-          Found spf -> pure (Block [ Set spf sname dv, Set pf name v ])
-          _ -> throwError (Advice sr
-                 ("dualizeCode: internal error, `" ++ symbolVal name
-                   ++ "` is tracked but its shadow is missing."))
-    _ -> pure (Set pf name v)
+          env = envProxy Proxy
+      liftShared sr blame gen env tracked ty v $ \env' tracked' v' -> withEnvironment env' $ do
+        dv <- dValue blame tracked' sr v'
+        pf' <- findVarAtType sr name ty env'
+        case someSymbolVal shadowNm of
+          SomeSymbol sname -> case lookupEnv sname ty env' of
+            -- `dv` (and `v`, if `v` reads `name` itself, e.g. `w <- w * x`)
+            -- is evaluated against `name`'s OLD value, so the shadow must
+            -- be updated before `name` itself is overwritten below.
+            Found spf -> pure (Block [ Set spf sname dv, Set pf' name v' ])
+            _ -> throwError (Advice sr
+                   ("dualizeCode: internal error, `" ++ symbolVal name
+                     ++ "` is tracked but its shadow is missing."))
+    _ -> pure (Set _pf name v)
 
   Block stmts -> Block <$> traverse (dualizeCode sr blame gen tracked) stmts
 
@@ -191,24 +434,29 @@ dualizeCodeWirtinger sr blame gen tracked code0 = case code0 of
     | isDifferentiable (typeOfValue v) -> do
         let ty  = typeOfValue v
             env = envProxy Proxy
-        dv <- dValueWirtinger blame tracked sr v
-        letBind sr (symbolVal name) ty v env $ \env1 ->
-          letBind sr (freshShadowName gen (symbolVal name)) ComplexType (reindexValue env1 dv) env1 $ \env2 ->
-            dualizeCodeWirtinger sr blame gen
-              (Map.insert (symbolVal name) (freshShadowName gen (symbolVal name)) tracked)
-              (reindexCode env2 body)
+        liftSharedWirtinger sr blame gen env tracked ty v $ \env0 tracked0 v' -> do
+          dv <- dValueWirtinger blame tracked0 sr v'
+          letBind sr (symbolVal name) ty v' env0 $ \env1 ->
+            letBind sr (freshShadowName gen (symbolVal name)) ComplexType (reindexValue env1 dv) env1 $ \env2 ->
+              dualizeCodeWirtinger sr blame gen
+                (Map.insert (symbolVal name) (freshShadowName gen (symbolVal name)) tracked0)
+                (reindexCode env2 body)
     | otherwise -> Let pf name v <$> dualizeCodeWirtinger sr blame gen tracked body
 
-  Set pf name v -> case Map.lookup (symbolVal name) tracked of
+  Set _pf name v -> case Map.lookup (symbolVal name) tracked of
     Just shadowNm | isDifferentiable (typeOfValue v) -> do
-      dv <- dValueWirtinger blame tracked sr v
-      case someSymbolVal shadowNm of
-        SomeSymbol sname -> case lookupEnv sname ComplexType (envProxy Proxy) of
-          Found spf -> pure (Block [ Set spf sname dv, Set pf name v ])
-          _ -> throwError (Advice sr
-                 ("dualizeCodeWirtinger: internal error, `" ++ symbolVal name
-                   ++ "` is tracked but its shadow is missing."))
-    _ -> pure (Set pf name v)
+      let ty = typeOfValue v
+          env = envProxy Proxy
+      liftSharedWirtinger sr blame gen env tracked ty v $ \env' tracked' v' -> withEnvironment env' $ do
+        dv <- dValueWirtinger blame tracked' sr v'
+        pf' <- findVarAtType sr name ty env'
+        case someSymbolVal shadowNm of
+          SomeSymbol sname -> case lookupEnv sname ComplexType env' of
+            Found spf -> pure (Block [ Set spf sname dv, Set pf' name v' ])
+            _ -> throwError (Advice sr
+                   ("dualizeCodeWirtinger: internal error, `" ++ symbolVal name
+                     ++ "` is tracked but its shadow is missing."))
+    _ -> pure (Set _pf name v)
 
   Block stmts -> Block <$> traverse (dualizeCodeWirtinger sr blame gen tracked) stmts
 
