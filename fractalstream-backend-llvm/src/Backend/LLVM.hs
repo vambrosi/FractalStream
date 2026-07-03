@@ -52,8 +52,6 @@ import qualified Data.Map.Strict as Map
 
 import Foreign hiding (void)
 
-import Text.Disassembler.X86Disassembler
-
 data JITFun (env :: Environment) (ret :: FSType) where
   JITFun :: EnvironmentProxy env -> TypeProxy ret -> FunPtr () -> JITFun env ret
 
@@ -216,12 +214,15 @@ withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript code0 action
             when dumpLLVM $
               putStrLn "------------------------------------------------------------"
 
-            when dumpAsm $ do
-              let dcfg = defaultConfig { confIn64BitMode = True }
-              instrs <- disassembleBlockWithConfig dcfg (wordPtrToPtr kernelFn) 1024
-              case instrs of
-                Left err -> putStrLn ("disassembly error: " ++ show err)
-                Right is -> forM_ is (\i -> putStrLn ("  " ++ showIntel i))
+            -- Native (host-architecture) assembly, straight from LLVM's own
+            -- target-machine codegen -- not the same as `dumpLLVM`'s IR text,
+            -- which is pre-regalloc and doesn't show spill slots. Look at the
+            -- function prologue's stack-pointer adjustment (`sub sp, sp,
+            -- #NNNN` on AArch64) to see the *actual* per-call native stack
+            -- frame size, including spills the IR dump can't show.
+            when dumpAsm $ withHostTargetMachine' $ \tm -> do
+              asmBytes <- moduleTargetAssembly tm md
+              putStrLn (BS.unpack asmBytes)
 
             let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
             action $ ViewerFunction $ \ViewerArgs{..} -> do

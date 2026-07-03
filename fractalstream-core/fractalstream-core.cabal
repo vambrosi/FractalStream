@@ -167,4 +167,5 @@ test-suite spec
                     , Language.Code.ReindexSpec
                     , Language.Code.DualSpec
                     , Language.Effect.ListSpec
+                    , Examples.SaddledropSpec
   build-tool-depends: hspec-discover:hspec-discover == 2.*
