@@ -9,10 +9,12 @@ import UI.ProjectActions
 import UI.Menu
 import UI.ProjectViewer (viewProject)
 import UI.ProjectEditor (editProject)
+import UI.PendingRenders
 import UI.Session
 import Data.DynamicValue
 import Data.Codec
 import Actor.Ensemble
+import Actor.Viewer (ViewerCompiler)
 
 import qualified Data.Yaml as YAML
 
@@ -30,7 +32,20 @@ import Control.Exception (Exception, catch, ErrorCall(..))
 import qualified Data.ByteString as BS
 
 main :: IO ()
-main = withBackend $ \complexViewerCompiler -> start $ do
+main = withBackend $ \complexViewerCompiler -> do
+  pending <- newPendingRenders
+  runGUI pending complexViewerCompiler
+  -- 'start' (below) returns exactly once, when the wx event loop exits --
+  -- the one shutdown path guaranteed to run regardless of how the app was
+  -- quit (Cmd+Q, closing the last window, etc.). Cancel any renders still
+  -- in flight here, before 'withBackend' tears down the JIT session, so
+  -- nothing is left calling into a kernel whose code is about to be
+  -- unmapped. See UI.PendingRenders and agents/<branch>.md's "SIGSEGV on
+  -- window close" note.
+  drainPendingRenders pending
+
+runGUI :: PendingRenders -> ViewerCompiler -> IO ()
+runGUI pending complexViewerCompiler = start $ do
 
   wxcAppSetAppName "FractalStream"
 
@@ -66,7 +81,7 @@ main = withBackend $ \complexViewerCompiler -> start $ do
           let si = SessionInfo{..}
           modifyValue activeSessions (si :)
           runEnsemble complexViewerCompiler
-            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
+            (viewProject pending (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
             prj
 
       projectOpenTemplate = \name prj -> do
@@ -80,7 +95,7 @@ main = withBackend $ \complexViewerCompiler -> start $ do
         let si = SessionInfo{..}
         modifyValue activeSessions (si :)
         runEnsembleFromSetup complexViewerCompiler
-            (viewProject (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
+            (viewProject pending (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
             prj
 
       projectEdit = editProject

@@ -24,6 +24,7 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Data.Planar
 
 import UI.Tile
+import UI.PendingRenders
 import Actor.Field (ContinuationField)
 import UI.Layout
 import UI.Widgets
@@ -52,11 +53,12 @@ import qualified Data.Map as Map
 import Data.Char (toLower)
 import qualified System.Info as System
 
-viewProject :: Window ()
+viewProject :: PendingRenders
+            -> Window ()
             -> (forall a. Frame a -> [Menu ()] -> IO ())
             -> IO ()
             -> UI
-viewProject projectWindow addMenuBar saveSession = UI
+viewProject pending projectWindow addMenuBar saveSession = UI
   { newEnsemble = pure ()
 
   , runSetup = \_ title setupUI continue -> do
@@ -98,12 +100,13 @@ viewProject projectWindow addMenuBar saveSession = UI
       windowReLayout f
       pure (windowShow f >> windowRaise f)
 
-  , makeViewer = const (makeWxComplexViewer projectWindow addMenuBar saveSession)
+  , makeViewer = const (makeWxComplexViewer pending projectWindow addMenuBar saveSession)
   }
 
 data BuiltinTool = NavTool | DebugTool
 
-makeWxComplexViewer :: Window ()
+makeWxComplexViewer :: PendingRenders
+                    -> Window ()
                     -> (forall a. Frame a -> [Menu ()] -> IO ())
                     -> IO ()
                     -> IO ()
@@ -113,7 +116,7 @@ makeWxComplexViewer :: Window ()
                     -> IO ()
                     -> Viewer
                     -> IO (IO ())
-makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow configEnv (SomeContext configValues) _rerunSetup remakeViewer theViewer@Viewer{..} = do
+makeWxComplexViewer pending projectWindow addMenuBar saveSession raiseConfigWindow configEnv (SomeContext configValues) _rerunSetup remakeViewer theViewer@Viewer{..} = do
 
     {- let clone = cloneViewer theViewer >>= void . makeWxComplexViewer projectWindow addMenuBar saveSessi         on raiseConfigWindow (SomeContext configValues)
     -}
@@ -455,6 +458,12 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow confi
       renderAction <- getRenderAction field
       renderTile' renderId True renderAction (width, height) model field
     currentTile    <- variable [value := viewerTile]
+    -- Register this window's cancel action once, up front. It's fine that
+    -- 'currentTile' will later be replaced (pan/zoom) or already cancelled
+    -- via 'on closing' below -- 'registerPendingRender' just re-reads
+    -- 'currentTile' live at drain time, and cancelling an already-finished
+    -- worker is a no-op. See UI.PendingRenders for the full rationale.
+    registerPendingRender pending (get currentTile value >>= cancelTileSync)
     savedTileImage <- variable [value := Nothing]
     lastTileImage  <- variable [value := Nothing]
     animate        <- variable [value := Nothing]
@@ -857,7 +866,15 @@ makeWxComplexViewer projectWindow addMenuBar saveSession raiseConfigWindow confi
     -- For each variable that the viewer code depends on, trigger a repaint whenever
     -- that variable changes.
     stopListening' <- onParameterChanges theViewer requestRefresh
-    set f [ on closing :~ (stopListening' >>) ]
+    -- Cancel the in-flight tile *synchronously* before letting the window
+    -- actually close: unlike jumpViewTo's cancelTile (fire-and-forget --
+    -- fine there, since the old tile is simply abandoned while a new one
+    -- starts), nothing here replaces this tile, so nothing else guarantees
+    -- its worker has stopped calling into the compiled kernel before
+    -- whatever teardown follows a window closing. See agents/<branch>.md's
+    -- "SIGSEGV on window close" note.
+    set f [ on closing :~
+              ((stopListening' >> (get currentTile value >>= cancelTileSync)) >>) ]
 
     -------------------------------------------------------
     -- Navigation actions

@@ -5,6 +5,7 @@ Description : Creation and execution of viewer tiles.
 module UI.Tile ( Tile()
                , renderTile
                , cancelTile
+               , cancelTileSync
                , tileRect
                , tileFieldGeometry
                , ifModified
@@ -53,7 +54,19 @@ data Tile = Tile
 -- no in-flight render reads freed memory (mirrors the arena drain-before-free
 -- discipline in the LLVM backend).
 cancelTile :: Tile -> IO ()
-cancelTile tile = void . forkIO $ do
+cancelTile = void . forkIO . cancelTileSync
+
+-- | Like 'cancelTile', but synchronous: blocks until the worker has actually
+-- terminated (and the field, if any, has been freed) before returning,
+-- instead of firing the cancellation off in the background. 'cancel' from
+-- "Control.Concurrent.Async" already blocks until the target thread is dead
+-- by design -- it just isn't safe to call directly from a UI event handler
+-- for an in-progress render, which is why 'cancelTile' wraps it in 'forkIO'.
+-- Use this instead when the caller genuinely needs the worker gone before
+-- proceeding -- e.g. on window close, so nothing is still calling into a JIT
+-- kernel whose code page is about to be unmapped.
+cancelTileSync :: Tile -> IO ()
+cancelTileSync tile = do
   cancel (tileWorker tile)
   maybe (pure ()) freeContinuationField (tileField tile)
 
