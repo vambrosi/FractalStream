@@ -72,8 +72,8 @@ library
                      , bytestring
                      , libffi
                      , mtl
-                     , disassembler
   hs-source-dirs:      src
+  c-sources:           cbits/big_stack_thread.c
 
 test-suite spec
   import: FractalStream-common

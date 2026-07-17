@@ -47,6 +47,14 @@ data Tile = Tile
     , tileField        :: Maybe ContinuationField
       -- ^ The continuation field this tile's kernel reads, if any. Owned by the
       --   tile and freed by 'cancelTile' after the worker has terminated.
+    , tileCancelled    :: MVar ()
+      -- ^ Filled in the first time 'cancelTileSync' actually runs for this
+      --   tile. A tile can legitimately be cancelled from more than one place
+      --   (e.g. a window's own close handler, *and* the global pending-renders
+      --   registry drained at app shutdown, if the window was rebuilt after a
+      --   config change and the old registry entry was never removed) -- this
+      --   makes a second call a safe no-op instead of a double 'cancel'/
+      --   double-`free` of 'tileField'.
     }
 
 -- | Cancel the tile, but don't wait for it to finish. Frees the tile's
@@ -65,10 +73,16 @@ cancelTile = void . forkIO . cancelTileSync
 -- Use this instead when the caller genuinely needs the worker gone before
 -- proceeding -- e.g. on window close, so nothing is still calling into a JIT
 -- kernel whose code page is about to be unmapped.
+--
+-- Idempotent: only the first call for a given 'Tile' actually cancels/frees
+-- anything, so it's safe to call more than once on the same tile (see
+-- 'tileCancelled').
 cancelTileSync :: Tile -> IO ()
 cancelTileSync tile = do
-  cancel (tileWorker tile)
-  maybe (pure ()) freeContinuationField (tileField tile)
+  firstTime <- tryPutMVar (tileCancelled tile) ()
+  when firstTime $ do
+    cancel (tileWorker tile)
+    maybe (pure ()) freeContinuationField (tileField tile)
 
 withSynchedTileBuffer :: Tile -> (Ptr Word8 -> IO b) -> IO b
 withSynchedTileBuffer tile action = synchedWith (tileBuffer tile) (`withForeignPtr` action)
@@ -141,11 +155,14 @@ renderTile smooth renderingAction (width, height) mRect field = do
                             }
     link worker
 
+    cancelled <- newEmptyMVar
+
     return Tile { imageRect = iRect
                 , tileBuffer = managedBuf
                 , tileWorker = worker
                 , shouldRedrawTile = redraw
                 , tileField = field
+                , tileCancelled = cancelled
                 }
 
 -- | The continuation field grid for a tile: same pixel→model mapping the block

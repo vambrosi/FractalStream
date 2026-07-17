@@ -259,6 +259,7 @@ withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript code0 action
                 -- none, safe zeroed dummy arrays + a 1x1 grid so every pixel clamps
                 -- to index 0 and reads the output defaults).
                 let runWithCont contPtrs (gx, gy, gdx, gdy, gw, gh) =
+                      runOnBigStack $
                       callFFI fn retVoid $
                         argPtr   vaBuffer
                         : argInt32 vaWidth
@@ -329,6 +330,39 @@ withCompiledCode env code run = do
                 let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
                 run (mkJX fn)
 -}
+
+foreign import ccall "fs_run_on_big_stack"
+  c_runOnBigStack :: FunPtr (IO ()) -> CSize -> IO ()
+
+foreign import ccall "wrapper"
+  mkThunkFun :: IO () -> IO (FunPtr (IO ()))
+
+-- | Native stack size for 'runOnBigStack', in bytes. GHC's own worker OS
+-- threads (used to run the 'safe' FFI calls below) default to a much smaller
+-- stack (~512KB-544KB on macOS) than a typical C thread gets, which
+-- LLVM-JIT-compiled kernels involving `critical`/`solve` on compound
+-- functions with a runtime-variable-exponent power can exceed -- see
+-- agents/big-stack-thread.md's "saddledrop native stack crash, round 2"
+-- section for the root cause. 8MB is a generous, typical C thread stack size.
+bigKernelStackSize :: CSize
+bigKernelStackSize = 8 * 1024 * 1024
+
+-- | Run an IO action on a fresh pthread with 'bigKernelStackSize' bytes of
+-- native stack, blocking until it completes. A workaround for the kernel
+-- native-stack-overflow issue documented in agents/big-stack-thread.md --
+-- it raises the ceiling rather than bounding what a kernel call actually
+-- needs, so it isn't a fix, just enough headroom to keep working.
+--
+-- Safe to combine with the global pending-renders registry
+-- (UI.PendingRenders): that registry doesn't need cancellation to be *fast*,
+-- only *guaranteed* before JIT teardown, and 'Control.Concurrent.Async.cancel'
+-- still blocks correctly until this call (and the pthread underneath it)
+-- actually returns, regardless of which OS thread runs it.
+runOnBigStack :: IO () -> IO ()
+runOnBigStack action = do
+  thunk <- mkThunkFun action
+  c_runOnBigStack thunk bigKernelStackSize
+  freeHaskellFunPtr thunk
 
 type LLVMJit = (JITDylib, ExecutionSession, IRCompileLayer, MVar Int)
 
