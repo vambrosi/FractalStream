@@ -1,0 +1,53 @@
+# DIAGNOSTIC: critical-combined-debug.yaml (3-arg function, both state vars'
+# initial values built from extra args, coupled tmp-swap) does NOT crash.
+# Re-comparing it against the crashing full replica turned up one more
+# difference I'd simplified away: potential() computes `s <- w / lam^depth`,
+# a power with a *runtime variable* exponent (depth : Z), not a compile-time
+# literal -- my simplified tests all used plain division or literal-exponent
+# powers (x^2), which the `integerPowers` AST optimization can unroll at
+# compile time. A variable exponent can't be unrolled and may take a
+# different (log/exp-based?) derivative path under critical's dualization.
+#
+# This file adds *only* that back onto critical-combined-debug.yaml's
+# baseline: `lam^depth` with `depth` a genuine (free, closure-captured)
+# variable, still returning C (not R) to keep that candidate isolated.
+
+viewer:
+  style: complex-plane
+  title: "DEBUG: critical with a variable-exponent power (lam^depth)"
+  size: 256x256
+  resizable: true
+  z-coord: c
+  initial-center: 0
+  initial-pixel-size: 1/64
+
+  code: |
+    depth : Z <- 1
+
+    define f(w, p, lam):
+        s : C <- w / lam^depth
+        x : C <- p + lam * s
+        y : C <- p + s
+        k : Z <- 0
+        while k < depth:
+            tmp : C <- x
+            x <- x^2 + c - 0.2 * y
+            y <- tmp
+            k <- k + 1
+
+        n : Z <- 0
+        while |x| < 10 and n < 100:
+            tmp2 : C <- x
+            x <- x^2 + c - 0.2 * y
+            y <- tmp2
+            n <- n + 1
+        f <- x
+
+    aa  : C <- (1 + (-0.2)) / 2
+    p   : C <- aa + sqrt(aa^2 - c)
+    lam : C <- p + sqrt(p^2 - (-0.2))
+
+    zeta : C <- 0.1
+    critical zeta -> f(zeta, p, lam)
+
+    color <- if stuck then white else black

@@ -439,6 +439,20 @@ compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
         br pixelLoopX
 
         pixelLoopX <- block `named` "begin k loop"
+        -- An `alloca` moves the stack pointer every time it *executes*, not
+        -- once per occurrence in the code. The accumulators below, and every
+        -- `alloca` the compiled viewer body emits inside `subsampleLoop`, run
+        -- once per pixel; without an explicit reclaim they would accumulate for
+        -- the whole call, making native stack use grow linearly with the number
+        -- of pixels the kernel is asked to render rather than staying bounded
+        -- by what a single pixel needs.
+        --
+        -- Save here and restore at the end of `exitSubsampleLoop`, the same
+        -- bracketing `DoWhile` uses for loop bodies. Loop counters, the
+        -- argument context and the prep/continuation pointers are allocated in
+        -- the entry block, below this saved pointer, so the restore does not
+        -- disturb them.
+        pixelStack <- call (getExtern "stacksave") []
         accR <- alloca AST.i32 Nothing 0
         accG <- alloca AST.i32 Nothing 0
         accB <- alloca AST.i32 Nothing 0
@@ -548,6 +562,10 @@ compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
           pixelIndex <- load pixelIndexPtr 0
           pixelIndex' <- add pixelIndex (C.int32 1)
           store pixelIndexPtr 0 pixelIndex'
+        -- Release this pixel's stack (paired with the `stacksave` in
+        -- `pixelLoopX`). This has to come after the accumulators above have been
+        -- read and written out, since they live in the region being reclaimed.
+        _ <- call (getExtern "stackrestore") [(pixelStack, [])]
         do -- x += dx
           tmp1 <- load xPtr 0
           tmp2 <- fadd tmp1 dx

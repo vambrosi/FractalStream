@@ -1,0 +1,194 @@
+# SaddleDrop
+#
+#   Henon map (a fixed): H_{a,c}(x, y) = (x^2 + c - a y,  x)
+#
+#   Dynamical plane (parameterizes W^u(p)):
+#     1) Fixed c from the parameter plane.
+#     2) Color is the escape-rate potential G+
+#
+#   Parameter plane (c-plane):
+#     1) Color is G+ evaluated at the critical point of G+ on W^u(p)
+#     2) Critical point is found by using Newton's method for each c.
+#
+# Algorithm
+#
+#   For each parameter c:
+#     1. find a saddle fixed point p(c) of H_{a,c};
+#     2. parameterize the unstable manifold W^u(p) by z via γ;
+#     3. find a critical point of the Green function G+ on W^u(p);
+#     4. color c by how fast that critical point escapes to infinity;
+#
+# `continuing seed` omitted for now
+
+viewers:
+  - title: "Dynamical plane"
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: z
+    initial-center: 0
+    initial-pixel-size: 1/128
+    escape-radius: escapeR
+    iteration-limit: maxIters
+
+    code: |
+      # Saddle fixed point p(c) and expanding eigenvalue λ
+      b : C <- (1 + a) / 2
+      p : C <- b + sqrt(b^2 - c)
+      lambda : C <- p + sqrt(p^2 - a)
+
+      # Green potential of
+      #     γ(w) ~ H^n(p + (w / λ^n) v), v=(λ,1);
+      #     G+   = lim (1/2^n) log|x_n|
+      # See the parameter plane's copy of this function.
+      define potential(w, p, lambda):
+          s : C <- w / lambda ^ n
+          x : C <- p + lambda * s
+          y : C <- p + s
+
+          k : Z <- 0
+          while k < n:
+              tmp : C <- x
+              x <- x^2 + c - a y
+              y <- tmp
+              k <- k + 1
+
+          # g accumulates 1/2^m; avoids integer 2^m (overflows past m=62) and
+          # keeps variable-exponent powers out of the differentiated body.
+          g : R <- 1
+          m : Z <- 0
+
+          while |x| < escapeR and m < maxIters:
+              tmp2 : C <- x
+              x <- x^2 + c - a y
+              y <- tmp2
+              g <- g / 2
+              m <- m + 1
+
+          potential <- if |x| >= escapeR then log(|x|) * g else 0
+
+      # Plot G+ across the z-plane
+      rate : R <- 0
+      rate <- potential(z, p, lambda)
+
+      if rate <= 0:
+          # bounded orbit -> in K+
+          color <- black
+      else:
+          # escape-rate level sets of G+
+          color <- rainbow(rate)
+
+    tools:
+        - name: Pick Critical Seed
+          shortcut: c
+          actions:
+            - event: click-or-drag
+              code: |
+                erase
+                draw point at z
+                critSeed <- z
+
+  - title: "Parameter plane (c)"
+    style: complex-plane
+    size: 512x512
+    resizable: true
+    z-coord: c
+    initial-center: 0
+    initial-pixel-size: 1/128
+    escape-radius: escapeR
+    iteration-limit: maxIters
+
+    code: |
+      define potential(w, p, lambda):
+          s : C <- w / lambda ^ n
+          x : C <- p + lambda * s
+          y : C <- p + s
+
+          # lift onto W^u(p): push the seed forward `n` times
+          k : Z <- 0
+          while k < n:
+              tmp : C <- x
+              x <- x^2 + c - a y
+              y <- tmp
+              k <- k + 1
+
+          # forward-iterate and measure escape
+          g : R <- 1
+          m : Z <- 0
+          while |x| < escapeR and m < maxIters:
+              tmp2 : C <- x
+              x <- x^2 + c - a y
+              y <- tmp2
+              g <- g / 2
+              m <- m + 1
+
+          # smooth Green potential (0 inside K+, > 0 outside)
+          potential <- if |x| >= escapeR then log(|x|) * g else 0
+
+      # Saddle fixed point p(c)  (x = y = p,  p^2 - (1+a)p + c = 0)
+      b : C <- (1 + a) / 2
+      p : C <- b + sqrt(b^2 - c)
+
+      # Expanding eigenvalue at p
+      #     λ^2 - 2pλ + a = 0, |λ| > 1
+      lambda : C <- p + sqrt(p^2 - a)
+
+      # Critical point of G+ on W^u(p) as a function of z .
+      #   (Initial guess needs to be different from 0)
+      z : C <- critSeed
+      critical z -> potential(z, p, lambda) up to critIters times
+
+      # Solution is the critical point. `stuck` is true if Newton failed to converge.
+      # Currently, you need to initialize the variable before getting the function value.
+      rate : R <- 0
+      rate <- potential(solution, p, lambda)
+
+      if stuck:
+          # no critical point found (Newton failed)
+          color <- white
+      else if rate <= 0:
+          # critical point found -> K connected
+          color <- black
+      else:
+          # escape-rate level sets of G+
+          color <- rainbow(rate)
+
+configuration:
+  title: Configuration
+  size: 400x300
+  vertical-contents:
+    - text-entry:
+        label: "a ="
+        value: "-0.2"
+        type: C
+        variable: a
+    - text-entry:
+        label: "c ="
+        value: "0"
+        type: C
+        variable: c
+    - text-entry:
+        label: "γ iterations:"
+        value: "1"
+        type: Z
+        variable: "n"
+    - text-entry:
+        label: "Critical seed:"
+        value: "0.1"
+        type: C
+        variable: critSeed
+    - text-entry:
+        label: "Critical max iterations:"
+        value: "10"
+        type: Z
+        variable: critIters
+    - text-entry:
+        label: "Max iterations:"
+        value: "100"
+        type: Z
+        variable: maxIters
+    - text-entry:
+        label: "Escape radius:"
+        value: "10"
+        type: R
+        variable: escapeR

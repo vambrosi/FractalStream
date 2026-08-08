@@ -12,8 +12,6 @@ extra-deps:
     - llvm-hs
     - llvm-hs-pure
 
-- git: https://github.com/mgrabmueller/disassembler
-  commit: 15a15db1fba50fd0ce52f26f43550fbad5529bf8
 
 flags:
   llvm-hs:
