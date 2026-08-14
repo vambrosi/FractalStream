@@ -1,0 +1,44 @@
+# `critical` on a compound function with a long loop
+#
+#   Newton on the gradient of f(w), whose body iterates x <- x^2 + c ten
+#   thousand times. The trip count is the whole point: it is large enough that
+#   any per-iteration native stack growth in the compiled kernel accumulates
+#   into a crash rather than staying invisible.
+#
+# Exercises
+#   - `critical` on a compound (looped) function, so the body is differentiated
+#     twice and re-spliced on every Newton step
+#   - the `llvm.stacksave`/`llvm.stackrestore` bracketing that bounds per-pass
+#     stack use in loop bodies and in the kernel's own pixel loop
+#
+# Expected
+#   - Mandelbrot white outline in a black background
+#
+# Failure looks like
+#   - SIGBUS or a stack-overflow crash, meaning per-iteration stack is no longer
+#     being reclaimed
+#   - a uniform image with no outline, meaning `critical` is not iterating: check
+#     that the gradient is not identically zero before trusting the render
+
+viewer:
+  style: complex-plane
+  title: "critical: compound function with a long loop"
+  size: 512x512
+  resizable: true
+  z-coord: c
+  initial-center: 0
+  initial-pixel-size: 1/64
+
+  code: |
+    define f(w):
+        x : C <- w
+        k : Z <- 0
+        while k < 10000:
+            x <- x^2 + c
+            k <- k + 1
+        f <- x
+
+    zeta : C <- 0.1
+    critical zeta -> f(zeta)
+
+    color <- if stuck then white else black

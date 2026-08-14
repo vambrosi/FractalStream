@@ -1,0 +1,79 @@
+# `critical` on a full Henon escape-rate potential
+#
+#   A standalone copy of the parameter plane from examples/saddledrop.yaml, with
+#   the configuration panel folded into local constants. Same picture, one
+#   viewer, no config panel and no tools, so a failure here is in the language
+#   or the backend rather than in the ensemble or UI wiring.
+#
+# Exercises
+#   - `critical` on a compound function containing loops
+#   - exit condition that uses an absolute value
+#   - derivative of real-valued result
+#   - arguments computed with `sqrt` outside the call and passed in
+#
+# Expected
+#   - the saddledrop parameter plane: black where the critical point stays
+#     bounded, smooth rainbow level sets of the escape rate outside it
+#
+# Failure looks like
+#   - a crash if differentiation fails or if stack overflows, for example
+#   - a uniformly black image if `potential` is coming back constant, so
+#     its gradient is identically zero and Newton converges without iterating
+#   - a uniformly white image if Newton never converges
+
+viewer:
+  style: complex-plane
+  title: "critical: Henon escape-rate potential (two loops, Abs, log)"
+  size: 512x512
+  resizable: true
+  z-coord: c
+  initial-center: 0
+  initial-pixel-size: 1/64
+
+  code: |
+    a : C <- -0.2
+    depth : Z <- 1
+    maxIters : Z <- 100
+    escapeR : R <- 10
+
+    define potential(w, p, lam):
+        s : C <- w / lam^depth
+        x : C <- p + lam * s
+        y : C <- p + s
+
+        k : Z <- 0
+        while k < depth:
+            tmp : C <- x
+            x <- x^2 + c - a * y
+            y <- tmp
+            k <- k + 1
+
+        # g accumulates 1/2^n as the loop runs. Computing 2^n afterwards would
+        # overflow an integer once n passes 62, which is reachable here.
+        g : R <- 1
+        n : Z <- 0
+        while |x| < escapeR and n < maxIters:
+            tmp2 : C <- x
+            x <- x^2 + c - a * y
+            y <- tmp2
+            g <- g / 2
+            n <- n + 1
+
+        potential <- if |x| >= escapeR then log(|x|) * g else 0
+
+    aa  : C <- (1 + a) / 2
+    p   : C <- aa + sqrt(aa^2 - c)
+    lam : C <- p + sqrt(p^2 - a)
+
+    zeta : C <- 0.1
+    critical zeta -> potential(zeta, p, lam) up to 10 times
+
+    rate : R <- 0
+    rate <- potential(solution, p, lam)
+
+    if stuck:
+        color <- white
+    else if rate <= 0:
+        color <- black
+    else:
+        color <- rainbow(rate)

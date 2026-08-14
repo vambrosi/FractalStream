@@ -1,23 +1,22 @@
-# Smooth (Green's-function) escape-rate picture of the Mandelbrot set, drawn with
-# a MULTI-STATEMENT user-defined function: `define` with local variables and a
-# `while` loop, called in statement position. This is the same shape as
-# saddledrop-full's `potential`, so it exercises/de-risks that machinery on its own.
+# Smooth escape-rate picture of the Mandelbrot set
 #
-# For parameter c, iterate x <- x^2 + c from x = 0 until escape; the smooth
-# potential log|x| / 2^n approximates the Green function G+(c) of the Mandelbrot
-# set (0 inside, growing outside).
+#   For each parameter c, iterate x <- x^2 + c from x = 0 until escape. The
+#   smooth potential log|x| / 2^n approximates the Green function G+(c): zero
+#   inside the set, growing outside.
 #
-# Features exercised: compound user-defined function (locals + `while` + reassignment)
-# called as `r <- greenRate(c)`, config variables, `log`, `cycle`, integer power.
+# Exercises
+#   - a multi-statement `define` with local variables and a `while` loop, called
+#     in statement position
+#   - `log`, integer powers, `cycle`, and configuration variables
 #
-# EXPECTED:
-#   The Mandelbrot set in black, surrounded by smooth blue->white level sets of the
-#   escape rate. No hard integer bands, no seams.
+# Expected
+#   - the Mandelbrot set in black, surrounded by smooth blue-to-white level sets
+#   - no hard integer bands and no seams
 #
-# WHAT AN ERROR LOOKS LIKE:
-#   - Flat / structureless     -> the function body or loop didn't run.
-#   - Hard integer "bands"     -> the smooth log(|x|)/2^n term is wrong.
-#   - All black                -> the escape test never triggers.
+# Failure looks like
+#   - flat or structureless: the function body or its loop never ran
+#   - hard integer bands: the smooth log(|x|)/2^n term is wrong
+#   - all black: the escape test never triggers
 
 viewer:
   style: complex-plane
@@ -33,10 +32,12 @@ viewer:
     define greenRate(c0):
         x : C <- 0
         n : Z <- 0
+
         while |x| < escapeR and n < maxIters:
             x <- x^2 + c0
             n <- n + 1
-        greenRate <- if |x| >= escapeR then log(|x|) / (2 ^ n) else 0
+
+        greenRate <- if |x| >= escapeR then n - log(log(|x|)) / log(2) else 0
 
     r : R <- 0
     r <- greenRate(c)

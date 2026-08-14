@@ -1,0 +1,60 @@
+# `critical` on a body containing a runtime-variable exponent
+#
+#   The function body computes `w / lam^depth`, where `depth` is a variable
+#   rather than a literal. Literal integer exponents are unrolled into
+#   multiplications by the `integerPowers` AST pass; a variable exponent cannot
+#   be, so it compiles as exp(p * log(z)).
+#
+# Exercises
+#   - a complex power with a non-literal exponent, under `critical`'s double
+#     differentiation
+#   - a three-argument compound function whose extra arguments are computed with
+#     `sqrt` outside the call and passed in
+#   - two coupled state variables swapped through a temporary
+#
+# Expected
+#   - Black where Newton converged, white where it did not
+#
+# Failure looks like
+#   - a crash or an unreasonably slow render, meaning the differentiated body is
+#     duplicating the exp/log chain instead of sharing it
+
+viewer:
+  style: complex-plane
+  title: "critical: variable-exponent power (lam^depth)"
+  size: 512x512
+  resizable: true
+  z-coord: c
+  initial-center: 0
+  initial-pixel-size: 1/64
+
+  code: |
+    depth : Z <- 1
+
+    define f(w, p, lam):
+        s : C <- w / lam^depth
+        x : C <- p + lam * s
+        y : C <- p + s
+        k : Z <- 0
+        while k < depth:
+            tmp : C <- x
+            x <- x^2 + c - 0.2 * y
+            y <- tmp
+            k <- k + 1
+
+        n : Z <- 0
+        while |x| < 10 and n < 100:
+            tmp2 : C <- x
+            x <- x^2 + c - 0.2 * y
+            y <- tmp2
+            n <- n + 1
+        f <- x
+
+    aa  : C <- (1 + (-0.2)) / 2
+    p   : C <- aa + sqrt(aa^2 - c)
+    lam : C <- p + sqrt(p^2 - (-0.2))
+
+    zeta : C <- 0.1
+    critical zeta -> f(zeta, p, lam)
+
+    color <- if stuck then white else black

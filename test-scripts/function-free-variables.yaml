@@ -1,3 +1,15 @@
+# Free variables in a user-defined function are captured at the definition site
+#
+#   `f(z) = z^2 + c` is defined while c = 1/4, and c is reassigned to -1 before
+#   `f` is ever called. The picture shows which value the definition actually
+#   captured.
+#
+# Expected
+#   - the Julia set for c = 1/4
+#
+# Failure looks like
+#   - the Julia set for c = -1 if the body captured `c` by reference.
+
 viewer:
   title: Function free variable scope test
   style: complex-plane

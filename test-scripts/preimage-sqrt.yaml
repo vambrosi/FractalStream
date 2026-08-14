@@ -1,22 +1,22 @@
-# `preimage` test: solve f(w) = z for w, with f a user-defined (expression) function,
-# then colour by the root's argument.
+# Square-root branch via `preimage`
 #
-#   preimage w -> sq(w) of z   solves   sq(w) = z   i.e.   w^2 = z   ->   w = sqrt(z)
+#   `preimage w -> sq(w) of z` solves sq(w) = z, i.e. w^2 = z, so w = sqrt(z).
+#   Seeded from w = z, Newton lands on the principal branch, so arg(solution) is
+#   arg(z)/2 and the color wheel turns at half the angular speed of a plain
+#   `rainbow(arg z)`.
 #
-# Seeded from w = z, Newton converges to the principal square-root branch, so
-# arg(solution) = arg(z)/2: the colour wheel turns at HALF the angular speed of a
-# plain `rainbow(arg z)` (z must wind around the origin twice for one colour cycle).
+# Exercises
+#   - `preimage ... of <value>`
+#   - an expression `define` used as the preimage target
+#   - `solution` and `stuck`
 #
-# Features exercised: `preimage ... of <value>`, an expression `define` used inside
-# the preimage target, `solution`/`stuck`.
+# Expected
+#   - a smooth color wheel completing one cycle per two turns of z about the
+#     origin, with a single branch-cut line where the two roots meet
 #
-# EXPECTED:
-#   A smooth colour wheel completing ONE cycle per TWO turns of z about the origin
-#   (half-speed), with a single branch-cut line where the two square roots meet.
-#
-# WHAT AN ERROR LOOKS LIKE:
-#   - Full-speed wheel (one cycle per turn) -> preimage solved the wrong equation.
-#   - Flat / black everywhere               -> Newton never converged (always stuck).
+# Failure looks like
+#   - a full-speed wheel, one cycle per turn: `preimage` solved the wrong equation
+#   - flat or all black: Newton never converged
 
 viewer:
   style: complex-plane

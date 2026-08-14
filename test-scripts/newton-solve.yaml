@@ -1,20 +1,22 @@
-# Newton fractal for z^3 - 1, drawn with the `solve` statement.
+# Newton fractal for z^3 - 1, via the `solve` statement
 #
-# This is essentially the examples/newton.yaml script where instead of using
-# loops we just write `solve z -> z^3 - 1`. In the background, this will run
-# Newton iterations using the symbolic derivative and starting from each
-# pixel's own coordinate as the seed. We then color the pixel by the argument
-# of the root it reached, as usual. `stuck` is true if a pixel failed
-# to converge within the iteration budget; those are painted black.
+#   `solve z -> z^3 - 1` runs Newton from each pixel's own coordinate as the
+#   seed, using the symbolic derivative, and colors by the argument of the root
+#   reached. The same picture as examples/newton.yaml, written without an
+#   explicit loop.
 #
-# EXPECTED:
-#   The familiar Newton fractal. Essentially no black pixels.
+# Exercises
+#   - `solve` on a closed-form body, with the derivative taken symbolically
+#   - `solution` and `stuck`
 #
-# WHAT AN ERROR LOOKS LIKE:
-#   - A flat, single-color image or structureless noise  -> solve didn't
-#     actually iterate / the body or derivative is wrong.
-#   - An all-black image  -> Newton never converges (stuck always true).
-#   - Lost 3-fold symmetry or no fractal boundary  -> desugaring is off.
+# Expected
+#   - the Newton fractal, three-fold symmetric
+#   - essentially no black pixels
+#
+# Failure looks like
+#   - flat color or noise: `solve` never iterated, or the body or derivative is wrong
+#   - all black: Newton never converges, so `stuck` is always true
+#   - lost three-fold symmetry or no fractal boundary: the desugaring is off
 
 viewer:
   style: complex-plane
@@ -27,6 +29,7 @@ viewer:
   iteration-limit: maxIters
   code: |
     solve z -> z^3 - 1
+
     if stuck:
         color <- black
     else:
