@@ -10,7 +10,6 @@ import Language.Code
 import Language.Code.InterpretIO
 import Language.Value.Evaluator (HaskellValue)
 import Actor.Viewer
-import Actor.Field (ContinuationField(..), overrideFromField, reprojectIndex, markHasSeed)
 import Data.Indexed.Functor
 import Data.Color (colorToRGB, grey)
 
@@ -39,20 +38,6 @@ interpretViewer mPrepScript body action = do
 
         iorefs :: Context IORefTypeOfBinding (ViewerEnv env) <-
           mapContextM (\_ _ -> newIORef) context
-
-        -- If a continuation field was computed for this tile, override the
-        -- published output bindings with the field's value at this pixel
-        -- (found by reprojecting the pixel coordinate onto the field grid).
-        case vaContinuationField of
-          Nothing -> pure ()
-          Just (ContinuationField outEnv arrays geom) ->
-            case reprojectIndex geom (x :+ y) of
-              Nothing  -> pure ()
-              Just idx -> do
-                overrideFromField env outEnv arrays idx iorefs
-                -- Mark that a field seed is available, so a `continuing` solve
-                -- seeds from it rather than the cold-start anchor.
-                markHasSeed env iorefs
 
         (r, g, b) <- fmap colorToRGB . flip evalStateT iorefs $ do
           update bindingEvidence (Proxy @InternalX) RealType x

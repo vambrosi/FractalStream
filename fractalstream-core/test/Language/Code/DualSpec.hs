@@ -12,7 +12,7 @@ import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Code.Dual (dValue, dualizeCode)
 import Language.Value.Typecheck
-  (InternalIterations, InternalStuck, InternalIterationLimit, InternalSolution, InternalContSeed, InternalHasSeed)
+  (InternalIterations, InternalStuck, InternalIterationLimit, InternalSolution)
 import Language.Draw
 import Language.Typecheck (TC(..))
 import Language.Parser.SourceRange (SourceRange(..))
@@ -188,51 +188,3 @@ critical z -> sqMinus3(z)
                       (simulate noDraw code >> eval (Var (Proxy @InternalSolution) ComplexType bindingEvidence))
                       (ctx, ())
           in magnitude (sol - (3 :+ 0)) `shouldSatisfy` (< 1e-7)
-
-  -- Throwaway check: `continuing seed` on a compound-function `solve` --
-  -- same mechanism as the closed-form version (see
-  -- Language.Code.Typecheck's tcNewton), just spliced around the
-  -- re-splicing Newton loop instead of a symbolic one. `z` itself starts
-  -- far from the root; with InternalHasSeed = True, the seed (already
-  -- close to the root) should be used instead, and the converged solution
-  -- should be written back into InternalContSeed.
-  describe "tcSolveCompound with `continuing seed`" $
-    it "seeds z from the continuation field and writes the solution back into it" $ do
-      let src = [r|
-define sqMinus4(t):
-    w : C <- 1
-    k : Z <- 0
-    while k < 2:
-        w <- w * t
-        k <- k + 1
-    result <- w - 4
-solve z -> sqMinus4(z) continuing seed
-|]
-          env = declare @"z" ComplexType
-              $ declare @InternalIterations     IntegerType
-              $ declare @InternalStuck          BooleanType
-              $ declare @InternalIterationLimit IntegerType
-              $ declare @InternalSolution       ComplexType
-              $ declare @InternalContSeed       ComplexType
-              $ declare @InternalHasSeed        BooleanType
-              $ endOfDecls
-          ctx = Bind (Proxy @"z") ComplexType (100 :+ 100)
-              $ Bind (Proxy @InternalIterations)     IntegerType (0 :: Int64)
-              $ Bind (Proxy @InternalStuck)          BooleanType False
-              $ Bind (Proxy @InternalIterationLimit) IntegerType (100 :: Int64)
-              $ Bind (Proxy @InternalSolution)       ComplexType 0
-              $ Bind (Proxy @InternalContSeed)       ComplexType (1.9 :+ 0)
-              $ Bind (Proxy @InternalHasSeed)        BooleanType True
-              $ EmptyContext
-
-      case parseCode env noSplices src of
-        Left e -> expectationFailure (ppFullError e src)
-        Right code ->
-          let (sol, capturedSeed) = evalState
-                (simulate noDraw code >>
-                  ((,) <$> eval (Var (Proxy @InternalSolution) ComplexType bindingEvidence)
-                       <*> eval (Var (Proxy @InternalContSeed) ComplexType bindingEvidence)))
-                (ctx, ())
-          in do
-            magnitude (sol - (2 :+ 0)) `shouldSatisfy` (< 1e-7)
-            magnitude (capturedSeed - (2 :+ 0)) `shouldSatisfy` (< 1e-7)

@@ -38,13 +38,9 @@ import Language.Value
 import Language.Value.Evaluator (HaskellValue)
 import Language.Value.Transform
 import Language.Code
-import Language.Code.InterpretIO (interpretToIOWithLastValues)
-import Language.Value.Typecheck (internalContSeed, InternalContSeed)
-import qualified Data.Set as Set
+import Language.Code.InterpretIO (interpretToIOWithLastValues, ScalarIORefM)
+import Language.Draw (DrawHandler(..))
 import Actor.Viewer
-import Actor.Field
-  (withPrepArrays, writePrepOutputsFromMap, noPrepDraw,
-   ContinuationField(..), FieldGeometry(..))
 import Data.Color
 
 import Data.IORef (newIORef)
@@ -151,6 +147,64 @@ fromFFIRetArg t ptr = case t of
     pure (v /= 0)
   _ -> error ("todo: fromFFIRetArg " ++ showType t)
 
+-- | Stride in bytes per pixel for each FSType in prep arrays.
+prepArrayStride :: TypeProxy t -> Int
+prepArrayStride = \case
+  BooleanType -> 1
+  IntegerType -> 4
+  RealType    -> 8
+  ComplexType -> 16
+  ColorType   -> 3
+  _           -> 4  -- stub for List/Text
+
+-- | Run @action@ with one zeroed @Ptr Word8@ prep array per variable in
+-- @prepOutputEnv@.  The arrays are stack-allocated and zero-initialised.
+withPrepArrays :: EnvironmentProxy env -> Int -> ([Ptr Word8] -> IO r) -> IO r
+withPrepArrays EmptyEnvProxy _ action = action []
+withPrepArrays (BindingProxy _name ty env') nPixels action =
+  let sz = nPixels * prepArrayStride ty
+  in allocaBytes sz $ \ptr -> do
+    fillBytes ptr 0 sz
+    withPrepArrays env' nPixels $ \restPtrs ->
+      action (ptr : restPtrs)
+
+-- | Write a single Haskell value into a prep array at the given byte offset.
+writeToPrepArray :: TypeProxy t -> Ptr Word8 -> Int -> HaskellType t -> IO ()
+writeToPrepArray ty ptr offset val = case ty of
+  BooleanType -> pokeByteOff ptr offset (if val then (1 :: Word8) else 0)
+  IntegerType -> pokeByteOff ptr offset (fromIntegral val :: Int32)
+  RealType    -> pokeByteOff ptr offset (val :: Double)
+  ComplexType -> let re :+ im = val
+                 in pokeByteOff ptr offset re >> pokeByteOff ptr (offset + 8) im
+  ColorType   -> let (r, g, b) = colorToRGB val
+                 in pokeByteOff ptr offset r
+                 >> pokeByteOff ptr (offset + 1) g
+                 >> pokeByteOff ptr (offset + 2) b
+  _ -> pure ()
+
+-- | For each variable in @prepOutputEnv@, look up its last-assigned value
+-- from the interpreter's tracking map and write it to the corresponding
+-- prep array at pixel index @pixelIdx@.
+writePrepOutputsFromMap
+  :: EnvironmentProxy prepOutputEnv
+  -> [Ptr Word8]
+  -> Map.Map String SomeHaskellType
+  -> Int
+  -> IO ()
+writePrepOutputsFromMap EmptyEnvProxy [] _ _ = pure ()
+writePrepOutputsFromMap (BindingProxy name ty env') (ptr:ptrs) vals pixelIdx = do
+  let n = symbolVal name
+      byteOffset = pixelIdx * prepArrayStride ty
+  case Map.lookup n vals of
+    Just (SomeHaskellType ty' val) -> writeToPrepArray ty' ptr byteOffset val
+    Nothing                        -> pure ()
+  writePrepOutputsFromMap env' ptrs vals pixelIdx
+writePrepOutputsFromMap _ _ _ _ = pure ()
+
+-- | No-op draw handler for use in the Haskell prep pass.
+noPrepDraw :: DrawHandler ScalarIORefM
+noPrepDraw = DrawHandler (\_ -> pure ())
+
 -- | CPS wrapper that exposes the prep output environment proxy from a 'PrepScript'.
 -- Avoids existential escape by keeping the proxy in the continuation's scope.
 withPrepEnvProxy :: Maybe (PrepScript env)
@@ -158,18 +212,6 @@ withPrepEnvProxy :: Maybe (PrepScript env)
                  -> IO r
 withPrepEnvProxy Nothing                       k = k EmptyEnvProxy
 withPrepEnvProxy (Just (PrepScript proxy _))   k = k proxy
-
--- | The continuation output environment for a viewer with a `solve … continuing
--- seed` is the single internal continuation-seed variable; we detect it by that
--- variable's use in the (typechecked) code. No continuing solve ⇒ empty env ⇒ no
--- field parameters in the compiled kernel.
-withAutoContEnvProxy :: Code env'
-                     -> (forall contOutputEnv. EnvironmentProxy contOutputEnv -> IO r)
-                     -> IO r
-withAutoContEnvProxy code k
-  | internalContSeed `Set.member` execState (usedVarsInCode code) Set.empty
-    = k (envProxy (Proxy @('[ '(InternalContSeed, 'ComplexT) ])))
-  | otherwise = k EmptyEnvProxy
 
 withJittedViewer :: forall env t. (MissingViewerArgs env, KnownEnvironment env)
                  => LLVMJit
@@ -180,9 +222,8 @@ withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript code0 action
   -- Do some basic AST-level optimizations first
   let code = transformValues (integerPowers . avoidSqrt) code0
   name <- modifyMVar nextId (\n -> pure (n + 1, "kernel_" ++ show n))
-  withPrepEnvProxy mPrepScript $ \prepEnvProxy ->
-   withAutoContEnvProxy code $ \contEnvProxy -> do
-    m <- either error pure (compileRenderer' prepEnvProxy contEnvProxy (fromString name) code)
+  withPrepEnvProxy mPrepScript $ \prepEnvProxy -> do
+    m <- either error pure (compileRenderer' prepEnvProxy (fromString name) code)
     withContext $ \ctx ->
       withModuleFromAST ctx m $ \md -> do
       let pm = CuratedPassSetSpec
@@ -253,34 +294,18 @@ withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript code0 action
                           (Map.empty, iorefs)
                         writePrepOutputsFromMap prepEnvProxy prepPtrs lastVals
                           (row * w + col)
-                -- Call the LLVM kernel with prep + continuation arrays passed as
-                -- raw pointers, followed by the field grid geometry. @contPtrs@
-                -- and the geometry come from the tile's continuation field (or, if
-                -- none, safe zeroed dummy arrays + a 1x1 grid so every pixel clamps
-                -- to index 0 and reads the output defaults).
-                let runWithCont contPtrs (gx, gy, gdx, gdy, gw, gh) =
-                      callFFI fn retVoid $
-                        argPtr   vaBuffer
-                        : argInt32 vaWidth
-                        : argInt32 vaHeight
-                        : argInt32 vaSubsamples
-                        : argCDouble (CDouble $ fst vaPoint)
-                        : argCDouble (CDouble $ snd vaPoint)
-                        : argCDouble (CDouble $ fst vaStep)
-                        : argCDouble (CDouble $ snd vaStep)
-                        : colorArg
-                        : args ++ map argPtr prepPtrs ++ map argPtr contPtrs
-                       ++ [ argCDouble (CDouble gx), argCDouble (CDouble gy)
-                          , argCDouble (CDouble gdx), argCDouble (CDouble gdy)
-                          , argInt32 gw, argInt32 gh ]
-                case vaContinuationField of
-                  Just (ContinuationField _ arrays geom) ->
-                    runWithCont arrays
-                      ( fgOriginX geom, fgOriginY geom, fgDX geom, fgDY geom
-                      , fromIntegral (fgWidth geom), fromIntegral (fgHeight geom) )
-                  Nothing ->
-                    withPrepArrays contEnvProxy 1 $ \dummy ->
-                      runWithCont dummy (0, 0, 1, 1, 1, 1)
+                -- Call the LLVM kernel with prep arrays passed as raw pointers
+                let fullArgs = argPtr   vaBuffer
+                             : argInt32 vaWidth
+                             : argInt32 vaHeight
+                             : argInt32 vaSubsamples
+                             : argCDouble (CDouble $ fst vaPoint)
+                             : argCDouble (CDouble $ snd vaPoint)
+                             : argCDouble (CDouble $ fst vaStep)
+                             : argCDouble (CDouble $ snd vaStep)
+                             : colorArg
+                             : args ++ map argPtr prepPtrs
+                callFFI fn retVoid fullArgs
               sequence_ (colorFree : frees)
 
 {-

@@ -31,7 +31,6 @@ module Actor.Viewer
 import FractalStream.Prelude
 
 import Actor.Viewer.Types
-import Actor.Field (ContinuationField(..), FieldGeometry(..), freeContinuationField)
 import Data.DynamicValue
 import Actor.Layout (CodeString(..), Dimensions(..), UIScript)
 import Actor.Tool
@@ -104,9 +103,6 @@ data ViewerArgs env = ViewerArgs
   , vaSubsamples :: Int32
   , vaBuffer     :: Ptr Word8
   , vaArgs       :: Context HaskellValue env
-  , vaContinuationField :: Maybe ContinuationField
-    -- ^ The tile's continuation field, if any. Computed once per tile and read
-    -- per pixel (by reprojecting the pixel coordinate onto the field grid).
   }
 
 data CodeWithArgs where
@@ -132,11 +128,6 @@ data Viewer = Viewer
   , vCodeWithArgs :: CodeWithArgs
   , vTools     :: Dynamic [Tool]
   , vScript    :: UIScript
-  , vContinuationField :: Maybe (FieldGeometry -> IO (Maybe ContinuationField))
-    -- ^ If the viewer has a @continuation:@ block, run its tile pass for the
-    -- given geometry (reading live config args), producing a freshly-allocated
-    -- field. The caller owns the result and must 'freeContinuationField' it once
-    -- the tile that reads it has finished.
   }
 
 snapshotToFile :: Viewer -> Bool -> FilePath -> IO (Maybe String)
@@ -152,11 +143,6 @@ snapshotToFile Viewer{..} downsample path = case vCodeWithArgs of
       let vaStep = (px, px)
       (cx, cy) <- getDynamic vCenter
       let vaPoint = (cx - fromIntegral vaWidth * px / 2, cy + fromIntegral vaHeight * px / 2)
-          fieldGeom = FieldGeometry
-            { fgOriginX = fst vaPoint, fgOriginY = snd vaPoint
-            , fgDX = px, fgDY = negate px
-            , fgWidth = fromIntegral vaWidth, fgHeight = fromIntegral vaHeight }
-      vaContinuationField <- maybe (pure Nothing) ($ fieldGeom) vContinuationField
       ViewerFunction fn <- getDynamic vCode
       result <- allocaBytes (fromIntegral $ 3 * vaWidth * vaHeight) $ \vaBuffer -> do
         fn ViewerArgs{..}
@@ -182,7 +168,6 @@ snapshotToFile Viewer{..} downsample path = case vCodeWithArgs of
           else
             encodeBufferToPngFile (fromIntegral vaWidth, fromIntegral vaHeight) vaBuffer path
         pure Nothing
-      maybe (pure ()) freeContinuationField vaContinuationField
       pure result
 
 onParameterChanges :: Viewer -> IO () -> IO (IO ())
@@ -228,7 +213,6 @@ invokeViewerFunction (ViewerFunction fn) vaArgs =
         vaWidth = fromIntegral w
         vaHeight = fromIntegral h
         vaSubsamples = fromIntegral subsamples
-        vaContinuationField = Nothing
     fn ViewerArgs{..}
 
 
@@ -349,7 +333,6 @@ cloneViewer v = do
     , vDrawCmdsChanged = vDrawCmdsChanged v
     , vDrawTo = vDrawTo v
     , vScript = vScript v
-    , vContinuationField = vContinuationField v
     }
 
 -- | A fallback viewer function that paints every point grey

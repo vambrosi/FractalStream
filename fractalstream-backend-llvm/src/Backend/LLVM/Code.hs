@@ -28,7 +28,6 @@ import Unsafe.Coerce (unsafeCoerce)
 
 import Language.Type
 import Language.Code
-import Language.Value.Typecheck (internalHasSeed)
 import Data.Indexed.Functor
 
 toParameterList :: EnvironmentProxy env -> [(AST.Type, ParameterName)]
@@ -359,14 +358,13 @@ overwritePrepOutputs (BindingProxy name ty env') (ptr:ptrs) pixelIdx argMap = do
 overwritePrepOutputs _ _ _ _ =
   throwError "INTERNAL ERROR: mismatched prep output env/ptrs"
 
-compileRenderer' :: forall env prepOutputEnv contOutputEnv
+compileRenderer' :: forall env prepOutputEnv
                  . KnownEnvironment env
                 => EnvironmentProxy prepOutputEnv
-                -> EnvironmentProxy contOutputEnv
                 -> AST.Name
                 -> Code (ViewerEnv env)
                 -> Either String AST.Module
-compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
+compileRenderer' prepOutputEnv name code = runExcept $
   assertAbsent (Proxy @InternalBlockWidth)  (envProxy (Proxy @env)) $
   assertAbsent (Proxy @InternalBlockHeight) (envProxy (Proxy @env)) $
   assertAbsent (Proxy @InternalSubsamples)  (envProxy (Proxy @env)) $
@@ -379,15 +377,6 @@ compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
     let retParam       = (toLLVMPtrType ColorType, NoParameterName)
         params         = toParameterList (envProxy (Proxy @(RenderEnv' env)))
         prepParams     = toPrepParamList prepOutputEnv
-        contParams     = toPrepParamList contOutputEnv
-        -- The continuation field's grid geometry, so the kernel can reproject a
-        -- pixel's coordinate to a global field index (see the read in the loop).
-        geomParams     = [ (AST.double, ParameterName (fromString "field_ox"))
-                         , (AST.double, ParameterName (fromString "field_oy"))
-                         , (AST.double, ParameterName (fromString "field_dx"))
-                         , (AST.double, ParameterName (fromString "field_dy"))
-                         , (AST.i32,    ParameterName (fromString "field_w"))
-                         , (AST.i32,    ParameterName (fromString "field_h")) ]
         pfX      = bindingEvidence @InternalX   @'RealT  @(ViewerEnv env)
         pfY      = bindingEvidence @InternalY   @'RealT  @(ViewerEnv env)
         pfdX     = bindingEvidence @InternalDX  @'RealT  @(ViewerEnv env)
@@ -395,12 +384,10 @@ compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
         pfOutput = bindingEvidence @"color"     @'ColorT @(ViewerEnv env)
         nViewerEnvArgs = envLength (envProxy (Proxy @(ViewerEnv env)))
         nPrep          = envLength prepOutputEnv
-        nCont          = envLength contOutputEnv
-    function name (retParam : params ++ prepParams ++ contParams ++ geomParams) AST.void $ \allArgs -> do
+    function name (retParam : params ++ prepParams) AST.void $ \allArgs -> do
       let (retPtr : blockWidthArg : blockHeightArg : subsamplesArg : rest) = allArgs
-          (rawArgs, rest2)          = splitAt nViewerEnvArgs rest
-          (prepArrayPtrs, rest3)    = splitAt nPrep rest2
-          (contArrayPtrs, geomArgs) = splitAt nCont rest3
+          (rawArgs, rest2)      = splitAt nViewerEnvArgs rest
+          (prepArrayPtrs, _)    = splitAt nPrep rest2
       getExtern <- getGetExtern
       mdo
 
@@ -473,37 +460,6 @@ compileRenderer' prepOutputEnv contOutputEnv name code = runExcept $
           -- Load prep output vars from their flat arrays before the kernel.
           pixelIndex <- load pixelIndexPtr 0
           overwritePrepOutputs prepOutputEnv prepArrayPtrs pixelIndex argMap
-
-          -- Continuation field read: reproject this point's model coordinate
-          -- (xVal,yVal) onto the field grid -> a global index, clamped to the
-          -- field bounds, then overwrite the continuation output vars. When there
-          -- is no continuation block, contOutputEnv is empty and this is a no-op.
-          do
-            let (foX : foY : fdX : fdY : fW : fH : _) = geomArgs
-            cNum <- fsub xVal foX
-            cDiv <- fdiv cNum fdX
-            cRnd <- fadd cDiv (C.double 0.5)
-            col  <- fptosi cRnd AST.i32
-            rNum <- fsub yVal foY
-            rDiv <- fdiv rNum fdY
-            rRnd <- fadd rDiv (C.double 0.5)
-            row  <- fptosi rRnd AST.i32
-            rowW <- mul row fW
-            gRaw <- add rowW col
-            nPix <- mul fW fH
-            maxI <- sub nPix (C.int32 1)
-            tooBig   <- icmp P.SGT gRaw maxI
-            g1       <- select tooBig maxI gRaw
-            tooSmall <- icmp P.SLT g1 (C.int32 0)
-            gIdx     <- select tooSmall (C.int32 0) g1
-            overwritePrepOutputs contOutputEnv contArrayPtrs gIdx argMap
-            -- A continuation field is present (nCont > 0): mark hasSeed = True so
-            -- a `continuing` solve seeds from the field rather than the anchor.
-            when (nCont > 0) $ case Map.lookup internalHasSeed argMap of
-              Just (SomePtrOp BooleanType ptrOp) -> do
-                trueBit <- trunc (C.int8 1) AST.i1
-                storeOperand (BooleanOp trueBit) ptrOp
-              _ -> pure ()
 
           runReaderT (compileCode getExtern code) args
           (cr0, cg0, cb0) <- case getBinding args pfOutput of

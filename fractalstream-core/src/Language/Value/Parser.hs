@@ -455,11 +455,10 @@ valueGrammar baseEnv funcs compoundNames splices = mdo
         , "romao", "bamo", "broco", "corko", "viko"
         , "ice", "fire", "rose", "wheat", "forest", "ocean"
         , "winter", "spring", "summer", "fall"
-        -- `of`/`within` delimit the `solve`/`preimage` clauses, and `continuing`
-        -- begins the optional `continuing seed` modifier; reserving them here
-        -- stops a value greedily absorbing them as juxtaposed variables (which
-        -- would make the clause boundary ambiguous).
-        , "of", "within", "continuing"
+        -- `of`/`within` delimit the `solve`/`preimage` clauses; reserving them
+        -- here stops a value greedily absorbing them as juxtaposed variables
+        -- (which would make the clause boundary ambiguous).
+        , "of", "within"
         , "rgb", "mod", "diff"]
         `Set.union` Map.keysSet colors
         `Set.union` Map.keysSet commonFunctions

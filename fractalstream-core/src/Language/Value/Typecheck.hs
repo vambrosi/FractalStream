@@ -486,20 +486,6 @@ internalSolution      :: String
 internalSolution      = "solution"
 type InternalSolution = "solution"
 
--- | Engine-internal variables backing a `continuing seed` solve. @contSeed@ is
--- dual-purpose: the engine writes the incoming seed into it (per cell in the
--- pre-pass, per pixel at render from the field), the solve reads it, and the
--- solve writes its result back into it so the field captures the cell's solution
--- through the same variable. @hasSeed@ distinguishes "use the provided seed"
--- (default for render and threaded cells) from "cold-start: use the unknown's
--- current value as the anchor" (default 'False' so a continuing solve behaves
--- like a plain solve until the pre-pass/field fill these in).
-internalContSeed, internalHasSeed :: String
-internalContSeed      = "[internal] continuation seed"
-type InternalContSeed = "[internal] continuation seed"
-internalHasSeed       = "[internal] continuation has seed"
-type InternalHasSeed  = "[internal] continuation has seed"
-
 tcText :: [ParsedValue] -> CheckedValue
 tcText args sr = \case
   TextType -> do
@@ -673,7 +659,7 @@ reservedIdentifiers = Set.fromList
   , "text", "append", "prepend", "join", "remove", "find", "transform"
   , "range", "length", "diff"
   , "while", "iterate", "repeat", "until", "pass", "define", "result", "color"
-  , "solve", "preimage", "critical", "of", "within", "solution", "continuing"
+  , "solve", "preimage", "critical", "of", "within", "solution"
   , "dark", "light", "invert", "blend", "cycle", "rainbow", "arenberg"
   , "romao", "bamo", "broco", "corko", "viko"
   , "ice", "fire", "rose", "wheat", "forest", "ocean"

@@ -21,8 +21,7 @@ import Data.Codec
 import Language.Value.Parser
 import Language.Value.Typecheck
   (InternalVanishingRadius, InternalEscapeRadius,
-   InternalIterations, InternalStuck, InternalIterationLimit,
-   internalContSeed, internalHasSeed)
+   InternalIterations, InternalStuck, InternalIterationLimit)
 import Language.Typecheck
 import Language.Parser.SourceRange
 import Language.Code.Parser
@@ -113,23 +112,14 @@ buildMergedPrep configCtx (Just (PrepRaw outputs codeStr)) =
           withEnvironment (contextToEnv combinedCtx) $
             Right (MergedPrep (contextToEnv prepCtx) combinedCtx (Just codeStr))
 
--- | Inject the two engine-internal `continuing seed` variables (@contSeed@/
--- @hasSeed@) into every viewer's env — always present, like @solution@/@stuck@,
--- so a `solve … continuing seed` can read/write them and the render/pre-pass can
--- fill them — then build the merged (config ++ seeds ++ prep-outputs) env.
+-- | Build a viewer's merged (config ++ prep-outputs) environment.
 buildMergedViewer :: forall configEnv
                    . KnownEnvironment configEnv
                   => Context DynamicValue configEnv
                   -> Maybe PrepRaw
                   -> Either String MergedPrep
-buildMergedViewer configCtx0 mPrepRaw =
-  case buildPrepCtxFromSpecs [ PrepOutputSpec internalContSeed "C" "0"
-                             , PrepOutputSpec internalHasSeed  "Boolean" "false" ] of
-    Left err -> Left err
-    Right (SomeContext seedCtx) -> case configCtx0 <#> seedCtx of
-      Left err -> Left err
-      Right configCtx -> withEnvironment (contextToEnv configCtx) $
-        buildMergedPrep configCtx mPrepRaw
+buildMergedViewer configCtx mPrepRaw =
+  withEnvironment (contextToEnv configCtx) (buildMergedPrep configCtx mPrepRaw)
 
 data ComplexViewer = ComplexViewer
   { cvTitle :: Parsed String

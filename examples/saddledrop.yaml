@@ -17,8 +17,6 @@
 #     2. parameterize the unstable manifold W^u(p) by z via γ;
 #     3. find a critical point of the Green function G+ on W^u(p);
 #     4. color c by how fast that critical point escapes to infinity;
-#
-# `continuing seed` omitted for now
 
 viewers:
   - title: "Dynamical plane"

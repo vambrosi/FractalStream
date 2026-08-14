@@ -142,11 +142,6 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
 
   upTo <- rule (lit "up" *> lit "to" *> value <* token TimesKeyword)
 
-  -- Optional `continuing seed` modifier on `solve`/`preimage`: when present, the
-  -- solve is block-seeded from a precomputed coarse field (continuity across the
-  -- plane) instead of from the unknown's per-pixel value.
-  continuingSeed <- rule (((lit "continuing" *> lit "seed") $> True) <|> pure False)
-
   elseIf <- ruleChoice
     [ ((token Else *> colon *> nl) *> block) <?> "else clause"
     , check
@@ -180,37 +175,32 @@ codeGrammar' baseEnv funcs compoundFns codeSplices valueSplices = mdo
         <$> (lit "solve" *> ident <* token RightArrow)
         <*> value
         <*> optional (lit "within" *> value)
-        <*> optional upTo
-        <*> continuingSeed) <?> "solve statement"
+        <*> optional upTo) <?> "solve statement"
     , check
       (tcSolveCompound
         <$> (lit "solve" *> ident <* token RightArrow)
         <*> compoundCall
         <*> optional (lit "within" *> value)
-        <*> optional upTo
-        <*> continuingSeed) <?> "solve statement (compound function)"
+        <*> optional upTo) <?> "solve statement (compound function)"
     , check
       (tcPreimage
         <$> (lit "preimage" *> ident <* token RightArrow)
         <*> value
         <*> (lit "of" *> value)
         <*> optional (lit "within" *> value)
-        <*> optional upTo
-        <*> continuingSeed) <?> "preimage statement"
+        <*> optional upTo) <?> "preimage statement"
     , check
       (tcCritical
         <$> (lit "critical" *> ident <* token RightArrow)
         <*> value
         <*> optional (lit "within" *> value)
-        <*> optional upTo
-        <*> continuingSeed) <?> "critical statement"
+        <*> optional upTo) <?> "critical statement"
     , check
       (tcCriticalCompound
         <$> (lit "critical" *> ident <* token RightArrow)
         <*> compoundCall
         <*> optional (lit "within" *> value)
-        <*> optional upTo
-        <*> continuingSeed) <?> "critical statement (compound function)"
+        <*> optional upTo) <?> "critical statement (compound function)"
     , check ((\_ _ -> pure NoOp) <$ lit "pass") <?> "pass"
     ]
 

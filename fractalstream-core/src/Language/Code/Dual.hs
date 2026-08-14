@@ -35,7 +35,7 @@ import Language.Value
 import Language.Value.Typecheck
   ( ParsedValue(..), atType, tcVar, internalIterationLimit
   , InternalIterations, InternalStuck, InternalSolution
-  , InternalContSeed, InternalHasSeed )
+  )
 import Language.Value.Derivative (derivativeWith, wirtingerWith)
 import Language.Value.Reindex (reindexValue)
 import Language.Code
@@ -644,21 +644,12 @@ spliceCompoundDualWirtinger sr blame gen tracked0 cf args ty env k
 -- moves) so the next check sees the new value. This costs one extra full
 -- evaluation of @F@ per step compared to a closed-form @solve@ -- the same
 -- cost a finite-difference approach would have paid.
---
--- @solve … continuing seed@ (complex unknown only, same restriction as the
--- closed-form 'Language.Code.Typecheck.tcNewton') seeds @z@ from the
--- engine's continuation field before the first splice runs, and captures
--- the converged solution back into it afterwards -- identical mechanism to
--- 'Language.Code.Typecheck.tcNewton''s @contPrefix@/@contSuffix@, just
--- spliced around this function's re-splicing Newton loop instead of
--- tcNewton's symbolic one.
 tcSolveCompound :: String
                 -> (CompoundFunction, [ParsedValue])
                 -> Maybe ParsedValue
                 -> Maybe ParsedValue
-                -> Bool
                 -> CheckedCode
-tcSolveCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
+tcSolveCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) = do
 
     SomeSymbol zname <- pure (someSymbolVal var)
     FoundVar (zty :: TypeProxy zty) zpfEnv <- findVar sr zname env
@@ -721,31 +712,11 @@ tcSolveCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentProx
                         dfPfI <- findVarAtType sr dfName ComplexType envI
                         pure (Block [ Set fPfI fName f, Set dfPfI dfName f' ])
 
-                -- `continuing seed`: seed z from the continuation field
-                -- before the first splice runs (so the very first F/F'
-                -- reflect the seed, not z's raw pixel value), and capture
-                -- the converged solution back into the field afterwards.
-                -- Mirrors `Language.Code.Typecheck.tcNewton`'s identical
-                -- contPrefix/contSuffix exactly.
-                (contPrefix, contSuffix) <- if continuing
-                  then do
-                    ccpf <- findVarAtType sr (Proxy @InternalContSeed) ComplexType envZ
-                    chpf <- findVarAtType sr (Proxy @InternalHasSeed)  BooleanType envZ
-                    let seedInject =
-                          IfThenElse (Var (Proxy @InternalHasSeed) BooleanType chpf)
-                            (Set zpf' zname (Var (Proxy @InternalContSeed) ComplexType ccpf))
-                            NoOp
-                        captureSol =
-                          Set ccpf (Proxy @InternalContSeed)
-                            (Var (Proxy @InternalSolution) ComplexType solpf)
-                    pure ([seedInject], [captureSol])
-                  else pure ([], [])
-
                 initSplice <- doSplice
                 stepSplice <- doSplice
                 let b' = Block [ newtonStep, Set cpf' counterName (counterZ + 1), stepSplice ]
 
-                pure $ Block $ contPrefix ++
+                pure $ Block
                   [ initSplice
                   , IfThenElse c' (DoWhile c' b') NoOp
                   , Set ipf   (Proxy @InternalIterations) counterZ
@@ -755,10 +726,7 @@ tcSolveCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentProx
                   , Set solpf (Proxy @InternalSolution)
                       (withEnvironment envZ $ ITE ComplexType stuckCond nanSolution (Var zname ComplexType zpf'))
                   , Set zpf'  zname (Var saveName ComplexType savePf')
-                  ] ++ contSuffix
-
-          RealType | continuing -> throwError (Advice sr
-              "`solve … continuing seed` currently supports a complex unknown only.")
+                  ]
 
           RealType -> do
             fDflt <- defaultFor sr RealType
@@ -837,15 +805,13 @@ tcSolveCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentProx
 -- Same materialization/re-splicing story as 'tcSolveCompound' (@g@/@g'@
 -- have to be fresh at the current @z@ on every convergence check, so the
 -- whole double-splice below runs once before the loop and once per
--- iteration), and the same @continuing seed@ handling (see
--- 'tcSolveCompound''s haddock).
+-- iteration).
 tcCriticalCompound :: String
                    -> (CompoundFunction, [ParsedValue])
                    -> Maybe ParsedValue
                    -> Maybe ParsedValue
-                   -> Bool
                    -> CheckedCode
-tcCriticalCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentProxy env) = do
+tcCriticalCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) = do
 
     SomeSymbol zname <- pure (someSymbolVal var)
     FoundVar (zty :: TypeProxy zty) zpfEnv <- findVar sr zname env
@@ -930,29 +896,11 @@ tcCriticalCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentP
                            (Map.fromList [ (var, symbolVal dz2), (symbolVal dfName, symbolVal ddfName) ])
                            fos
 
-               -- `continuing seed`: same mechanism as 'tcSolveCompound' --
-               -- seed z from the continuation field before the first
-               -- double-splice runs, capture the converged critical point
-               -- back afterwards.
-               (contPrefix, contSuffix) <- if continuing
-                 then do
-                   ccpf <- findVarAtType sr (Proxy @InternalContSeed) ComplexType envFDD
-                   chpf <- findVarAtType sr (Proxy @InternalHasSeed)  BooleanType envFDD
-                   let seedInject =
-                         IfThenElse (Var (Proxy @InternalHasSeed) BooleanType chpf)
-                           (Set zpf' zname (Var (Proxy @InternalContSeed) ComplexType ccpf))
-                           NoOp
-                       captureSol =
-                         Set ccpf (Proxy @InternalContSeed)
-                           (Var (Proxy @InternalSolution) ComplexType solpf)
-                   pure ([seedInject], [captureSol])
-                 else pure ([], [])
-
                initSplice <- doDoubleSplice
                stepSplice <- doDoubleSplice
                let b' = Block [ newtonStep, Set cpf' counterName (counterZ + 1), stepSplice ]
 
-               pure $ Block $ contPrefix ++
+               pure $ Block
                  [ initSplice
                  , IfThenElse c' (DoWhile c' b') NoOp
                  , Set ipf   (Proxy @InternalIterations) counterZ
@@ -962,10 +910,7 @@ tcCriticalCompound var (cf, args) mtol mlimit continuing sr (env :: EnvironmentP
                  , Set solpf (Proxy @InternalSolution)
                      (withEnvironment envFDD $ ITE ComplexType stuckCond nanSolution (Var zname ComplexType zpf'))
                  , Set zpf'  zname (Var saveName ComplexType savePf')
-                 ] ++ contSuffix
-
-          RealType | continuing -> throwError (Advice sr
-              "`critical … continuing seed` currently supports a complex unknown only.")
+                 ]
 
           RealType -> do
             fDflt <- defaultFor sr RealType

@@ -71,7 +71,6 @@ library
                        Actor.Viewer
                        Actor.Viewer.Types
                        Actor.Viewer.Complex
-                       Actor.Field
                        Actor.Event
 
                        Event
@@ -156,8 +155,6 @@ test-suite spec
                     , containers
                     , bytestring
   other-modules:      Data.Indexed.FunctorSpec
-                    , Actor.Viewer.ComplexSpec
-                    , Actor.FieldSpec
                     , Language.Value.DerivativeSpec
                     , Language.Value.EvaluatorSpec
                     , Language.Value.ParserSpec
