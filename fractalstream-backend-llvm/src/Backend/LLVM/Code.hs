@@ -718,7 +718,7 @@ compileCode getExtern arena mvtable = indexedFold @(OperandPtrContext m) $ \case
     loop <- block
     void body
     _ <- call (getExtern "stackrestore") [(stackPtr, [])]
-    test <- value_ getExtern cond >>= detypeOperand BooleanType
+    test <- value_ getExtern arena cond >>= detypeOperand BooleanType
     condBr test loop exit
 
     exit <- block
