@@ -30,11 +30,6 @@ viewers:
     iteration-limit: maxIters
 
     code: |
-      # Saddle fixed point p(c) and expanding eigenvalue λ
-      b : C <- (1 + a) / 2
-      p : C <- b + sqrt(b^2 - c)
-      lambda : C <- p + sqrt(p^2 - a)
-
       # Green potential of
       #     γ(w) ~ H^n(p + (w / λ^n) v), v=(λ,1);
       #     G+   = lim (1/2^n) log|x_n|
@@ -51,30 +46,57 @@ viewers:
               y <- tmp
               k <- k + 1
 
-          # g accumulates 1/2^m; avoids integer 2^m (overflows past m=62) and
-          # keeps variable-exponent powers out of the differentiated body.
-          g : R <- 1
           m : Z <- 0
-
           while |x| < escapeR and m < maxIters:
               tmp2 : C <- x
               x <- x^2 + c - a y
               y <- tmp2
-              g <- g / 2
               m <- m + 1
 
-          potential <- if |x| >= escapeR then log(|x|) * g else 0
+          sign : Z <- if im x >= 0 then 1 else -1
+          potential <- if |x| >= escapeR then sign * |m - log(log(|x|)) / log 2| else 0
+
+      # Saddle fixed point p(c) and expanding eigenvalue λ
+      b : C <- (1 + a) / 2
+      disc : C <- sqrt(b^2 - c)
+
+      # Pick the fixed point with the largest eigenvalue
+      p_p : C <- b + disc
+      p_m : C <- b - disc
+
+      lambda_pp : C <- p_p + sqrt(p_p^2 - a)
+      lambda_pm : C <- p_p - sqrt(p_p^2 - a)
+      lambda_p_max : C <- if |lambda_pp| > |lambda_pm| then lambda_pp else lambda_pm
+
+      lambda_mp : C <- p_m + sqrt(p_m^2 - a)
+      lambda_mm : C <- p_m - sqrt(p_m^2 - a)
+      lambda_m_max : C <- if |lambda_mp| > |lambda_mm| then lambda_mp else lambda_mm
+
+      p : C <- 0
+      lambda : C <- 0
+
+      if |lambda_p_max| > |lambda_m_max|:
+        p <- p_p
+        lambda <- lambda_p_max
+
+      else:
+        p <- p_m
+        lambda <- lambda_m_max
 
       # Plot G+ across the z-plane
       rate : R <- 0
       rate <- potential(z, p, lambda)
 
-      if rate <= 0:
-          # bounded orbit -> in K+
-          color <- black
+      if |rate| vanishes:
+        # bounded orbit -> in K+
+        color <- black
+
+      else if imColor:
+        color <- if rate > 0 then purple else green
+
       else:
-          # escape-rate level sets of G+
-          color <- rainbow(rate)
+        # escape-rate level sets of G+
+        color <- rainbow(|rate|)
 
     tools:
         - name: Pick Critical Seed
@@ -111,25 +133,67 @@ viewers:
               k <- k + 1
 
           # forward-iterate and measure escape
-          g : R <- 1
           m : Z <- 0
           while |x| < escapeR and m < maxIters:
               tmp2 : C <- x
               x <- x^2 + c - a y
               y <- tmp2
-              g <- g / 2
               m <- m + 1
 
           # smooth Green potential (0 inside K+, > 0 outside)
-          potential <- if |x| >= escapeR then log(|x|) * g else 0
+          potential <- if |x| >= escapeR then log(log(|x|)) / log 2 else 0
+
+      define actual_potential(w, p, lambda):
+          s : C <- w / lambda ^ n
+          x : C <- p + lambda * s
+          y : C <- p + s
+
+          # lift onto W^u(p): push the seed forward `n` times
+          k : Z <- 0
+          while k < n:
+              tmp : C <- x
+              x <- x^2 + c - a y
+              y <- tmp
+              k <- k + 1
+
+          # forward-iterate and measure escape
+          m : Z <- 0
+          while |x| < escapeR and m < maxIters:
+              tmp2 : C <- x
+              x <- x^2 + c - a y
+              y <- tmp2
+              m <- m + 1
+
+          # smooth Green potential (0 inside K+, > 0 outside)
+          sign : Z <- if im x >= 0 then 1 else -1
+          actual_potential <- if |x| >= escapeR then sign * |m - log(log(|x|)) / log 2| else 0
 
       # Saddle fixed point p(c)  (x = y = p,  p^2 - (1+a)p + c = 0)
       b : C <- (1 + a) / 2
-      p : C <- b + sqrt(b^2 - c)
+      disc : C <- sqrt(b^2 - c)
 
-      # Expanding eigenvalue at p
-      #     λ^2 - 2pλ + a = 0, |λ| > 1
-      lambda : C <- p + sqrt(p^2 - a)
+      # Pick the fixed point with the largest eigenvalue
+      p_p : C <- b + disc
+      p_m : C <- b - disc
+
+      lambda_pp : C <- p_p + sqrt(p_p^2 - a)
+      lambda_pm : C <- p_p - sqrt(p_p^2 - a)
+      lambda_p_max : C <- if |lambda_pp| > |lambda_pm| then lambda_pp else lambda_pm
+
+      lambda_mp : C <- p_m + sqrt(p_m^2 - a)
+      lambda_mm : C <- p_m - sqrt(p_m^2 - a)
+      lambda_m_max : C <- if |lambda_mp| > |lambda_mm| then lambda_mp else lambda_mm
+
+      p : C <- 0
+      lambda : C <- 0
+
+      if |lambda_p_max| > |lambda_m_max|:
+        p <- p_p
+        lambda <- lambda_p_max
+
+      else:
+        p <- p_m
+        lambda <- lambda_m_max
 
       # Critical point of G+ on W^u(p) as a function of z .
       #   (Initial guess needs to be different from 0)
@@ -139,17 +203,24 @@ viewers:
       # Solution is the critical point. `stuck` is true if Newton failed to converge.
       # Currently, you need to initialize the variable before getting the function value.
       rate : R <- 0
-      rate <- potential(solution, p, lambda)
+      rate <- actual_potential(solution, p, lambda)
 
       if stuck:
-          # no critical point found (Newton failed)
-          color <- white
-      else if rate <= 0:
-          # critical point found -> K connected
-          color <- black
+        color <- white
+
+      else if |solution| > 10^5:
+        color <- grey
+
+      else if |rate| vanishes:
+        # bounded orbit -> in K+
+        color <- black
+
+      else if imColor:
+        color <- if rate > 0 then purple else green
+
       else:
-          # escape-rate level sets of G+
-          color <- rainbow(rate)
+        # escape-rate level sets of G+
+        color <- rainbow(|rate|)
 
 configuration:
   title: Configuration
@@ -157,27 +228,27 @@ configuration:
   vertical-contents:
     - text-entry:
         label: "a ="
-        value: "-0.2"
+        value: "0.3"
         type: C
         variable: a
     - text-entry:
         label: "c ="
-        value: "0"
+        value: "0.6 + 0.2i"
         type: C
         variable: c
     - text-entry:
         label: "γ iterations:"
-        value: "1"
+        value: "0"
         type: Z
         variable: "n"
     - text-entry:
         label: "Critical seed:"
-        value: "0.1"
+        value: "0.001"
         type: C
         variable: critSeed
     - text-entry:
         label: "Critical max iterations:"
-        value: "10"
+        value: "100"
         type: Z
         variable: critIters
     - text-entry:
@@ -190,3 +261,8 @@ configuration:
         value: "10"
         type: R
         variable: escapeR
+    - checkbox:
+        label: "Color by imaginary part"
+        value: false
+        variable: imColor
+
