@@ -447,11 +447,7 @@ makeWxComplexViewer pending projectWindow addMenuBar saveSession raiseConfigWind
       renderAction <- getRenderAction
       renderTile' renderId True renderAction (width, height) model
     currentTile    <- variable [value := viewerTile]
-    -- Register this window's cancel action once, up front. It's fine that
-    -- 'currentTile' will later be replaced (pan/zoom) or already cancelled
-    -- via 'on closing' below -- 'registerPendingRender' just re-reads
-    -- 'currentTile' live at drain time, and cancelling an already-finished
-    -- worker is a no-op. See UI.PendingRenders for the full rationale.
+    -- Reads 'currentTile' when run, so it cancels whichever tile is current.
     registerPendingRender pending (get currentTile value >>= cancelTileSync)
     savedTileImage <- variable [value := Nothing]
     lastTileImage  <- variable [value := Nothing]
@@ -854,13 +850,7 @@ makeWxComplexViewer pending projectWindow addMenuBar saveSession raiseConfigWind
     -- For each variable that the viewer code depends on, trigger a repaint whenever
     -- that variable changes.
     stopListening' <- onParameterChanges theViewer requestRefresh
-    -- Cancel the in-flight tile *synchronously* before letting the window
-    -- actually close: unlike jumpViewTo's cancelTile (fire-and-forget --
-    -- fine there, since the old tile is simply abandoned while a new one
-    -- starts), nothing here replaces this tile, so nothing else guarantees
-    -- its worker has stopped calling into the compiled kernel before
-    -- whatever teardown follows a window closing. See agents/<branch>.md's
-    -- "SIGSEGV on window close" note.
+    -- Wait for the worker to stop before closing, since teardown may follow.
     set f [ on closing :~
               ((stopListening' >> (get currentTile value >>= cancelTileSync)) >>) ]
 

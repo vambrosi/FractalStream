@@ -43,32 +43,16 @@ data Tile = Tile
     , shouldRedrawTile :: MVar ()
       -- ^ A value which signals that the tile needs to be redrawn.
     , tileCancelled    :: MVar ()
-      -- ^ Filled in the first time 'cancelTileSync' actually runs for this
-      --   tile. A tile can legitimately be cancelled from more than one place
-      --   (e.g. a window's own close handler, *and* the global pending-renders
-      --   registry drained at app shutdown, if the window was rebuilt after a
-      --   config change and the old registry entry was never removed) -- this
-      --   makes a second call a safe no-op instead of a double 'cancel'.
+      -- ^ Filled by the first 'cancelTileSync', making later calls no-ops
+      --   (a tile can be cancelled both on window close and at shutdown).
     }
 
 -- | Cancel the tile, but don't wait for it to finish.
 cancelTile :: Tile -> IO ()
 cancelTile = void . forkIO . cancelTileSync
 
--- | Like 'cancelTile', but synchronous: blocks until the worker has actually
--- terminated before returning, instead of firing the cancellation off in the
--- background. 'cancel' from "Control.Concurrent.Async" already blocks until
--- the target thread is dead by design -- it just isn't safe to call directly
--- from a UI event handler for an in-progress render, which is why 'cancelTile'
--- wraps it in 'forkIO'.
---
--- Use this instead when the caller genuinely needs the worker gone before
--- proceeding, e.g. on window close, so nothing is still calling into a JIT
--- kernel whose code page is about to be unmapped.
---
--- Idempotent: only the first call for a given 'Tile' actually cancels
--- anything, so it's safe to call more than once on the same tile (see
--- 'tileCancelled').
+-- | Cancel the tile and wait until the worker has stopped, e.g. before the
+-- compiled kernel is unmapped. Safe to call more than once.
 cancelTileSync :: Tile -> IO ()
 cancelTileSync tile = do
   firstTime <- tryPutMVar (tileCancelled tile) ()

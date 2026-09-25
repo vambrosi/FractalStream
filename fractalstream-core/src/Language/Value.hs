@@ -319,14 +319,8 @@ instance KnownEnvironment env => Floating (Value '(env, 'RealT)) where
   asinh = error "TODO"
   acosh = error "TODO"
   atanh = error "TODO"
-  -- Without this override, `**`'s default definition (`exp (log x * y)`)
-  -- is NaN for any negative-real `x` (real `log` is undefined there), even
-  -- though `PowF`'s own evaluator computes the same power correctly via
-  -- `Double`'s `(**)` (libm `pow`, well-defined for a negative base with an
-  -- integer-valued exponent). `Derivative.hs` builds power expressions with
-  -- `**` (e.g. differentiating `x^n`, or `x**2` in the `arccos`/`arctan`/…
-  -- rules), so without this, differentiating almost anything at a
-  -- negative real point silently produces `NaN`.
+  -- The default, `exp (log x * y)`, is NaN for negative `x`; `PowF` uses
+  -- libm `pow`, which handles a negative base with an integer exponent.
   (**) = PowF
 
 instance KnownEnvironment env => Num (Value '(env, 'ComplexT)) where
@@ -358,11 +352,7 @@ instance KnownEnvironment env => Floating (Value '(env, 'ComplexT)) where
   asinh = error "TODO"
   acosh = error "TODO"
   atanh = error "TODO"
-  -- Same reasoning as the `RealT` instance: build `PowC` directly instead of
-  -- going through the default `exp (log x * y)`, which has its own edge
-  -- cases (e.g. `0 ** 0` is `NaN` via log/exp, `0 ** n` for n > 0 happens to
-  -- work out). Matches `PowC`'s own evaluator and keeps real/complex `**`
-  -- consistent.
+  -- The default, `exp (log x * y)`, gives NaN for `0 ** 0`.
   (**) = PowC
 
 ---------------------------------------------------------------------------------

@@ -255,12 +255,8 @@ withJittedViewer (dylib, session, compileLayer, nextId) mPrepScript code0 action
             when dumpLLVM $
               putStrLn "------------------------------------------------------------"
 
-            -- Native (host-architecture) assembly, straight from LLVM's own
-            -- target-machine codegen -- not the same as `dumpLLVM`'s IR text,
-            -- which is pre-regalloc and doesn't show spill slots. Look at the
-            -- function prologue's stack-pointer adjustment (`sub sp, sp,
-            -- #NNNN` on AArch64) to see the *actual* per-call native stack
-            -- frame size, including spills the IR dump can't show.
+            -- Native assembly. Unlike the IR dump, it shows register spills.
+            -- (The prologue's `sub sp, sp, #N` on AArch64 is the frame size.)
             when dumpAsm $ withHostTargetMachine' $ \tm -> do
               asmBytes <- moduleTargetAssembly tm md
               putStrLn (BS.unpack asmBytes)

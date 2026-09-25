@@ -131,16 +131,13 @@ typeGrammar = mdo
 valueGrammarWithNoSplices :: forall r. Grammar r (Prod r ParsedValue)
 valueGrammarWithNoSplices = fst <$> valueGrammar EmptyEnvProxy Map.empty Set.empty Map.empty
 
--- | Build the value grammar. Returns both the top-level value production and
--- the argument-list production (a comma-separated list parsed below the
--- pair/comma level); the latter is reused by the code grammar for the argument
--- lists of compound function calls.
+-- | The value grammar. Returns the value production and the argument-list
+-- production (also used for compound function calls).
 valueGrammar :: forall r baseEnv
               . EnvironmentProxy baseEnv
              -> Map String FunctionInfo
              -> Set String
-             -- ^ Names of compound (statement-bodied) functions, reserved here
-             -- so they are not parsed as variables in value position.
+             -- ^ Compound function names, so they aren't parsed as variables.
              -> ValueSplices
              -> Grammar r (Prod r ParsedValue, Prod r [ParsedValue])
 valueGrammar baseEnv funcs compoundNames splices = mdo
@@ -173,10 +170,8 @@ valueGrammar baseEnv funcs compoundNames splices = mdo
     , pOr
     ]
 
-  -- These two are the only labelled productions in the value grammar, so they
-  -- are what a stuck value-parse reports as "expected". Label them with the
-  -- user-facing "a value" (rather than the grammar-internal "disjunction"/
-  -- "conjunction") so the error reads "...expecting a value" instead of jargon.
+  -- The only labelled productions, so these labels are what a failed value
+  -- parse reports as "expected".
   pOr <- ruleChoice
     [ check (tcOr <$> (pAnd <* token Or_) <*> pOr <?> "a value")
     , pAnd
@@ -438,10 +433,8 @@ valueGrammar baseEnv funcs compoundNames splices = mdo
     tcDiff <$> (token DiffKeyword *> (token OpenParen *> toplevel))
            <*> (token Comma *> toplevel <* token CloseParen)
 
-  -- Arguments are parsed at the `pOr` level (below the comma/pair level), so
-  -- that the commas separating arguments are not also read as pair
-  -- constructors (which would make `f(x, y)` ambiguous). A parenthesized pair
-  -- `f((x, y))` is still accepted via the atom rule.
+  -- Arguments are parsed below the pair level, so `f(x, y)` is two arguments,
+  -- not one pair. `f((x, y))` passes a pair.
   argList <- ruleChoice
     [ (:) <$> pOr <*> many (token Comma *> pOr)
     , pure []
@@ -455,9 +448,8 @@ valueGrammar baseEnv funcs compoundNames splices = mdo
         , "romao", "bamo", "broco", "corko", "viko"
         , "ice", "fire", "rose", "wheat", "forest", "ocean"
         , "winter", "spring", "summer", "fall"
-        -- `of`/`within` delimit the `solve`/`preimage` clauses; reserving them
-        -- here stops a value greedily absorbing them as juxtaposed variables
-        -- (which would make the clause boundary ambiguous).
+        -- `of`/`within` end the `solve`/`preimage` clauses; otherwise
+        -- juxtaposition would read them as variables.
         , "of", "within"
         , "rgb", "mod", "diff"]
         `Set.union` Map.keysSet colors

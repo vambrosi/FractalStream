@@ -24,7 +24,6 @@ import Actor.Event
 import Actor.Tool (Tool)
 import Actor.Viewer
 import Actor.Viewer.Complex
--- import Language.Type ( TypeProxy(..) )
 import Language.Environment
 import Language.Draw
 import Language.Value hiding (Join)

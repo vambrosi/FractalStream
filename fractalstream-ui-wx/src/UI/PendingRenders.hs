@@ -2,21 +2,12 @@
 Module      : UI.PendingRenders
 Description : Global registry of in-flight renders, drained at app shutdown.
 
-Per-viewer windows in this app are never actually destroyed when "closed" --
-'WX.windowOnClose' just hides them, so a session can be re-shown later. That
-means there's no reliable per-window teardown hook: the /only/ point that is
-guaranteed to run exactly once, after every viewer window's event handlers
-have stopped mattering, is when the wx event loop itself exits (Cmd+Q,
-closing the last window, etc.) and 'Graphics.UI.WX.start' returns.
+Each viewer window registers a "cancel my current render" action. They are
+all run when the wx event loop exits, before the JIT session is torn down, so
+no worker is still running compiled code that is about to be unmapped.
 
-This registry lets each viewer window register a "cancel my current render"
-action once, when it's created. 'drainPendingRenders' is called after 'start'
-returns, right before the JIT session is torn down, so no render worker is
-still calling into compiled kernel code whose pages are about to be unmapped.
-
-Cancelling an already-finished render (e.g. a window that closed normally
-earlier) is a safe no-op -- GHC's 'throwTo' does nothing when the target
-thread has already terminated -- so actions never need to be deregistered.
+* Closing a viewer only hides it, so there is no per-window teardown hook.
+* Cancelling a finished render is a no-op, so actions are never removed.
 -}
 module UI.PendingRenders
   ( PendingRenders

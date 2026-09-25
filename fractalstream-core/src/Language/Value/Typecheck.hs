@@ -478,10 +478,8 @@ internalIterationLimit      = "[internal] iteration limit"
 type InternalIterationLimit = "[internal] iteration limit"
 type InternalStuck = "[internal] stuck"
 internalStuck      = "[internal] stuck"
--- | The implicit output variable that @solve@/@preimage@ write the root into.
--- Named like @color@ (a plain, user-facing identifier rather than a bracketed
--- @[internal] …@ name) so scripts can read it directly as @solution@ — there is
--- no keyword token for it the way there is for @stuck@/@iterations@.
+-- | The output variable of @solve@/@preimage@/@critical@. A plain identifier
+-- (like @color@), so scripts read it as @solution@.
 internalSolution      :: String
 internalSolution      = "solution"
 type InternalSolution = "solution"
@@ -649,9 +647,8 @@ types = Map.fromList
   , ("Color", ColorT), ("Text", TextT)
   ]
 
--- | Identifiers that may not be used as user-defined function names or
--- parameter names: language keywords, built-in functions and constants, color
--- names and modifiers, type names, and reserved output names.
+-- | Names that can't be used for user functions or parameters (keywords,
+-- built-ins, colors, type names and reserved outputs).
 reservedIdentifiers :: Set String
 reservedIdentifiers = Set.fromList
   [ "if", "then", "else", "e", "pi", "i", "true", "false", "or", "and", "not"
@@ -676,36 +673,24 @@ reservedIdentifiers = Set.fromList
 -- User-defined functions
 ------------------------------------------------------
 
--- | A user-defined function, as captured at its definition site.
---
--- A function is resolved by /inlining/ (see 'tcApply'): it never becomes a
--- runtime value or a new AST node. The body is stored as a 'ParsedValue'
--- whose free variable references for the parameters have been renamed (at
--- the token level, by the parser) to the fresh internal names listed in
--- 'fiFreshParams'. This guarantees that a parameter cannot be captured by,
--- or shadow, a variable at the call site.
+-- | An expression function. Calls are inlined, so functions never exist at
+-- runtime. The body refers to parameters by fresh internal names, so they
+-- can't collide with call-site variables.
 data FunctionInfo = FunctionInfo
   { fiName        :: String
     -- ^ The function's name.
   , fiParams      :: [(String, Maybe SomeType)]
     -- ^ Parameters, in order, with optional type annotations.
   , fiFreshParams :: [String]
-    -- ^ Fresh, collision-proof internal names for the parameters, 1:1 with
-    -- 'fiParams'. The body ('fiBody') refers to parameters by /these/ names.
+    -- ^ Fresh internal parameter names, 1:1 with 'fiParams', used by the body.
   , fiBody        :: ParsedValue
-    -- ^ The result expression. (Expression-reducible functions only;
-    -- compound statement-bodied functions are handled separately in the code
-    -- layer — see @Language.Code.Typecheck@.)
+    -- ^ The result expression.
   , fiDefEnv      :: SomeEnvironment
-    -- ^ The environment in scope at the function's @define@ (the script base
-    -- environment plus any top-level variables declared before it). The body's
-    -- free variables resolve here (definition-site scope), not at the call site.
+    -- ^ The environment at the @define@. Free variables of the body resolve
+    -- here, not at the call site.
   }
 
--- | The table of expression-reducible user functions that are in scope,
--- bundled with the definition-site environment they were declared against. All
--- top-level definitions in a script share the same definition-site environment
--- (the script's base environment), so a single environment suffices here.
+-- | The expression functions in scope, with the script's base environment.
 data FunctionContext where
   FunctionContext :: forall baseEnv
                    . EnvironmentProxy baseEnv
@@ -716,17 +701,13 @@ data FunctionContext where
 noFunctions :: FunctionContext
 noFunctions = FunctionContext EmptyEnvProxy Map.empty
 
--- | Typecheck a call to a user-defined function by inlining its body via
--- substitution.
+-- | Typecheck a call by inlining:
 --
--- For each argument we infer (or check) its type and typecheck it in the
--- call-site environment. The body is then typechecked against the
--- /definition-site/ environment extended with the (fresh-named) parameters, so
--- its free variables resolve against the definition site rather than the call
--- site (hygiene). Finally 'reindexValueWith' re-indexes the body into the
--- call-site environment, replacing each parameter's fresh name with its
--- argument expression. No new AST node survives — the result is an ordinary
--- 'Value', so the interpreter and 'derivative' handle it with no changes.
+-- * typecheck the arguments at the call site;
+-- * typecheck the body at the definition site, plus the parameters;
+-- * re-index the body into the call site, substituting the arguments.
+--
+-- The result is an ordinary 'Value'.
 tcApply :: forall baseEnv
          . EnvironmentProxy baseEnv
         -> FunctionInfo
@@ -746,9 +727,7 @@ tcApply _baseEnv fi args sr = go
     go resultTy
       | length args /= length params = throwError (Advice sr arityMsg)
       | otherwise = do
-          -- Typecheck the argument at type @t@ in the call-site environment.
-          -- The annotation pins the environment, which is otherwise ambiguous
-          -- because the resulting value is discarded during type inference.
+          -- The annotation pins the (otherwise ambiguous) environment.
           let typed :: forall t. KnownType t => ParsedValue -> TypeProxy t -> TC SomeType
               typed a t = (atType a t :: TC (Value '(env, t))) $> SomeType t
 
@@ -769,8 +748,6 @@ tcApply _baseEnv fi args sr = go
           triples <- sequence (zipWith3 checkArg params freshes args)
           let substMap = Map.fromList [ (f, r) | (f, _, r) <- triples ]
               freshTys = [ (f, s)               | (f, s, _) <- triples ]
-          -- Instantiate the body at the *definition-site* environment extended
-          -- with the parameters, then re-index into the call site.
           case fiDefEnv fi of
             SomeEnvironment defSiteEnv ->
               withDefEnv freshTys defSiteEnv $ \(defEnv :: EnvironmentProxy defE) -> do
@@ -778,9 +755,8 @@ tcApply _baseEnv fi args sr = go
                              :: TC (Value '(defE, ty))
                 pure (reindexValueWith substMap (envProxy (Proxy @env)) bodyVal)
 
--- | Build the definition-site environment (the fresh parameters on top of the
--- base environment) and hand it to the continuation. Fresh names are unique and
--- bracketed, so they are always absent from the base environment.
+-- | The definition-site environment (the fresh parameters on top of the base
+-- environment). Fresh names are bracketed, so they are never already present.
 withDefEnv :: forall e r
             . [(String, SomeType)]
            -> EnvironmentProxy e

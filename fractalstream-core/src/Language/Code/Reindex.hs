@@ -1,11 +1,4 @@
 -- | Re-index a 'Code' statement from one environment into another.
---
--- Mirrors 'Language.Value.Reindex.reindexValue', extended to 'Code's only
--- binding construct ('Let'): every variable the code references or assigns
--- must be present in the target environment at the same type (typically
--- because the target is an /extension/ of the source, e.g. with extra
--- bindings spliced in elsewhere). Embedded 'Value's (conditions, assigned
--- expressions) are re-indexed directly via 'reindexValue'.
 module Language.Code.Reindex
   ( reindexCode
   ) where
@@ -13,13 +6,13 @@ module Language.Code.Reindex
 import Language.Code
 import Language.Value.Reindex (reindexValue)
 
--- | Rebuild a 'Code' so that it is indexed by @tgt@ instead of its own
--- (existing) source environment — pure environment weakening, no
--- substitution. Errors (at runtime) if a referenced or assigned variable is
--- not present in the target environment, or if a 'Let'-bound name collides
--- with the target environment; callers are responsible for ensuring
--- neither happens (e.g. by only ever inserting fresh, bracketed names into
--- the target environment beyond what the source already has).
+-- | Rebuild a 'Code' so it is indexed by @tgt@ instead of its source
+-- environment (weakening only, no substitution).
+--
+-- Precondition, checked with 'error':
+--
+-- * every variable the code reads or assigns is in @tgt@ at the same type;
+-- * no 'Let'-bound name is already in @tgt@.
 reindexCode :: forall src tgt. EnvironmentProxy tgt -> Code src -> Code tgt
 reindexCode = go
   where

@@ -161,7 +161,6 @@ test-suite spec
                     , Language.Code.ParserSpec
                     , Language.Code.FunctionsSpec
                     , Language.Code.SolveSpec
-                    , Language.Code.ReindexSpec
                     , Language.Code.DualSpec
                     , Language.Effect.ListSpec
                     , Examples.SaddledropSpec

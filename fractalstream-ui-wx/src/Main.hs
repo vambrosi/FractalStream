@@ -35,13 +35,8 @@ main :: IO ()
 main = withBackend $ \complexViewerCompiler -> do
   pending <- newPendingRenders
   runGUI pending complexViewerCompiler
-  -- 'start' (below) returns exactly once, when the wx event loop exits --
-  -- the one shutdown path guaranteed to run regardless of how the app was
-  -- quit (Cmd+Q, closing the last window, etc.). Cancel any renders still
-  -- in flight here, before 'withBackend' tears down the JIT session, so
-  -- nothing is left calling into a kernel whose code is about to be
-  -- unmapped. See UI.PendingRenders and agents/<branch>.md's "SIGSEGV on
-  -- window close" note.
+  -- 'start' returns once, when the event loop exits however the app is quit.
+  -- Cancel renders there, before 'withBackend' tears down the JIT session.
   drainPendingRenders pending
 
 runGUI :: PendingRenders -> ViewerCompiler -> IO ()

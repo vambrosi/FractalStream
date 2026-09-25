@@ -49,27 +49,12 @@ spec = do
       parseC 2 "diff(z, exp(z^2) / e^4)" `shouldBe` Right (4 :+ 0)
       parseC 2 "diff(z, log(z^2))" `shouldBe` Right (1.0 :+ 0.0)
 
-    -- `diff` on a *complex* variable uses the Wirtinger derivative ∂F/∂z,
-    -- which agrees exactly with the ordinary holomorphic derivative
-    -- whenever F is holomorphic (so every case above is unaffected), but
-    -- is additionally defined for non-holomorphic operations like `im`
-    -- (`Re`/`Im`/`|.|`/`conj`) -- deliberately, so `critical` can find
-    -- critical points of real-valued (non-holomorphic) potentials, not
-    -- just holomorphic ones. `d(Im z)/dz = 1/(2i) = -i/2`, a constant,
-    -- independent of z.
+    -- Wirtinger derivative of a non-holomorphic function
+    -- (d(Im z)/dz = 1/(2i) = -i/2).
     it "differentiates non-holomorphic operations via the Wirtinger derivative" $
       parseC 1 "diff(z, im z)" `shouldBe` Right (0 :+ (-0.5))
 
-    -- Regression: 'indexedFoldWithOriginalM' folds *every* child of a node
-    -- -- including an `if`'s condition -- before a rule's callback runs,
-    -- regardless of whether that rule uses the folded value (the `ITE`
-    -- rule discards its condition's derivative outright). A condition
-    -- that's just a bare comparison (`|z| >= 1`, desugared to some
-    -- combination of `<`/`Not`/`Or`) used to hit the catch-all here,
-    -- since nothing gave the fold *anything* to produce for a
-    -- boolean-typed subexpression. `wirtingerWith` needs explicit (`0`)
-    -- rules for every boolean/comparison constructor for this reason, not
-    -- because a condition's derivative is ever actually used.
+    -- An `if` whose condition is a comparison.
     it "differentiates an `if` whose condition is a non-trivial comparison" $
       parseC 2 "diff(z, if |z| >= 1 then z else 0)" `shouldBe` Right (1 :+ 0)
 
@@ -81,9 +66,7 @@ spec = do
         ,"I expected a real number here, but the result of a comparison is a truth value."])
 
     it "throws errors when trying to differentiate non-differentiable functions" $ do
-      -- Still unsupported: `|x|` for a *real* x doesn't go through the
-      -- Wirtinger path at all (only a complex differentiation variable
-      -- does), so this is unchanged.
+      -- `|x|` for real x is unsupported.
       parseR 0 "diff(x, |x|)" `shouldBe` Left (unlines
         ["  diff(x, |x|)"
         ,"          ^^^"

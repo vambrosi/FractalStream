@@ -277,20 +277,19 @@ check = withSourceRange
 -- User-defined functions: pre-pass over the source
 ------------------------------------------------------
 
--- | A snapshot of a top-level variable taken at a function's definition site:
--- the original variable's name, the fresh variable it is captured into, and its
--- type. The function's body refers to the snapshot, so later mutations of the
--- original variable do not affect the function (definition-site /value/ scope).
+-- | A top-level variable captured where a function is defined, as (original
+-- name, snapshot name, type). The body reads the snapshot, so later
+-- assignments to the original don't affect the function.
 type Snapshot = (String, String, SomeType)
 
--- | Split a script into its top-level @define@ blocks and the remaining
--- ("main") source. A define block is a top-level (column-0) line whose first
--- word is @define@, together with the indented/blank lines that follow it. Each
--- define is paired with snapshots of the top-level variables (`name : type <-`)
--- in scope at that point; the snapshots' capturing @Let@s are spliced into the
--- main source at the define's position (so they run before any later mutation).
--- Each define also carries the (0-based) row of its header line, so positions
--- inside its body can be reported relative to the whole script.
+-- | Split a script into its @define@ blocks and the remaining main source.
+--
+-- * A define block is a column-0 @define@ line plus the indented or blank
+--   lines after it.
+-- * Each define carries its header row (0-based, for error positions) and
+--   snapshots of the top-level variables declared before it.
+-- * In the main source, the block is replaced by the snapshots' @Let@s, so
+--   they run before any later mutation.
 splitDefines :: String -> ([(Int, String, [Snapshot])], String)
 splitDefines input = go (0 :: Int) [] [] [] (zip [0 ..] (lines input))
   where
@@ -340,9 +339,8 @@ parseTopLevelDecl line =
       CloseParen   -> ")"
       _            -> ""
 
--- | Extend an environment with a list of (name, type) bindings, skipping any
--- name already present (it would be a shadow, which the main typechecker
--- rejects anyway).
+-- | Extend an environment with (name, type) bindings, skipping names already
+-- present (shadowing is rejected by the typechecker anyway).
 extendEnv :: EnvironmentProxy env -> [(String, SomeType)] -> SomeEnvironment
 extendEnv env [] = SomeEnvironment env
 extendEnv env ((nm, SomeType ty) : rest) = case someSymbolVal nm of
@@ -350,10 +348,9 @@ extendEnv env ((nm, SomeType ty) : rest) = case someSymbolVal nm of
     Absent' pf -> recallIsAbsent pf $ extendEnv (BindingProxy name ty env) rest
     Found' _ _ -> extendEnv env rest
 
--- | Parse each define block in order (so later definitions can call earlier
--- ones), collecting expression-reducible functions into a 'FunctionContext'
--- (anchored at @env@, the definition-site / script base environment) and
--- compound (statement-bodied) functions into a separate table.
+-- | Parse define blocks in order, so each one can call the earlier ones.
+-- Expression functions go into a 'FunctionContext' over @env@; compound
+-- functions into a separate table.
 buildFunctionContext
   :: forall env
    . EnvironmentProxy env
@@ -373,10 +370,13 @@ buildFunctionContext env vsplices = go Map.empty Map.empty
 defError :: SourceRange -> String -> Either (Either ParseError TCError) a
 defError sr msg = Left (Right (Advice sr msg))
 
--- | Parse a single define block. A body that is a single @slot <- expression@
--- becomes an expression-reducible 'FunctionInfo'; any other (multi-statement)
--- body becomes a compound 'CompoundFunction'. The slot must be the function's
--- name or the reserved word @result@.
+-- | Parse one define block.
+--
+-- * A body @slot <- expression@ gives a 'FunctionInfo' (inlined as an
+--   expression).
+-- * Any other body gives a 'CompoundFunction' (spliced as statements).
+--
+-- The slot is the function's name or @result@.
 parseOneDefine
   :: forall env
    . EnvironmentProxy env
@@ -445,9 +445,8 @@ parseOneDefine env vsplices exprFuncs compFuncs snaps headerRow blk = case lines
                   ++ role ++ ".")
       | otherwise = Right ()
 
--- | Parse a compound (multi-statement) function body as a code block, with
--- parameters and the result slot renamed to fresh internal names. Earlier
--- functions (expression and compound) are in scope.
+-- | Parse a compound function body as a code block, with parameters and the
+-- result slot renamed to fresh internal names.
 parseCompoundBody
   :: forall env
    . EnvironmentProxy env
@@ -479,10 +478,9 @@ defineHeaderGrammar = do
              <*> (token OpenParen *> params <* token CloseParen <* token Colon))
         <?> "a function definition like `define f(x):`")
 
--- | Parse the body of a define (a single @slot <- expression@). Parameter
--- references are renamed to fresh, collision-proof internal names at the token
--- level, so the resulting expression cannot capture / be captured by variables
--- at the call site.
+-- | Parse an expression function body, @slot <- expression@. Parameters are
+-- renamed to fresh internal names, so the body cannot capture (or be captured
+-- by) variables at the call site.
 parseDefineBody
   :: forall env
    . EnvironmentProxy env

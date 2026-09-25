@@ -10,21 +10,13 @@ import Language.Parser.SourceRange
 import Language.Typecheck
 import Language.Value
 
--- | Computes the derivative of a @Value et@ with respect to a variable
--- @z@. When @z@ is real, this is the ordinary real derivative (same type
--- in, same type out -- @derivativeWith@). When @z@ is complex, this is the
--- Wirtinger derivative @∂F/∂z@ (@wirtingerWith@, always complex-valued,
--- regardless of @F@'s own type): it coincides exactly with the ordinary
--- holomorphic derivative whenever @F@ *is* holomorphic (so every existing
--- holomorphic use -- @solve@, closed-form @critical@, @diff@ on a
--- holomorphic expression -- is unaffected), and is additionally defined for
--- @Abs@/@Re@/@Im@/@conj@ and any real-valued @F@, where it captures exactly
--- the "real gradient vanishes" critical-point condition (see the `critical`
--- section of AGENT.md for the derivation). A real-valued function of a
--- complex variable is never holomorphic (Cauchy-Riemann) unless constant,
--- so there is no case where "the same-type derivative" and "the Wirtinger
--- derivative" are two competing correct answers for a complex @z@ -- the
--- Wirtinger one is simply the more general, complete notion.
+-- | The derivative of a value with respect to a variable @z@.
+--
+-- * For real @z@, the ordinary derivative (same type in and out).
+-- * For complex @z@, the Wirtinger derivative @∂F/∂z@ (always complex).
+--   It equals the usual derivative for holomorphic @F@, and is also defined
+--   for @|.|@, @re@, @im@, @conj@ and real-valued @F@. For real @F@,
+--   @∂F/∂z = 0@ exactly when the real gradient vanishes.
 derivative :: SourceRange -> Value et -> SourceRange -> Value et -> TC (Value et)
 derivative _ (Var zName zty _) sr2 = case zty of
   RealType -> derivativeWith (symbolVal zName) shadowOfSame sr2
@@ -46,23 +38,11 @@ derivative _ (Var zName zty _) sr2 = case zty of
   _ -> \_ -> throwError $ DiffNotImplemented sr2 (symbolVal zName)
 derivative sr1 _ _ = \_ -> throwError $ DiffInputMustBeVariable sr1
 
--- | Computes the ordinary (same-type) derivative of a @Value et@ via a
--- caller-supplied rule for free variables ('shadowOf'): for each @Var@ node
--- encountered, it either supplies that variable's derivative directly (e.g.
--- a tracked loop variable's running shadow), or returns 'Nothing' to treat
--- the variable as locally constant (derivative 0). 'derivative' is the
--- special case where exactly one named variable is tracked, with shadow 1.
+-- | The ordinary (same-type) derivative. @shadowOf@ gives each variable's
+-- derivative, or 'Nothing' for a constant. Use 'wirtingerWith' for a complex
+-- variable when @F@ may not be holomorphic.
 --
--- This is the right tool when the differentiation variable is real (real
--- calculus has no "held constant" direction to lose, so same-type is
--- already the complete notion), or when it's known in advance that
--- everything involved is holomorphic. For a complex differentiation
--- variable where @Abs@/@Re@/@Im@/@conj@ or a real-valued result might be
--- involved, use 'wirtingerWith' instead.
---
--- @blameName@ is only used to fill in the "with respect to ..." slot of the
--- 'DiffNotImplemented' error when an unsupported node is hit; it does not
--- affect which nodes are supported.
+-- @blameName@ only fills in the error message for unsupported nodes.
 derivativeWith :: String
                -> (forall et'. Value et' -> Maybe (Value et'))
                -> SourceRange
@@ -147,30 +127,19 @@ derivativeWith blameName shadowOf sr2 = indexedFoldWithOriginalM derivativeRules
 
       _ -> throwError $ DiffNotImplemented sr2 blameName
 
--- | The Wirtinger derivative @∂F/∂z@ of a @Value et@ with respect to a
--- *complex* variable @z@: always complex-valued (see 'derivative''s
--- haddock), regardless of @F@'s own type. 'shadowOf' must likewise always
--- produce a complex shadow for a tracked variable, whatever that
--- variable's own type is.
+-- | The Wirtinger derivative @∂F/∂z@ for complex @z@. The result and all
+-- shadows are complex, whatever their own types.
 --
--- The @Abs@/@Re@/@Im@ rules assume their argument is itself holomorphic in
--- @z@ (i.e. @∂arg/∂z̄ = 0@) -- true whenever the argument's own construction
--- never itself passed through @Abs@/@Re@/@Im@/@conj@. That covers a
--- closed-form expression or compound-function body built from ordinary
--- arithmetic with a single non-holomorphic operation applied at the very
--- end (e.g. a Green potential's final @log(|x|)@), which is the case this
--- was built for; nested non-holomorphic operations would need tracking
--- both @∂/∂z@ and @∂/∂z̄@ to get right, which this does not attempt.
+-- The @|.|@/@re@/@im@ rules assume their argument is holomorphic
+-- (@∂arg/∂z̄ = 0@), so a non-holomorphic operation is only correct at the
+-- end of a computation (e.g. @log(|x|)@), not nested inside another one.
 wirtingerWith :: forall et. String
               -> (forall et'. Value et' -> Maybe (Value '(Env et', 'ComplexT)))
               -> SourceRange
               -> Value et
               -> TC (Value '(Env et, 'ComplexT))
 wirtingerWith blameName shadowOf sr2 v =
-  -- `ComplexAt`'s type instance pattern-matches its index as a `'(env,ty)`
-  -- tuple, so it doesn't reduce for an abstract `et` on its own; this
-  -- rewrites `et` to that tuple shape so `Eval (ComplexAt et)` reduces to
-  -- `Value '(Env et, 'ComplexT)` as the type signature above promises.
+  -- Exposes `et` as a tuple, so `Eval (ComplexAt et)` reduces.
   case lemmaEnvTy @et of
     Refl -> indexedFoldWithOriginalM @ComplexAt wirtingerRules v
   where
@@ -183,8 +152,7 @@ wirtingerWith blameName shadowOf sr2 v =
         Just d  -> pure d
         Nothing -> pure 0
 
-      -- | Basic algebra, real: widen the primal values to complex (the
-      -- shadows dx/dy are already complex).
+      -- | Basic algebra, real (widen the values, since shadows are complex).
       AddF (_, dx) (_, dy) -> pure $ dx + dy
       SubF (_, dx) (_, dy) -> pure $ dx - dy
       MulF (x, dx) (y, dy) -> pure $ R2C y * dx + R2C x * dy
@@ -192,7 +160,7 @@ wirtingerWith blameName shadowOf sr2 v =
       PowF (x, dx) (n, _)  -> pure $ R2C n * R2C x ** (R2C n - 1) * dx
       NegF (_, dx)         -> pure $ negate dx
 
-      -- | Basic algebra, complex: unchanged, already complex throughout.
+      -- | Basic algebra, complex
       AddC (_, dx) (_, dy) -> pure $ dx + dy
       SubC (_, dx) (_, dy) -> pure $ dx - dy
       MulC (x, dx) (y, dy) -> pure $ y * dx + x * dy
@@ -236,9 +204,7 @@ wirtingerWith blameName shadowOf sr2 v =
       SinhC    (x, dx) -> pure $ dx * CoshC x
       TanhC    (x, dx) -> pure $ dx * (1 - TanhC x ** 2)
 
-      -- | Non-holomorphic operations: the actual point of Wirtinger
-      -- differentiation. Derivations (z̄ held constant, i.e. the argument
-      -- assumed holomorphic -- see the haddock above):
+      -- | Non-holomorphic operations, for holomorphic @x@:
       --   |x| = sqrt(x·x̄)         =>  ∂|x|/∂z = x̄·(∂x/∂z) / (2|x|)
       --   Re(x) = (x+x̄)/2         =>  ∂Re(x)/∂z = ½·(∂x/∂z)
       --   Im(x) = (x-x̄)/(2i)      =>  ∂Im(x)/∂z = (∂x/∂z) / (2i)
@@ -248,24 +214,15 @@ wirtingerWith blameName shadowOf sr2 v =
       ImC  (_, dx) -> pure $ dx / Const (Scalar ComplexType (0 :+ 2))
       ConjC _      -> pure 0
 
-      -- | Real absolute value: d|x|/dx = x/|x| (x /= 0), same "held
-      -- constant" reasoning applied to a real argument.
+      -- | Real absolute value (d|x|/dx = x/|x|).
       AbsF (x, dx) -> pure $ (R2C x / R2C (AbsF x)) * dx
 
-      -- | Branches: differentiate each side, keep the (undifferentiated)
-      -- condition. Standard AD convention -- ignores the measure-zero
-      -- boundary between branches.
+      -- | Branches. (Differentiate each side and keep the condition; the
+      -- boundary between branches is ignored.)
       ITE _ (c, _) (_, dyes) (_, dno) -> pure $ ITE ComplexType c dyes dno
 
-      -- | Boolean/comparison operations: 'indexedFoldWithOriginalM' folds
-      -- *every* child of a node -- including a condition -- before a rule's
-      -- callback even runs, regardless of whether that rule ends up using
-      -- the folded value (e.g. 'ITE'-s rule above discards its condition's
-      -- folded derivative, `(c, _)`, but the fold still has to produce
-      -- *something* for it first). Booleans are never tracked, so their
-      -- Wirtinger derivative is always 0, same reasoning as the Integer
-      -- rules below -- needed for any `if`/`while` whose condition isn't a
-      -- bare comparison-free boolean (e.g. `|x| >= escapeR`).
+      -- | Booleans (never tracked, so 0). Needed because the fold visits
+      -- every child, including the unused condition of an `if`.
       Or{}  -> pure 0
       And{} -> pure 0
       Not{} -> pure 0
@@ -274,16 +231,8 @@ wirtingerWith blameName shadowOf sr2 v =
       LTI{} -> pure 0
       LTF{} -> pure 0
 
-      -- | Integer arithmetic: 'isDifferentiable' (Language.Code.Dual) never
-      -- tracks an Integer-typed variable, so an Integer-typed subexpression
-      -- -- built from any mix of these constructors -- can never depend on
-      -- the seed, by induction from its leaves (an untracked 'Var' or a
-      -- 'Const' both already fold to 0 above). Its Wirtinger derivative is
-      -- therefore always 0, unconditionally -- covering this explicitly
-      -- (rather than relying on the catch-all below) matters because an
-      -- Integer subexpression can still appear *nested inside* a larger
-      -- Real/Complex expression that genuinely is being differentiated
-      -- (e.g. `2^n` for an Integer loop counter `n`, used in `x / 2^n`).
+      -- | Integers (never tracked, so 0). They can occur inside a
+      -- differentiated expression, e.g. `x / 2^n` for a loop counter `n`.
       RoundF{}   -> pure 0
       FloorF{}   -> pure 0
       CeilingF{} -> pure 0
@@ -297,19 +246,14 @@ wirtingerWith blameName shadowOf sr2 v =
       NegI{}     -> pure 0
       Length{}   -> pure 0
 
-      -- | Type conversions: dx is already complex (Integer/Real are never
-      -- tracked seeds, and Complex is already this fold's target), so these
-      -- are pass-throughs, not further conversions.
+      -- | Conversions (dx is already complex, so pass it through).
       I2R  (_, dx) -> pure dx
       R2C  (_, dx) -> pure dx
 
-      -- C2R2's codomain is a pair, which doesn't fit a fold whose target is
-      -- always a single complex value -- falls through to the error below,
-      -- same as any other unsupported node.
+      -- C2R2 (a pair) is unsupported and falls through to the error.
 
       _ -> throwError $ DiffNotImplemented sr2 blameName
 
--- | The fold target for 'wirtingerWith': every index resolves to a single
--- complex value, regardless of the original node's own type.
+-- | The fold target for 'wirtingerWith' (a complex value at every type).
 data ComplexAt :: (Environment, FSType) -> Exp Type
 type instance Eval (ComplexAt '(env, ty)) = Value '(env, 'ComplexT)

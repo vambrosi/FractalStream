@@ -7,20 +7,11 @@ import Actor.Ensemble (Ensemble(..), parseEnsembleFromFile)
 import Actor.Viewer (SomeViewerWithContext(..))
 import Actor.Viewer.Complex (ComplexViewer(..))
 
--- | End-to-end check that the saddledrop example parses and typechecks.
+-- | Both viewers of the saddledrop example parse and typecheck. Its
+-- `critical` call takes the second Wirtinger derivative of a compound,
+-- real-valued function with loops.
 --
--- It is the most demanding script in `examples/`: `potential` is a compound
--- function containing two loops, and `critical z -> potential(z, p, lambda)`
--- therefore needs the Wirtinger derivative of a looped, real-valued
--- (non-holomorphic) function -- taken twice, since `critical` is Newton on the
--- gradient. Nothing else in the test suite exercises that whole path against a
--- real script rather than a synthetic fragment.
---
--- The file has two viewers (dynamical plane and parameter plane) sharing one
--- configuration panel; both must parse and typecheck.
---
--- The path is relative to `fractalstream-core/`, which is where `stack test`
--- runs, so the repo-root `examples/` directory is one level up.
+-- The path is relative to `fractalstream-core/`, where `stack test` runs.
 spec :: Spec
 spec = describe "examples/saddledrop.yaml" $
   it "parses and typechecks" $ do

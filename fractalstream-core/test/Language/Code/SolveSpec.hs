@@ -14,10 +14,8 @@ import Language.Draw
 
 import Text.RawString.QQ
 
--- | Run a script with a complex unknown @z@ and a complex parameter @c@ in
--- scope (plus the usual loop bookkeeping, including @solution@), returning the
--- root (read from @solution@), the final value of @z@, the step count
--- (@iterations@), and the @stuck@ flag.
+-- | Run a script with complex @z@ and @c@ in scope. Returns @solution@, the
+-- final @z@, @iterations@ and @stuck@.
 runC :: Complex Double      -- ^ seed value of @z@
      -> Complex Double      -- ^ value of the parameter @c@
      -> Int64               -- ^ iteration limit
@@ -40,9 +38,8 @@ runC z0 c lim input =
                          <*> eval (Var (Proxy @InternalStuck) BooleanType bindingEvidence))))
      $ parseCode (envProxy Proxy) noSplices input
 
--- | Run a script with a real unknown @x@ and a real parameter @a@ in scope,
--- returning the root (the real part of @solution@), the final value of @x@, the
--- step count, and the @stuck@ flag.
+-- | Run a script with real @x@ and @a@ in scope. Returns the real part of
+-- @solution@, the final @x@, @iterations@ and @stuck@.
 runR :: Double              -- ^ seed value of @x@
      -> Double              -- ^ value of the parameter @a@
      -> Int64               -- ^ iteration limit
@@ -131,8 +128,7 @@ spec = do
         `shouldConvergeTo` (1 :+ 0)
 
     it "exposes the root through the name `solution`" $
-      -- Read `solution` by name from the script (not via Proxy), exactly as a
-      -- viewer does: the script copies it into z, which we then observe.
+      -- Reads `solution` by name, as a viewer script does.
       seedC (runC (1 :+ 0) ((-4) :+ 0) 100 "solve z -> z^2 + c\nz <- solution")
         `shouldConvergeTo` (2 :+ 0)
 
@@ -148,8 +144,7 @@ spec = do
       runR 1 2 100 "solve x -> x^2 - a" `shouldConvergeToR` sqrt 2
 
     it "honors a looser `within` tolerance" $
-      -- A looser tolerance on |F| stops Newton earlier, so x lands in the
-      -- neighborhood of sqrt 2 but is coarser than the default 1e-10 path.
+      -- A looser tolerance stops Newton earlier, near sqrt 2.
       case runR 1 2 100 "solve x -> x^2 - a within 0.01" of
         Left e                 -> expectationFailure e
         Right (x, _, _, stuck) -> do
@@ -171,7 +166,7 @@ spec = do
       rootC (runC ((-1) :+ 0) (4 :+ 0) 100 "preimage z -> z^2 of c")
         `shouldConvergeTo` ((-2) :+ 0)
 
-  -- Can be applied to one-statement user-defined functions
+  -- Works on expression functions.
   -- Otherwise, returns a clear error.
   describe "function integration and the non-closed-form errors" $ do
 
@@ -183,23 +178,14 @@ solve z -> g(z)
 |]
       rootC (runC (1 :+ 0) ((-4) :+ 0) 100 p) `shouldConvergeTo` (2 :+ 0)
 
-    -- `conj` used to be unsupported (closed-form error). Under the
-    -- Wirtinger derivative it's well-defined -- ∂(conj z)/∂z = 0, since z̄
-    -- is exactly what Wirtinger ∂/∂z holds constant -- but that exposes a
-    -- real (pre-existing, not new) sharp edge: `g' = 0` identically here,
-    -- so Newton's step divides by zero. `g = conj(z) + c` itself is NOT
-    -- identically zero (it depends on z), so the first convergence check
-    -- fails and the loop actually runs, hits the zero derivative, and `z`
-    -- becomes NaN. The NaN-comparison gotcha already documented elsewhere
-    -- then reports `stuck = False` -- a confidently-wrong answer, not a
-    -- caught error. See AGENT.md; revisit once a general
-    -- degenerate-derivative guard is worth building.
+    -- Known limitation. (∂(conj z)/∂z = 0, so the Newton step divides by
+    -- zero, `z` becomes NaN, and NaN comparisons report `stuck = False`.)
     it "silently produces NaN for a purely anti-holomorphic body (Newton divides by a zero derivative)" $
       case rootC (runC (1 :+ 1) (1 :+ 0) 100 "solve z -> conj(z) + c") of
         Left e  -> expectationFailure e
         Right z -> realPart z `shouldSatisfy` isNaN
 
-  -- `critical` is `solve` on the gradient: it finds z where dF/dz = 0.
+  -- `critical` finds z where dF/dz = 0.
   describe "critical (Newton on the gradient, closed-form)" $ do
 
     it "parses `critical z -> (z - 3)^2`" $
@@ -226,15 +212,9 @@ solve z -> g(z)
     it "converges to the critical point of a real function (x - 2)^2 at x = 2" $
       runR 0 0 100 "critical x -> (x - 2)^2" `shouldConvergeToR` 2
 
-    -- Same underlying cause as `solve`'s version of this test, but a
-    -- *different* symptom: `critical` needs g = dF/dz, and for F = conj(z)
-    -- + c, that's 0 identically (not just at this seed -- conj is
-    -- anti-holomorphic everywhere), so the very first convergence check
-    -- (|g| <= tol, checked before any iteration) already passes. The loop
-    -- never runs at all, so it never even reaches the divide-by-zero in
-    -- g/g' -- `solution` just comes back as the unchanged seed, reported
-    -- as "not stuck" and 0 iterations. Silently wrong in a different way
-    -- than `solve`'s NaN, but the same root cause.
+    -- Known limitation. (dF/dz = 0 identically for F = conj(z) + c, so the
+    -- first convergence check passes and the seed is returned as the
+    -- solution after 0 iterations.)
     it "trivially \"succeeds\" without iterating for a purely anti-holomorphic body (its gradient is identically 0)" $ do
       let result = runC (1 :+ 1) (1 :+ 0) 100 "critical z -> conj(z) + c"
       rootC result `shouldConvergeTo` (1 :+ 1)

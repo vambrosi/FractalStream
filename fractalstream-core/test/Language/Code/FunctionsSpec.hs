@@ -15,9 +15,7 @@ import Language.Parser.SourceRange
 
 import Text.RawString.QQ
 
--- | Parse and run a script (which may contain `define` blocks) in an
--- environment with a single variable @x@ (plus the usual loop bookkeeping),
--- returning the final value of @x@.
+-- | Run a script with a single variable @x@ in scope; return the final @x@.
 runDefine :: forall xt
            . Scalar xt
           -> String
@@ -41,8 +39,7 @@ runDefine (Scalar xt x) input = withKnownType xt $
 noDraw :: DrawHandler (HaskellTypeM ())
 noDraw = DrawHandler (const $ pure ())
 
--- | Compare a (possibly failed) real result against an expected value, allowing
--- for floating-point round-off (derivatives of powers go through `**`).
+-- | Compare up to round-off (derivatives of powers go through `**`).
 shouldBeApprox :: Either String Double -> Double -> Expectation
 shouldBeApprox got want = case got of
   Left e  -> expectationFailure e
@@ -51,8 +48,6 @@ shouldBeApprox got want = case got of
 spec :: Spec
 spec = do
 
-  -- Milestone 1: a single-argument, expression-reducible definition and one
-  -- application parse and typecheck.
   describe "parsing user-defined functions" $ do
 
     it "parses a definition and an application" $ do
@@ -61,7 +56,6 @@ define g(t):
     result <- 2t + 1
 x <- g(x)
 |]
-      -- Should typecheck/run without error.
       runDefine (Scalar IntegerType 0) p `shouldSatisfy` isRight
 
     it "accepts the function's own name as the result slot" $ do
@@ -72,8 +66,6 @@ x <- g(x)
 |]
       runDefine (Scalar IntegerType 0) p `shouldSatisfy` isRight
 
-  -- Milestone 2: a call inlines and evaluates to the same value as the
-  -- hand-inlined body.
   describe "inlining user-defined functions" $ do
 
     it "evaluates g(x) = 2x + 1 like its hand-inlined body (integers)" $ do
@@ -104,13 +96,11 @@ x <- g(g(x))
           g v = 2 * v + 1
       runDefine (Scalar IntegerType 3) p `shouldBe` Right (g (g 3))
 
-  -- Full hygiene: a function's free variable resolves against its definition
-  -- site, and a call made in a (let-)extended scope is re-indexed correctly.
+  -- Free variables resolve at the definition site.
   describe "hygienic inlining" $ do
 
     it "resolves a free variable against the definition site, in an extended scope" $ do
-      -- h refers to the config variable x; the call happens after a local
-      -- `k` has extended the environment, so the body must be re-indexed.
+      -- The call comes after a local `k` is declared.
       let p = [r|
 define h(t):
     result <- t + x
@@ -138,8 +128,7 @@ define addA(t):
 a <- 100
 x <- addA(x)
 |]
-      -- `a` is 7 when addA is defined; reassigned to 100 afterwards. addA must
-      -- use the definition-time value: addA(5) = 5 + 7 = 12 (not 5 + 100).
+      -- addA uses `a` as it was at the define (5 + 7 = 12, not 5 + 100).
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 12
 
     it "captures the definition-site value for a compound body too" $ do
@@ -153,7 +142,6 @@ x <- addA(x)
 |]
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 12
 
-  -- Milestone 3: differentiation sees the fully-inlined (substituted) tree.
   describe "differentiating through a user function" $ do
 
     it "differentiates a single-argument function" $ do
@@ -174,7 +162,6 @@ x <- diff(x, sq(2x + 1))
       -- d/dx (2x+1)^2 = 2(2x+1)*2 = 8x + 4; at x = 1 that is 12.
       runDefine (Scalar RealType 1) p `shouldBeApprox` 12
 
-  -- Milestone 4: multiple parameters, multiple definitions, calls between them.
   describe "multiple parameters and definitions" $ do
 
     it "inlines a two-argument function" $ do
@@ -207,8 +194,6 @@ x <- twiceInc(x)
       -- twiceInc(5) = inc(inc(5)) = 7
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 7
 
-  -- Milestone 5a: compound (statement-bodied) functions, called in statement
-  -- position (`r <- f(args)`). Bodies may use locals, reassignment, and loops.
   describe "compound function bodies (statement position)" $ do
 
     it "splices a body with local variables" $ do
@@ -235,7 +220,7 @@ x <- sumTo(x)
       -- sumTo(5) = 0+1+2+3+4 = 10
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 10
 
-  -- Milestone 6: error cases. Each should produce an error (not hang/crash).
+  -- Each should give an error, not hang or crash.
   describe "error cases" $ do
 
     it "rejects an arity mismatch" $ do

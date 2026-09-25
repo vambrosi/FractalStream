@@ -2,19 +2,10 @@
 
 -- | Re-index a 'Value' from one environment into another.
 --
--- 'reindexValue' takes a value that was typechecked in some source
--- environment @src@ and rebuilds it so that it lives in a target
--- environment @tgt@.  Every variable referenced by the value must be
--- present in @tgt@ with the same type (typically because @tgt@ is an
--- /extension/ of @src@, e.g. @tgt = locals ++ src@).
---
--- This is the keystone of hygienic function inlining: a function body
--- is typechecked against its (clean) definition-site environment, and
--- then re-indexed into the (possibly larger) call-site environment so
--- that the call-site's local variables cannot capture the body's free
--- variables.  The proofs that names are present/absent are re-derived
--- against the target environment, so the result is sound as long as the
--- target really does contain the source's names.
+-- A function body is typechecked in its definition-site environment and
+-- re-indexed into the (larger) call-site environment, so call-site locals
+-- cannot capture the body's free variables. Membership proofs are re-derived
+-- against the target.
 module Language.Value.Reindex
   ( reindexValue
   , reindexValueWith
@@ -30,11 +21,13 @@ data Replacement env where
   Replacement :: forall env vty
                . TypeProxy vty -> Value '(env, vty) -> Replacement env
 
--- | Rebuild a value so that it is indexed by @tgt@ instead of @src@ (pure
--- environment weakening, no substitution). Errors (at runtime) if a referenced
--- variable is not present in the target environment, or if a locally-bound
--- name collides with the target environment; callers are responsible for
--- ensuring neither happens (the inliner uses fresh, bracketed names).
+-- | Rebuild a value so it is indexed by @tgt@ instead of @src@ (weakening
+-- only, no substitution).
+--
+-- Precondition, checked with 'error':
+--
+-- * every variable the value reads is in @tgt@ at the same type;
+-- * no locally-bound name is already in @tgt@.
 reindexValue
   :: forall src tgt ty
    . EnvironmentProxy tgt
@@ -42,13 +35,10 @@ reindexValue
   -> Value '(tgt, ty)
 reindexValue = reindexValueWith (Map.empty :: Map String (Replacement '[]))
 
--- | Re-index a value, additionally substituting each variable named in the map
--- with the corresponding 'Replacement'. This is how a function call is inlined:
--- every parameter's fresh internal name maps to the argument expression, and
--- the function body (typechecked at its definition site) is re-indexed into the
--- call-site environment with the parameters replaced. Replacements live in the
--- (outermost) target environment and are re-indexed further inward whenever they
--- appear underneath a binder.
+-- | Re-index a value, replacing each variable named in the map by its
+-- 'Replacement'. Inlining a call maps each parameter to its argument.
+-- Replacements live in the outermost target environment and are re-indexed
+-- inward when they appear under a binder.
 reindexValueWith
   :: forall callEnv src tgt ty
    . Map String (Replacement callEnv)

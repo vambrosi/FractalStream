@@ -1,23 +1,15 @@
 {-# language AllowAmbiguousTypes #-}
 
--- | Building blocks for differentiating a value through a /tracked/
--- variable's shadow, rather than a single fixed target.
+-- | Forward-mode differentiation of code with loops (dual numbers).
 --
--- A tracked variable's derivative lives in another, genuinely separate
--- runtime variable (not a symbolic expression -- the dual-number transform
--- over looped 'Code' needs this, since the loop body that updates the
--- original variable runs an unknown number of times). 'dValue'
--- differentiates a single (non-looped) 'Value' under this convention;
--- 'dualizeCode' extends it to looped 'Code'.
+-- * Each tracked variable has a /shadow/ (a runtime variable holding its
+--   derivative, updated alongside it).
+-- * 'dValue' differentiates a 'Value'; 'dualizeCode' a 'Code'.
 --
--- Shadow names are always freshly generated (via
--- 'Language.Code.Typecheck.withFresh', the same "guaranteed collision-free"
--- mechanism used throughout the typechecker), never derived from the
--- original name by a fixed string convention. 'Tracked' records the
--- resulting name -> shadow-name association explicitly. This is what makes
--- the transform safe to apply more than once to the same code (e.g. to get
--- a second derivative by differentiating an already-dualized program) --
--- there is no fixed prefix a second pass could collide with, at any depth.
+-- Every name a pass introduces (shadows and shared temporaries) is salted
+-- with that pass's id, so the transform can be applied to its own output
+-- (a second derivative) without name collisions. 'Tracked' maps each
+-- variable to its shadow.
 module Language.Code.Dual
   ( Tracked
   , dValue
@@ -47,38 +39,19 @@ import Language.Typecheck
 import Language.Parser.SourceRange
 import qualified Data.Map as Map
 
--- | Tracked variables currently being differentiated, mapping each
--- variable's name to the name of the (already-declared, in-scope) runtime
--- variable holding its derivative.
+-- | Tracked variable name -> shadow name (declared and in scope).
 type Tracked = Map String String
 
--- | A shadow name for @name@, salted by @gen@ -- a caller-supplied
--- identifier unique to /one differentiation pass/ (in practice, the
--- pass's own freshly-generated seed-shadow name, itself already guaranteed
--- unique by 'Language.Code.Typecheck.withFresh'). Names within one pass
--- are distinguished by @name@ itself, which is already guaranteed unique
--- within any single valid 'Code' (the typechecker rejects re-declaring a
--- name).
+-- | The shadow name of @name@ in pass @gen@ (an id unique to the pass).
+-- Unique because @name@ is unique within a 'Code'.
 --
--- This -- not 'Language.Code.Typecheck.withFresh' -- is how 'dualizeCode'
--- names new shadows. @withFresh@'s freshness is only relative to the
--- environment it's given, i.e. to names already threaded into that
--- specific chain; it can't see names sitting deeper, un-reindexed, inside
--- an already-built nested @Let@-chain (e.g. the output of an earlier
--- 'dualizeCode' pass). Two independent passes over overlapping code,
--- started from environments of similar apparent size, can and did produce
--- the exact same @withFresh@ name for two different purposes. Salting by
--- @gen@ makes that structurally impossible: two passes with different
--- @gen@s can never choose the same name, regardless of environment shape.
+-- Not 'Language.Code.Typecheck.withFresh' (it only avoids names in the
+-- given environment, not those inside an earlier pass's output).
 freshShadowName :: String -> String -> String
 freshShadowName gen name = "[dual " ++ gen ++ " of " ++ name ++ "]"
 
--- | Differentiate @v@ with respect to the seed direction, using @tracked@:
--- a tracked variable's derivative is read from its shadow; anything else
--- (an untracked variable, a constant, ...) is locally constant (0).
--- @blame@ only fills the "with respect to ..." slot of a
--- 'DiffNotImplemented' error (e.g. when @v@ contains a loop or an
--- unsupported node).
+-- | Differentiate @v@ (tracked variables read their shadow, everything else
+-- is constant). @blame@ only fills in the error message.
 dValue :: String -> Tracked -> SourceRange -> Value et -> TC (Value et)
 dValue blame tracked sr v = derivativeWith blame shadowOf sr v
   where
@@ -91,9 +64,7 @@ dValue blame tracked sr v = derivativeWith blame shadowOf sr v
           _         -> Nothing
     shadowOf _ = Nothing
 
--- | Real or Complex: the two types 'dValue'/'dualizeCode' can differentiate
--- and track a shadow for. Everything else (Integer loop counters, Boolean
--- flags, ...) has no meaningful derivative and is left completely alone.
+-- | Real or Complex. Other types (loop counters, flags) are never tracked.
 isDifferentiable :: TypeProxy ty -> Bool
 isDifferentiable = \case
   ComplexType -> True
@@ -101,38 +72,15 @@ isDifferentiable = \case
   _           -> False
 
 -- ---------------------------------------------------------------------------
--- Sharing: lift an expensive, multiply-referenced subexpression (a
--- division's denominator, an absolute value's argument, a power's
--- exponent) out into its own statement before differentiating a statement's
--- RHS, so it's computed -- and differentiated -- exactly once, however many
--- times the surrounding expression's derivative rule needs to refer to it
--- (e.g. the quotient rule needs the denominator three times: once in
--- @y*dx@, twice more in @y*y@). Left inline, one expensive subexpression
--- (say, a complex power computed via log/exp) can end up recompiled dozens
--- of times over in the generated code once 'tcCriticalCompound''s second
--- differentiation pass re-differentiates the first pass's own output. See
--- the "Sharing" section of AGENT.md for the LLVM-dump evidence this was
--- built to fix.
+-- Sharing
 --
--- 'extractIfNontrivial' actually performs the extraction (giving the new
--- statement its own shadow via 'dValue', exactly as 'dualizeCode' already
--- does for any other statement, so its derivative is tracked correctly by
--- whatever comes after -- including a second differentiation pass, since
--- the extracted statement is just an ordinary tracked statement to it, no
--- different from one the original script itself declared).
--- 'extractIfNontrivialWirtinger' is the same, but via 'dValueWirtinger'
--- (shadow always complex) -- see 'dValueWirtinger''s haddock.
+-- Some derivative rules repeat an operand, e.g. the quotient rule uses the
+-- denominator three times. Before differentiating, the operands of @/@,
+-- @|.|@ and @^@ are moved into their own tracked @Let@s, so each is computed
+-- once. Otherwise a second derivative can duplicate them many times.
 --
--- 'liftSharedGeneric' is the structural recursion -- walk a 'Value',
--- looking for a division/absolute-value/power node, recursing into every
--- operand along the way (so a shared subexpression buried inside an
--- @if@'s condition or a further nested operation is still found). It's
--- shared between 'liftShared' and 'liftSharedWirtinger' (the only
--- difference between them is which @extract@ action they use); only real
--- and complex arithmetic, transcendental functions, comparisons, and
--- if/then/else are covered -- the constructors that can actually appear
--- inside the kind of numeric expression this is built for. Anything else
--- (lists, pairs, colors, text, ...) is left untouched.
+-- * 'extractIfNontrivial' moves one operand into a @Let@ with a shadow.
+-- * 'liftSharedGeneric' walks a value and extracts at each such node.
 extractIfNontrivial
   :: forall env ty
    . SourceRange -> String -> String
@@ -213,8 +161,7 @@ liftSharedGeneric sr blame gen extract env tracked _ty v0 k = case v0 of
     extract envX trackedX ComplexType x' $ \envX' trackedX' x'' ->
       k envX' trackedX' (AbsC x'')
 
-  -- Everything else: plain recursion into every child, then rebuild with
-  -- the same constructor.
+  -- Everything else (recurse into the children).
   AddF x y -> rec2 RealType RealType x y AddF
   SubF x y -> rec2 RealType RealType x y SubF
   MulF x y -> rec2 RealType RealType x y MulF
@@ -288,17 +235,12 @@ liftSharedGeneric sr blame gen extract env tracked _ty v0 k = case v0 of
         go envY trackedY t (reindexValue envY no) $ \envN trackedN no' ->
           k envN trackedN (ITE t (reindexValue envN c') (reindexValue envN yes') no')
 
-  -- Anything else (constants, variables, lists, pairs, colors, text,
-  -- LocalLet, ...) is left untouched -- not a source of the measured
-  -- blowup, and several of these bind their own local names, which would
-  -- need their own care to lift through safely.
+  -- Anything else is left alone. Some of these (e.g. LocalLet) bind
+  -- names, so lifting through them would need care.
   _ -> withEnvironment env $ k env tracked v0
 
  where
-  -- `where` is deliberately indented *less* than the `case` alternatives
-  -- above (column 2, not 3) -- at the same column, GHC's layout rule would
-  -- try to parse `where` as one more case alternative instead of closing
-  -- the `case` block and attaching to this whole equation.
+  -- Indented less than the `case` alternatives, so it closes the `case`.
   go :: forall e t. EnvironmentProxy e -> Tracked -> TypeProxy t -> Value '(e, t)
      -> (forall e'. KnownEnvironment e' => EnvironmentProxy e' -> Tracked -> Value '(e', t) -> TC (Code e'))
      -> TC (Code e)
@@ -319,9 +261,7 @@ liftSharedGeneric sr blame gen extract env tracked _ty v0 k = case v0 of
       go envX trackedX cty2 (reindexValue envX y) $ \envY trackedY y' ->
         k envY trackedY (rebuild (reindexValue envY x') y')
 
--- | Lift shared subexpressions out of a statement's RHS before
--- differentiating it with 'dValue' (same-type shadow) -- see
--- 'liftSharedGeneric'.
+-- | 'liftSharedGeneric' with same-type shadows.
 liftShared :: forall env ty
             . SourceRange -> String -> String
            -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
@@ -329,9 +269,7 @@ liftShared :: forall env ty
            -> TC (Code env)
 liftShared sr blame gen = liftSharedGeneric sr blame gen (extractIfNontrivial sr blame gen)
 
--- | Lift shared subexpressions out of a statement's RHS before
--- differentiating it with 'dValueWirtinger' (always-complex shadow) -- see
--- 'liftSharedGeneric'.
+-- | 'liftSharedGeneric' with complex shadows.
 liftSharedWirtinger :: forall env ty
                       . SourceRange -> String -> String
                      -> EnvironmentProxy env -> Tracked -> TypeProxy ty -> Value '(env, ty)
@@ -339,21 +277,13 @@ liftSharedWirtinger :: forall env ty
                      -> TC (Code env)
 liftSharedWirtinger sr blame gen = liftSharedGeneric sr blame gen (extractIfNontrivialWirtinger sr blame gen)
 
--- | Transform a 'Code' so that every Real/Complex @Let@/@Set@-bound
--- variable named in @tracked@ (extended with a fresh shadow as new @Let@s
--- are discovered) gets a shadow holding its running derivative with
--- respect to the seed direction. A tracked variable must already have its
--- shadow declared (with its initial derivative) in the environment @code@
--- starts in and recorded in @tracked@; @dualizeCode@ only introduces
--- shadows for variables @code@ itself declares via @Let@.
+-- | Add shadow updates to a 'Code', so every tracked variable's shadow holds
+-- its running derivative.
 --
--- @blame@ only fills the "with respect to ..." slot of a
--- 'DiffNotImplemented' error. @gen@ salts every new shadow name (see
--- 'freshShadowName') -- pass something unique to this differentiation pass
--- (e.g. the seed's own shadow name). Only @Let@/@Set@/@Block@/
--- @IfThenElse@/@DoWhile@/@NoOp@ are supported; @ForEach@/@Lookup@/
--- @DrawCommand@ are rejected with a clear error (not used by
--- potential-style numeric loop bodies).
+-- * Variables in @tracked@ must already have declared shadows.
+-- * Real/Complex @Let@s in the code get new shadows, named with @gen@.
+-- * Lists and draw commands are unsupported.
+-- * @blame@ only fills in the error message.
 dualizeCode :: SourceRange -> String -> String -> Tracked -> Code env -> TC (Code env)
 dualizeCode sr blame gen tracked code0 = case code0 of
 
@@ -379,9 +309,8 @@ dualizeCode sr blame gen tracked code0 = case code0 of
         pf' <- findVarAtType sr name ty env'
         case someSymbolVal shadowNm of
           SomeSymbol sname -> case lookupEnv sname ty env' of
-            -- `dv` (and `v`, if `v` reads `name` itself, e.g. `w <- w * x`)
-            -- is evaluated against `name`'s OLD value, so the shadow must
-            -- be updated before `name` itself is overwritten below.
+            -- Update the shadow first. (`dv` reads the old value of `name`,
+            -- e.g. in `w <- w * x`.)
             Found spf -> pure (Block [ Set spf sname dv, Set pf' name v' ])
             _ -> throwError (Advice sr
                    ("dualizeCode: internal error, `" ++ symbolVal name
@@ -401,16 +330,9 @@ dualizeCode sr blame gen tracked code0 = case code0 of
   Lookup{}      -> throwError (Advice sr "dualizeCode: list operations are not supported.")
   ForEach{}     -> throwError (Advice sr "dualizeCode: list operations are not supported.")
 
--- | Wirtinger analogue of 'dValue': the derivative is always complex,
--- regardless of @v@'s own type (see
--- 'Language.Value.Derivative.wirtingerWith' -- this is exactly that
--- generalization, applied through a tracked shadow instead of a single
--- fixed target). Needed because a compound function's body can be
--- real-valued partway through (a Green potential's final @log(|x|)@, say)
--- while still being differentiated with respect to a complex seed. A
--- tracked variable's shadow is looked up at 'ComplexType', not its own
--- type -- under this convention every shadow is complex, never "whatever
--- type the original variable happened to be".
+-- | Wirtinger version of 'dValue' (every shadow and result is complex,
+-- whatever the variable's type). Needed when a complex seed flows into real
+-- values, e.g. @log(|x|)@.
 dValueWirtinger :: String -> Tracked -> SourceRange -> Value et -> TC (Value '(Env et, 'ComplexT))
 dValueWirtinger blame tracked sr v = wirtingerWith blame shadowOf sr v
   where
@@ -423,10 +345,7 @@ dValueWirtinger blame tracked sr v = wirtingerWith blame shadowOf sr v
           _         -> Nothing
     shadowOf _ = Nothing
 
--- | Wirtinger analogue of 'dualizeCode': structurally identical, but every
--- shadow 'dualizeCodeWirtinger' introduces is declared at 'ComplexType'
--- (via 'dValueWirtinger'), regardless of the tracked variable's own type --
--- see 'dValueWirtinger'.
+-- | Wirtinger version of 'dualizeCode' (all shadows are complex).
 dualizeCodeWirtinger :: SourceRange -> String -> String -> Tracked -> Code env -> TC (Code env)
 dualizeCodeWirtinger sr blame gen tracked code0 = case code0 of
 
@@ -471,15 +390,9 @@ dualizeCodeWirtinger sr blame gen tracked code0 = case code0 of
   Lookup{}      -> throwError (Advice sr "dualizeCodeWirtinger: list operations are not supported.")
   ForEach{}     -> throwError (Advice sr "dualizeCodeWirtinger: list operations are not supported.")
 
--- | Bind each argument to a compound function call to a fresh name (as
--- 'Language.Code.Typecheck.spliceArgs' does for an ordinary, non-dual
--- call), and additionally bind its derivative (with respect to @tracked0@,
--- fixed across all arguments -- an argument expression can't reference
--- another argument's fresh name, since all arguments are evaluated in the
--- same outer scope) to a fresh (salted by @gen@ -- see 'freshShadowName')
--- shadow right alongside it. The continuation's 'Tracked' is @tracked0@
--- plus every differentiable argument's fresh name -> shadow-name
--- association.
+-- | Bind each argument to its fresh parameter name, and each differentiable
+-- one's derivative to a shadow. Arguments are all differentiated with
+-- respect to @tracked0@, since they can't refer to each other.
 spliceArgsDual
   :: forall env
    . SourceRange
@@ -507,18 +420,9 @@ spliceArgsDual sr blame gen tracked0 ((fresh, ann, arg) : rest) env k = withEnvi
             (\envF trackedF -> k envF (Map.insert fresh (freshShadowName gen fresh) trackedF))
       _ -> spliceArgsDual sr blame gen tracked0 rest env1 k
 
--- | Splice a compound function call, differentiated with respect to
--- whichever variables are already tracked in @env@ (their shadows must
--- already be declared there and recorded in @tracked0@ -- e.g. the Newton
--- unknown, seeded to 1), producing @(F, F')@ as materialized
--- (@Set@-mutated) local variables of type @ty@. @F@/@F'@ are handed to a
--- continuation rather than copied into a target variable, unlike
--- 'Language.Code.Typecheck.tcSetCompound' (which this otherwise mirrors)
--- -- a Newton loop needs them as ordinary expressions, and they have to be
--- materialized (not symbolic) because the function body may contain a
--- loop. @gen@ salts every fresh shadow name this introduces (see
--- 'freshShadowName') -- pass something unique to this differentiation
--- pass, e.g. @tracked0@'s own seed shadow name.
+-- | Splice a compound call, differentiated with respect to @tracked0@.
+-- The result @F@ and its derivative @F'@ are local variables (the body may
+-- loop), passed to the continuation.
 spliceCompoundDual
   :: SourceRange
   -> String
@@ -555,9 +459,7 @@ spliceCompoundDual sr blame gen tracked0 cf args ty env k
                     restCode <- k envRD (Var res ty resPf) (Var dresProxy ty dresPf)
                     pure (Block [ dbody, restCode ])
 
--- | Wirtinger analogue of 'spliceArgsDual': every argument's shadow is
--- declared at 'ComplexType' (via 'dValueWirtinger'), regardless of the
--- argument's own type -- see 'dValueWirtinger'.
+-- | Wirtinger version of 'spliceArgsDual' (all shadows are complex).
 spliceArgsDualWirtinger
   :: forall env
    . SourceRange
@@ -585,14 +487,8 @@ spliceArgsDualWirtinger sr blame gen tracked0 ((fresh, ann, arg) : rest) env k =
             (\envF trackedF -> k envF (Map.insert fresh (freshShadowName gen fresh) trackedF))
       _ -> spliceArgsDualWirtinger sr blame gen tracked0 rest env1 k
 
--- | Wirtinger analogue of 'spliceCompoundDual': @F@ (the compound
--- function's own result) stays at its own natural type @ty@ (whatever the
--- caller asks for, same as before -- typically still forced to the
--- unknown's type, e.g. by R2C-widening a real result, since that widening
--- is harmless: 'wirtingerWith''s @R2C@ rule is a pass-through, and its
--- fold already reaches every nested node's own type regardless of what the
--- top-level type tag says). Only @F'@ (the shadow) is forced to
--- 'ComplexType' unconditionally -- see 'dValueWirtinger'.
+-- | Wirtinger version of 'spliceCompoundDual' (@F@ has type @ty@, @F'@ is
+-- always complex).
 spliceCompoundDualWirtinger
   :: SourceRange
   -> String
@@ -629,21 +525,12 @@ spliceCompoundDualWirtinger sr blame gen tracked0 cf args ty env k
                     restCode <- k envRD (Var res ty resPf) (Var dresProxy ComplexType dresPf)
                     pure (Block [ dbody, restCode ])
 
--- | @solve z -> f(args)@ where @f@ is a compound (looped) function: the
--- closed-form 'Language.Code.Typecheck.tcSolve' can't differentiate a loop
--- (@diffClosedForm@ rejects it), so this differentiates @f@'s body via
--- 'dualizeCode' instead.
+-- | @solve z -> f(args)@ for a compound @f@, differentiated with
+-- 'dualizeCode'.
 --
--- Newton needs @F(z)@ and @F'(z)@ fresh at the *current* @z@ on every
--- convergence check, but a looped @F@ can't be represented as a reusable
--- symbolic expression the way 'Language.Code.Typecheck.tcSolve''s
--- closed-form case can -- computing it means actually running the spliced
--- body. So @F@/@F'@ are materialized (@Set@-mutated) local variables, and
--- the splice runs twice per Newton step: once to seed the very first
--- convergence check, and once more each loop iteration (right after @z@
--- moves) so the next check sees the new value. This costs one extra full
--- evaluation of @F@ per step compared to a closed-form @solve@ -- the same
--- cost a finite-difference approach would have paid.
+-- @F@ and @F'@ are computed by running the spliced body, so the splice
+-- appears twice (before the loop, and after each step for the next
+-- convergence check).
 tcSolveCompound :: String
                 -> (CompoundFunction, [ParsedValue])
                 -> Maybe ParsedValue
@@ -721,8 +608,7 @@ tcSolveCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) = do
                   , IfThenElse c' (DoWhile c' b') NoOp
                   , Set ipf   (Proxy @InternalIterations) counterZ
                   , Set spf   (Proxy @InternalStuck)      stuckCond
-                  -- Publish the root z (not F(z), which is ~0 at convergence
-                  -- by definition -- the root is what the caller wants).
+                  -- `solution` is the root z, not F(z).
                   , Set solpf (Proxy @InternalSolution)
                       (withEnvironment envZ $ ITE ComplexType stuckCond nanSolution (Var zname ComplexType zpf'))
                   , Set zpf'  zname (Var saveName ComplexType savePf')
@@ -775,8 +661,7 @@ tcSolveCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) = do
                   , IfThenElse c' (DoWhile c' b') NoOp
                   , Set ipf   (Proxy @InternalIterations) counterZ
                   , Set spf   (Proxy @InternalStuck)      stuckCond
-                  -- Publish the root z (not F(z), which is ~0 at convergence
-                  -- by definition -- the root is what the caller wants).
+                  -- `solution` is the root z, not F(z).
                   , Set solpf (Proxy @InternalSolution)
                       (withEnvironment envZ $ ITE ComplexType stuckCond nanSolution (R2C (Var zname RealType zpf')))
                   , Set zpf'  zname (Var saveName RealType savePf')
@@ -785,27 +670,15 @@ tcSolveCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) = do
           _ -> throwError (Advice sr ("`solve` needs a real or complex unknown, but `"
                  ++ var ++ "` is " ++ showType zty ++ "."))
 
--- | @critical z -> f(args)@ where @f@ is a compound (looped) function:
--- Newton on the gradient (@critical@ is "solve on the gradient" -- see
--- 'Language.Code.Typecheck.tcCritical' for the closed-form case), but a
--- looped @f@'s gradient @g = dF/dz@ and @g@'s own derivative @g' = d²F/dz²@
--- both have to come from differentiating a loop.
+-- | @critical z -> f(args)@ for a compound @f@ (Newton on @g = F'@ with
+-- @g' = F''@).
 --
--- @g@ is exactly what 'spliceCompoundDual' already produces as @F'@ -- one
--- splice gives @(F, g)@. @g'@ needs differentiating @g@ itself, and @g@ is
--- computed by a loop (whatever loop @f@'s body has), so the *same* trick
--- applies one level up: run the entire first splice again through
--- 'dualizeCode', seeded with a second, independent shadow of @z@, tracking
--- the outer variable that received @g@ so its shadow after this second
--- pass is @g'@. This only works because shadow names are always freshly
--- generated (see the module haddock) -- the second pass walks straight
--- through everything the first pass built (including the first pass's own
--- shadow variables) without colliding with any of it, no matter how deep.
+-- * One splice gives @(F, g)@.
+-- * Running 'dualizeCode' over that whole splice, with a second shadow of
+--   @z@, gives @g'@ as the shadow of @g@.
 --
--- Same materialization/re-splicing story as 'tcSolveCompound' (@g@/@g'@
--- have to be fresh at the current @z@ on every convergence check, so the
--- whole double-splice below runs once before the loop and once per
--- iteration).
+-- As in 'tcSolveCompound', the splice appears before the loop and after
+-- each step.
 tcCriticalCompound :: String
                    -> (CompoundFunction, [ParsedValue])
                    -> Maybe ParsedValue
@@ -866,21 +739,11 @@ tcCriticalCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) =
                    nan        = 0/0 :: Double
                    nanSolution = Const (Scalar ComplexType (nan :+ nan))
 
-                   -- Splice f(z) once (seeded with a fresh shadow of z) to
-                   -- get (F, g) and copy them into the outer fName/dfName;
-                   -- then splice the *entire resulting program* again
-                   -- (seeded with a second, independent fresh shadow of z,
-                   -- tracking dfName -> ddfName) so ddfName ends up holding
-                   -- g's own derivative, g'.
-                   -- `withFresh`'s freshness is relative to the *apparent*
-                   -- length of the environment it's given -- it can't see
-                   -- names hidden inside an already-built nested Let-chain.
-                   -- So both fresh seeds (dz1, dz2) must be declared BEFORE
-                   -- `fos` is built, extending the base environment `fos`'s
-                   -- own internal fresh names are generated from; declaring
-                   -- dz2 afterwards, from the same starting environment fos
-                   -- itself started from, risks it colliding with one of
-                   -- fos's own internal names (this happened once).
+                   -- The first pass puts (F, g) into fName/dfName. The second
+                   -- pass, over the result and tracking dfName -> ddfName,
+                   -- puts g' into ddfName.
+                   -- Both seeds are declared before `fos` is built
+                   -- (`withFresh` can't see names inside `fos`).
                    doDoubleSplice :: TC (Code envC)
                    doDoubleSplice = do
                      dz1Dflt <- pure (Const (Scalar ComplexType 1))
@@ -905,8 +768,7 @@ tcCriticalCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) =
                  , IfThenElse c' (DoWhile c' b') NoOp
                  , Set ipf   (Proxy @InternalIterations) counterZ
                  , Set spf   (Proxy @InternalStuck)      stuckCond
-                 -- Publish the critical point z (not g(z), which is ~0 at
-                 -- convergence by definition).
+                 -- `solution` is the critical point z, not g(z).
                  , Set solpf (Proxy @InternalSolution)
                      (withEnvironment envFDD $ ITE ComplexType stuckCond nanSolution (Var zname ComplexType zpf'))
                  , Set zpf'  zname (Var saveName ComplexType savePf')
@@ -942,8 +804,7 @@ tcCriticalCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) =
                    nan        = 0/0 :: Double
                    nanSolution = Const (Scalar ComplexType (nan :+ nan))
 
-                   -- See the ComplexType branch's comment: both fresh seeds
-                   -- must be declared before `fos` is built.
+                   -- Both seeds are declared before `fos` is built.
                    doDoubleSplice :: TC (Code envC)
                    doDoubleSplice = do
                      dz1Dflt <- pure (Const (Scalar RealType 1))
@@ -968,8 +829,7 @@ tcCriticalCompound var (cf, args) mtol mlimit sr (env :: EnvironmentProxy env) =
                  , IfThenElse c' (DoWhile c' b') NoOp
                  , Set ipf   (Proxy @InternalIterations) counterZ
                  , Set spf   (Proxy @InternalStuck)      stuckCond
-                 -- Publish the critical point z (not g(z), which is ~0 at
-                 -- convergence by definition).
+                 -- `solution` is the critical point z, not g(z).
                  , Set solpf (Proxy @InternalSolution)
                      (withEnvironment envFDD $ ITE ComplexType stuckCond nanSolution (R2C (Var zname RealType zpf')))
                  , Set zpf'  zname (Var saveName RealType savePf')

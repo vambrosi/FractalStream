@@ -113,20 +113,17 @@ tcIterate var expr isWhile cond upto sr env = do
 solveTolerance :: Double
 solveTolerance = 1e-10
 
--- | The equation a Newton statement runs on, and its derivative: given the
--- unknown's type and its current value (@Var z@, at whatever environment the
--- loop ends up working in), produce @(F, F')@ for 'tcSolve' or @(g, g')@ (the
--- gradient and its own derivative) for 'tcCritical'. @var@/the equation body
--- are captured by closure at the call site, not threaded through here.
+-- | The equation Newton runs on and its derivative, as a function of the
+-- unknown (@(F, F')@ for @solve@, @(F', F'')@ for @critical@).
 type NewtonEquation =
   forall env' ty. (KnownEnvironment env', KnownType ty)
     => SourceRange -> TypeProxy ty -> Value '(env', ty) -> TC (Value '(env', ty), Value '(env', ty))
 
--- | The Newton-iteration lowering shared by 'tcSolve' and 'tcCritical': fresh
--- counter + limit (mirroring 'tcGenericLoop'), save/restore of the unknown, and
--- @iterations@/@stuck@/@solution@ bookkeeping. The two statements differ only in
--- which equation Newton runs on ('NewtonEquation') and the wording of an error
--- message.
+-- | A counted Newton iteration on a 'NewtonEquation':
+--
+-- * the unknown is saved and restored, so it is only the seed;
+-- * the result goes to @solution@ (NaN if not converged);
+-- * @iterations@/@stuck@ are set as for loops.
 tcNewton :: String              -- ^ name for the "needs a real or complex unknown" error (backtick-quoted, e.g. @"`solve`/`preimage`"@)
          -> NewtonEquation      -- ^ the equation to converge on, and its derivative
          -> String              -- ^ the unknown variable's name
@@ -157,10 +154,8 @@ tcNewton tyErrName mkEqn var mtol mlimit sr (env :: EnvironmentProxy env) = do
       zpf    <- findVarAtType sr zname    zty         env''
       savePf <- findVarAtType sr saveName zty         env''
 
-      -- The Newton step, the absolute residual, and the (complex) value to
-      -- store as `solution`, built at the unknown's type (Real or Complex).
-      -- Both halves use the overloaded Num/Fractional instances on Value, so
-      -- the body is identical apart from Abs/R2C and the type.
+      -- The Newton step, the residual, and the (complex) `solution`, at the
+      -- unknown's type.
       (newtonStep, absEq, solutionVal) <- case zty of
         ComplexType -> do
           (eq, eq') <- mkEqn sr ComplexType (Var zname ComplexType zpf)
@@ -196,26 +191,16 @@ tcNewton tyErrName mkEqn var mtol mlimit sr (env :: EnvironmentProxy env) = do
         [ IfThenElse c' (DoWhile c' b') NoOp
         , Set ipf  iterations counter
         , Set spf  stuck      stuckCond
-        -- Publish the result, or NaN if Newton did not converge, so a failure
-        -- propagates into anything that reads `solution` instead of leaving a
-        -- plausible-looking last iterate.
+        -- NaN on failure, rather than a plausible-looking last iterate.
         , Set solpf solution
             (withEnvironment env'' $ ITE ComplexType stuckCond nanSolution solutionVal)
         , Set zpf  zname      (Var saveName zty savePf) ]  -- restore the unknown
 
--- | @solve z -> F@: find a root of @F = 0@ by a counted Newton iteration
--- seeded from @z@'s current value, and store it in the internal @solution@
--- variable. The unknown @z@ itself is left unchanged (it stays the seed /
--- coordinate), mirroring how @stuck@/@iterations@ report a loop's outcome
--- without disturbing its inputs.
+-- | @solve z -> F@ runs Newton's method for @F = 0@, seeded from @z@.
 --
--- Lowers via 'tcNewton' (fresh counter + limit, @iterations@/@stuck@
--- bookkeeping, save/restore of @z@), running Newton directly on @F@: the
--- step is @z <- z - F/F'@, exit condition @|F| <= tol@. @F'@ is obtained
--- symbolically via 'derivative' w.r.t. @Var z@, so @F@ must be a
--- differentiable closed-form expression. @solution@ is complex; for a real
--- unknown the (real) root is widened with @R2C@. @stuck@ is true iff Newton
--- did not converge within the budget.
+-- * Step @z <- z - F/F'@, stopping when @|F| <= tol@.
+-- * @F'@ is symbolic, so @F@ must be a closed-form expression.
+-- * @z@ is left unchanged; the root goes to @solution@ (complex).
 tcSolve :: String              -- ^ the unknown variable's name
         -> ParsedValue         -- ^ the equation body @F@
         -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause)
@@ -229,16 +214,7 @@ tcSolve var pF = tcNewton "`solve`/`preimage`" mkEqn var
       f' <- diffClosedForm sr var z f
       pure (f, f')
 
--- | @critical z -> F@: find a critical point of @F@ as a function of @z@ (a
--- @z@ where @dF/dz = 0@) by a counted Newton iteration on the gradient,
--- seeded from @z@'s current value, and store it in the internal @solution@
--- variable. This is \"@solve@ on the gradient\": where 'tcSolve' differentiates
--- its equation once (for the Newton step) and converges on @F@ itself,
--- 'tcCritical' differentiates @F@ /twice/ — once to get the gradient @g =
--- dF/dz@ (the equation it solves) and once more to get @g' = d²F/dz²@ (the
--- Newton step's slope) — and converges on @|g|@. Otherwise identical to
--- 'tcSolve' (via the same 'tcNewton'): same loop shape, same save/restore of
--- the unknown, and the same @solution@/@stuck@/@iterations@ bookkeeping.
+-- | @critical z -> F@ is @solve z -> dF/dz@ (Newton on @F'@ using @F''@).
 tcCritical :: String              -- ^ the unknown variable's name
            -> ParsedValue         -- ^ the function body @F@ whose critical point we seek
            -> Maybe ParsedValue   -- ^ optional tolerance (@within@ clause, on @|dF/dz|@)
@@ -253,9 +229,8 @@ tcCritical var pF = tcNewton "`critical`" mkEqn var
       g' <- diffClosedForm sr var z g
       pure (g, g')
 
--- | Differentiate a closed-form equation body, turning the internal
--- 'DiffNotImplemented' (thrown on loops / unsupported nodes) into a clear
--- user-facing error: this is the boundary with the future non-closed-form work.
+-- | Differentiate a closed-form equation, with a user-facing error for
+-- unsupported nodes.
 diffClosedForm :: SourceRange -> String -> Value et -> Value et -> TC (Value et)
 diffClosedForm sr var z f = catchError (derivative sr z sr f) $ \case
   DiffNotImplemented{} -> throwError (Advice sr
@@ -263,10 +238,7 @@ diffClosedForm sr var z f = catchError (derivative sr z sr f) $ \case
      ++ var ++ "` contains a loop or an unsupported construct."))
   err -> throwError err
 
--- | @preimage z -> F of v@: find a solution of @F = v@ near @z@'s current
--- value, leaving @z@ unchanged and publishing the result in @solution@. Pure
--- sugar for @solve z -> F - v@ (same machinery; @v@ is
--- constant w.r.t. @z@, so @F'@ is unchanged).
+-- | @preimage z -> F of v@ is sugar for @solve z -> F - v@.
 tcPreimage :: String -> ParsedValue -> ParsedValue
            -> Maybe ParsedValue -> Maybe ParsedValue -> CheckedCode
 tcPreimage var pF pV = tcSolve var (subParsed pF pV)
@@ -385,10 +357,9 @@ withFresh sr env ty value action = withEnvironment env $ do
 -- Compound (statement-bodied) user functions
 ------------------------------------------------------
 
--- | A user function whose body is a compound block of statements (locals,
--- loops, conditionals, reassignment) that delivers its result by assigning the
--- slot. Inlined by /splicing/ the statements at the call site; for now,
--- callable only in statement position (@target <- f(args)@).
+-- | A function whose body is a block of statements that assigns the result
+-- slot. Calls are spliced in as statements, so they can only appear as
+-- @target <- f(args)@.
 data CompoundFunction = CompoundFunction
   { cfName        :: String
   , cfParams      :: [(String, Maybe SomeType)]
@@ -397,9 +368,11 @@ data CompoundFunction = CompoundFunction
   , cfBody        :: ParsedCode
   }
 
--- | Typecheck @target <- f(args)@ for a compound function @f@: bind each
--- parameter to its argument with a @Let@, declare the result slot (initialised
--- to a default), run the (renamed) body, then copy the result into @target@.
+-- | @target <- f(args)@ for a compound @f@ becomes:
+--
+-- * a @Let@ per parameter, bound to its argument;
+-- * a @Let@ for the result slot, with a default value;
+-- * the body, then @target <- result@.
 tcSetCompound :: String -> CompoundFunction -> [ParsedValue] -> CheckedCode
 tcSetCompound targetName cf args sr env
   | length args /= length (cfParams cf) =
@@ -421,10 +394,8 @@ tcSetCompound targetName cf args sr env
                   resPf <- findVarAtType sr res rty envR
                   pure (Block [ body, Set tgtPf target (Var res rty resPf) ])
 
--- | Verify that a compound function body is pure: it may assign only its own
--- result slot, its parameters, and locals it declares. Assigning any other
--- (caller/config) variable is rejected. Internal bookkeeping names (loop
--- counters, @[internal] …@) are bracketed and always allowed.
+-- | A compound body may assign only its result slot, parameters, locals and
+-- bracketed internal names (e.g. loop counters).
 checkPure :: CompoundFunction -> SourceRange -> Code env -> TC ()
 checkPure cf sr body =
   case Set.toList illegal of
@@ -448,9 +419,7 @@ fnBodyVars c = execState (indexedFoldM @Unit gather c) (Set.empty, Set.empty)
       Let _ name _ _ -> modify' (\(s, l) -> (s, Set.insert (symbolVal name) l))
       _              -> pure ()
 
--- | Typecheck each argument in the call-site environment and bind it to the
--- corresponding fresh parameter name with a @Let@, threading the (growing)
--- environment to the continuation.
+-- | Bind each argument to its fresh parameter name with a @Let@.
 spliceArgs :: forall env
             . SourceRange
            -> [(String, Maybe SomeType, ParsedValue)]
@@ -464,8 +433,7 @@ spliceArgs sr ((fresh, ann, arg) : rest) env k = withEnvironment env $ do
     argVal <- atType arg pty :: TC (Value '(env, pty))
     letBind sr fresh pty argVal env $ \env' -> spliceArgs sr rest env' k
 
--- | Bind a (fresh) name to a value with a @Let@, extending the environment and
--- wrapping the continuation's code in that @Let@.
+-- | Wrap the continuation's code in a @Let@ binding a name to a value.
 letBind :: forall env ty
          . SourceRange -> String -> TypeProxy ty -> Value '(env, ty) -> EnvironmentProxy env
         -> (forall name. (KnownSymbol name, NotPresent name env)
@@ -492,8 +460,7 @@ inferArgType sr ann arg env = withEnvironment env $ case ann of
     , (atType arg ColorType   :: TC (Value '(env, 'ColorT)))   $> SomeType ColorType
     ]
 
--- | A default value used to initialise a compound function's result slot
--- before its body runs.
+-- | The initial value of a compound function's result slot.
 defaultFor :: forall env ty. KnownEnvironment env => SourceRange -> TypeProxy ty -> TC (Value '(env, ty))
 defaultFor sr = \case
   IntegerType -> pure (Const (Scalar IntegerType 0))

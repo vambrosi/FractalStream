@@ -426,19 +426,21 @@ compileRenderer' prepOutputEnv name code = runExcept $
         br pixelLoopX
 
         pixelLoopX <- block `named` "begin k loop"
-        -- An `alloca` moves the stack pointer every time it *executes*, not
-        -- once per occurrence in the code. The accumulators below, and every
-        -- `alloca` the compiled viewer body emits inside `subsampleLoop`, run
-        -- once per pixel; without an explicit reclaim they would accumulate for
-        -- the whole call, making native stack use grow linearly with the number
-        -- of pixels the kernel is asked to render rather than staying bounded
-        -- by what a single pixel needs.
+        -- To paraphrase the LLVM reference, `stacksave` only stores a pointer
+        -- to the current stack position, and the `stackrestore` later only
+        -- returns the stack to the saved position. It should be analogous to
+        -- an arena reset (so it should cost almost nothing).
         --
-        -- Save here and restore at the end of `exitSubsampleLoop`, the same
-        -- bracketing `DoWhile` uses for loop bodies. Loop counters, the
-        -- argument context and the prep/continuation pointers are allocated in
-        -- the entry block, below this saved pointer, so the restore does not
-        -- disturb them.
+        -- (https://releases.llvm.org/12.0.1/docs/LangRef.html#int-stacksave)
+        --
+        -- Not doing this would incur a memory cost proportional to the number
+        -- of pixels, which was enough to make the SaddleDrop script crash.
+        --
+        -- Loop counters, the argument context and the prep pointers are
+        -- allocated in the entry block, so the restore does not disturb them.
+        --
+        -- The less brittle alternative would be to hoist all allocations to
+        -- the entry block (since we know how many we need at compile time).
         pixelStack <- call (getExtern "stacksave") []
         accR <- alloca AST.i32 Nothing 0
         accG <- alloca AST.i32 Nothing 0
@@ -518,9 +520,8 @@ compileRenderer' prepOutputEnv name code = runExcept $
           pixelIndex <- load pixelIndexPtr 0
           pixelIndex' <- add pixelIndex (C.int32 1)
           store pixelIndexPtr 0 pixelIndex'
-        -- Release this pixel's stack (paired with the `stacksave` in
-        -- `pixelLoopX`). This has to come after the accumulators above have been
-        -- read and written out, since they live in the region being reclaimed.
+        -- Release this pixel's stack. This has to come after the accumulators
+        -- above have been read and written out (because they will be cleared).
         _ <- call (getExtern "stackrestore") [(pixelStack, [])]
         do -- x += dx
           tmp1 <- load xPtr 0
@@ -592,26 +593,10 @@ compileCode getExtern = indexedFold @(OperandPtrContext m) $ \case
     nextLabel <- block
     pure ()
 
-  -- `Let` (Code.hs's compilation of it, above) calls `allocaOp` at whatever
-  -- block is currently being built, not hoisted to the function's entry
-  -- block. That's fine for a `Let` outside any loop (it runs once), but a
-  -- `Let` inside a loop's body -- e.g. a `tmp`-style scratch variable
-  -- declared inside a `while` -- would otherwise `alloca` fresh stack space
-  -- on *every* pass through the loop, never reclaimed until the whole
-  -- function returns: native stack use then grows linearly with iteration
-  -- count even though the loop body's code is only emitted once. This was
-  -- the real cause of the SIGBUS native-stack-overflow crashes (see
-  -- agents/<branch>.md's "Native stack budget" note) -- bumping the stack
-  -- size only postponed the failure to a higher iteration count.
-  --
-  -- Fix: bracket each loop pass with `llvm.stacksave`/`llvm.stackrestore`,
-  -- the same intrinsics Clang emits around C99 VLA scopes for exactly this
-  -- reason. Save the stack pointer once before the loop starts; after each
-  -- iteration's body runs, restore it back to that saved value, discarding
-  -- whatever that pass allocated before the next pass begins. Loop-carried
-  -- state (`x`, `y`, `n`, ... declared via `Let` *outside* the loop and
-  -- mutated via `Set` inside it) is unaffected, since its `alloca` lives
-  -- below the saved pointer.
+  -- `Let` does not hoist `allocaOp` outside of loops, so a loop allocates
+  -- fresh stack space for a variable on every new iteration. We avoided stack
+  -- overflows so far, because the -O2 optimizations removed allocations in
+  -- simple enough scripts.
   DoWhile cond body -> mdo
     stackPtr <- call (getExtern "stacksave") []
     br loop
