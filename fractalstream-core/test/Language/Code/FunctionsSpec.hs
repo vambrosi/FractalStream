@@ -11,6 +11,7 @@ import Language.Value.Typecheck
 import Language.Code.Parser
 import Language.Code.Simulator
 import Language.Draw
+import Language.Parser.SourceRange
 
 import Text.RawString.QQ
 
@@ -291,3 +292,34 @@ define bad(t):
 x <- bad(x)
 |]
       runDefine (Scalar IntegerType 0) p `shouldSatisfy` isLeft
+
+  describe "error locations inside function bodies" $ do
+
+    let errorRow :: String -> Maybe Int
+        errorRow input =
+          let env = BindingProxy (Proxy @"x") IntegerType
+                  $ BindingProxy (Proxy @InternalIterations) IntegerType
+                  $ BindingProxy (Proxy @InternalIterationLimit) IntegerType
+                  $ BindingProxy (Proxy @InternalStuck) BooleanType
+                  $ EmptyEnvProxy
+          in case parseCode env noSplices input of
+               Left e | SourceRange (Pos row _) _ <- errorLocation e -> Just row
+               _ -> Nothing
+
+    it "reports an error in a one-line body on its own line" $ do
+      let p = [r|
+define g(t):
+    result <- t + true
+x <- g(x)
+|]
+      errorRow p `shouldBe` Just 2
+
+    it "reports an error in a compound body on its own line" $ do
+      let p = [r|
+define f(a):
+    u : Z <- a + 1
+    result <- u + true
+x <- f(x)
+|]
+      errorRow p `shouldBe` Just 3
+

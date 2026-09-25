@@ -20,7 +20,7 @@ import Language.Value.Parser
 import Language.Value.Typecheck (FunctionContext(..), FunctionInfo(..), noFunctions, reservedIdentifiers)
 import Language.Code
 import Language.Parser.Tokenizer
-import Language.Parser.SourceRange (SourceRange(..))
+import Language.Parser.SourceRange (SourceRange(..), Pos(..))
 import Language.Code.Typecheck
 import Language.Code.Dual (tcSolveCompound, tcCriticalCompound)
 
@@ -290,20 +290,22 @@ type Snapshot = (String, String, SomeType)
 -- define is paired with snapshots of the top-level variables (`name : type <-`)
 -- in scope at that point; the snapshots' capturing @Let@s are spliced into the
 -- main source at the define's position (so they run before any later mutation).
-splitDefines :: String -> ([(String, [Snapshot])], String)
-splitDefines input = go (0 :: Int) [] [] [] (lines input)
+-- Each define also carries the (0-based) row of its header line, so positions
+-- inside its body can be reported relative to the whole script.
+splitDefines :: String -> ([(Int, String, [Snapshot])], String)
+splitDefines input = go (0 :: Int) [] [] [] (zip [0 ..] (lines input))
   where
     go _ _     defs mainLs [] = (reverse defs, unlines (reverse mainLs))
-    go i decls defs mainLs (l : ls)
+    go i decls defs mainLs ((row, l) : ls)
       | isTopLevelDefine l =
-          let (body, rest) = span isBodyLine ls
+          let (body, rest) = span (isBodyLine . snd) ls
               mk (dn, tystr, sty) =
                 let sn = "fsSnap_" ++ show i ++ "_" ++ dn
                 in ((dn, sn, sty), sn ++ " : " ++ tystr ++ " <- " ++ dn)
               (snaps, snapLines) = unzip (map mk (reverse decls))
               -- Pad with blank lines so line numbers stay aligned.
               block = snapLines ++ replicate (1 + length body - length snapLines) ""
-          in go (i + 1) decls ((unlines (l : body), snaps) : defs)
+          in go (i + 1) decls ((row, unlines (l : map snd body), snaps) : defs)
                 (reverse block ++ mainLs) rest
       | otherwise =
           let decls' = case (startsWithSpace l, parseTopLevelDecl l) of
@@ -357,13 +359,13 @@ buildFunctionContext
   :: forall env
    . EnvironmentProxy env
   -> ValueSplices
-  -> [(String, [Snapshot])]
+  -> [(Int, String, [Snapshot])]
   -> Either (Either ParseError TCError) (FunctionContext, Map String CompoundFunction)
 buildFunctionContext env vsplices = go Map.empty Map.empty
   where
     go exprAcc compAcc [] = Right (FunctionContext env exprAcc, compAcc)
-    go exprAcc compAcc ((blk, snaps) : rest) = do
-      result <- parseOneDefine env vsplices exprAcc compAcc snaps blk
+    go exprAcc compAcc ((row, blk, snaps) : rest) = do
+      result <- parseOneDefine env vsplices exprAcc compAcc snaps row blk
       let nm = either fiName cfName result
       when (Map.member nm exprAcc || Map.member nm compAcc) $
         defError ("The function `" ++ nm ++ "` is already defined.")
@@ -386,15 +388,20 @@ parseOneDefine
   -> Map String FunctionInfo
   -> Map String CompoundFunction
   -> [Snapshot]
+  -> Int
   -> String
   -> Either (Either ParseError TCError) (Either FunctionInfo CompoundFunction)
-parseOneDefine env vsplices exprFuncs compFuncs snaps blk = case lines blk of
+parseOneDefine env vsplices exprFuncs compFuncs snaps headerRow blk = case lines blk of
   [] -> Left (Left defineParseError)
   (headerLine : rawBodyLines) -> do
     (name, params) <- first Left (parseDefineHeader headerLine)
     checkReserved "a function name" name
     mapM_ (checkReserved "a parameter name" . fst) params
-    let bodyLines  = dedent rawBodyLines
+    let indent     = commonIndent rawBodyLines
+        bodyLines  = map (drop indent) rawBodyLines
+        -- Body tokens are produced from the dedented body alone; shift them
+        -- back to their position in the whole script.
+        bodyRow    = headerRow + 1
         freshes    = [ freshArgName name i | i <- [0 .. length params - 1] ]
         paramMap   = Map.fromList (zip (map fst params) freshes)
         -- Rename references to top-level variables to their definition-site
@@ -403,11 +410,11 @@ parseOneDefine env vsplices exprFuncs compFuncs snaps blk = case lines blk of
         defSiteEnv = extendEnv env [ (sn, sty) | (_, sn, sty) <- snaps ]
         renameVars = paramMap `Map.union` snapRename
         compNames  = Map.keysSet compFuncs
-        nonBlank   = filter (not . null . trim) bodyLines
+        nonBlank   = [ (k, l) | (k, l) <- zip [0 ..] bodyLines, not (null (trim l)) ]
     case nonBlank of
-      [_single] -> do
+      [(k, single)] -> do
         body <- first Left (parseDefineBody env exprFuncs compNames vsplices name renameVars
-                                (unlines bodyLines))
+                                (shiftTokens (bodyRow + k) indent (tokenize single)))
         Right (Left FunctionInfo { fiName        = name
                                  , fiParams      = params
                                  , fiFreshParams = freshes
@@ -419,7 +426,8 @@ parseOneDefine env vsplices exprFuncs compFuncs snaps blk = case lines blk of
                        . Map.insert "result" resultName
                        $ renameVars
         body <- first Left (parseCompoundBody env vsplices exprFuncs compFuncs renameMap
-                                  (unlines bodyLines))
+                                  (shiftTokens bodyRow indent
+                                     (tokenizeWithIndentation (unlines bodyLines))))
         Right (Right CompoundFunction { cfName        = name
                                       , cfParams      = params
                                       , cfFreshParams = freshes
@@ -442,13 +450,13 @@ parseCompoundBody
   -> Map String FunctionInfo
   -> Map String CompoundFunction
   -> Map String String
-  -> String
+  -> [SRToken]
   -> Either ParseError ParsedCode
-parseCompoundBody env vsplices exprFuncs compFuncs renameMap bodySrc =
+parseCompoundBody env vsplices exprFuncs compFuncs renameMap bodyToks =
   let splices = noSplices { valueSplices    = vsplices
                           , functionContext = FunctionContext env exprFuncs
                           , codeFunctions   = compFuncs }
-      toks = renameTokens renameMap (tokenizeWithIndentation bodySrc)
+      toks = renameTokens renameMap bodyToks
   in parse (codeGrammar splices) toks
 
 freshResultName :: String -> String
@@ -491,10 +499,10 @@ parseDefineBody
   -> ValueSplices
   -> String
   -> Map String String
-  -> String
+  -> [SRToken]
   -> Either ParseError ParsedValue
-parseDefineBody env funcs compNames vsplices fnName renameMap bodySrc =
-  case break ((== LeftArrow) . baseToken) (tokenize bodySrc) of
+parseDefineBody env funcs compNames vsplices fnName renameMap bodyToks =
+  case break ((== LeftArrow) . baseToken) bodyToks of
     (lhs, _arrow : rhs) -> case map baseToken lhs of
       [Identifier slot]
         | slot == fnName || slot == "result" ->
@@ -520,13 +528,23 @@ defineParseError = NoParse Nothing
 trim :: String -> String
 trim = dropWhile isSpace . reverse . dropWhile isSpace . reverse
 
--- | Remove the common leading-space indentation from a block of lines, so an
--- indented function body can be re-tokenized as a top-level block.
-dedent :: [String] -> [String]
-dedent ls = case map indentOf (filter (not . null . trim) ls) of
-  []      -> ls
-  indents -> map (drop (minimum indents)) ls
+-- | The common leading-space indentation of a block of lines (ignoring blank
+-- lines). Stripping it lets an indented function body be tokenized as a
+-- top-level block.
+commonIndent :: [String] -> Int
+commonIndent ls = case map indentOf (filter (not . null . trim) ls) of
+  []      -> 0
+  indents -> minimum indents
   where indentOf = length . takeWhile (== ' ')
+
+-- | Move tokens by a number of rows and columns.
+shiftTokens :: Int -> Int -> [SRToken] -> [SRToken]
+shiftTokens dr dc = map shift
+  where
+    shift t = t { tokenSourceRange = case tokenSourceRange t of
+                    NoSourceRange   -> NoSourceRange
+                    SourceRange a b -> SourceRange (move a) (move b) }
+    move (Pos r c) = Pos (r + dr) (c + dc)
 
 splitOn :: Char -> String -> [String]
 splitOn c s = case break (== c) s of
