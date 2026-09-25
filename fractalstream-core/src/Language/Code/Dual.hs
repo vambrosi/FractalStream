@@ -143,7 +143,7 @@ extractIfNontrivial sr blame gen env tracked ty v k = case v of
   Var{}   -> k env tracked v
   Const{} -> k env tracked v
   _ -> withEnvironment env $ do
-    let tmpName = "[internal] shared #" ++ show (length $ fromEnvironment env (\_ _ -> ()))
+    let tmpName = "[internal] shared " ++ gen ++ " #" ++ show (length $ fromEnvironment env (\_ _ -> ()))
     dv <- dValue blame tracked sr v
     letBind sr tmpName ty v env $ \env1 ->
       letBind sr (freshShadowName gen tmpName) ty (reindexValue env1 dv) env1 $ \env2 ->
@@ -163,7 +163,7 @@ extractIfNontrivialWirtinger sr blame gen env tracked ty v k = case v of
   Var{}   -> k env tracked v
   Const{} -> k env tracked v
   _ -> withEnvironment env $ do
-    let tmpName = "[internal] shared #" ++ show (length $ fromEnvironment env (\_ _ -> ()))
+    let tmpName = "[internal] shared " ++ gen ++ " #" ++ show (length $ fromEnvironment env (\_ _ -> ()))
     dv <- dValueWirtinger blame tracked sr v
     letBind sr tmpName ty v env $ \env1 ->
       letBind sr (freshShadowName gen tmpName) ComplexType (reindexValue env1 dv) env1 $ \env2 ->
