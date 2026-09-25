@@ -323,3 +323,44 @@ x <- f(x)
 |]
       errorRow p `shouldBe` Just 3
 
+    it "reports an empty parameter on the define line" $ do
+      let p = [r|
+define f(, t):
+    result <- t
+x <- f(x)
+|]
+      errorRow p `shouldBe` Just 1
+
+    it "requires a colon at the end of the define line" $ do
+      let p = [r|
+define f(t)
+    result <- t
+x <- f(x)
+|]
+      errorRow p `shouldBe` Just 1
+
+    it "rejects trailing text on the define line" $ do
+      let p = [r|
+define f(t): junk
+    result <- t
+x <- f(x)
+|]
+      errorRow p `shouldBe` Just 1
+
+    it "rejects a repeated parameter name" $ do
+      let p = [r|
+define f(t, t):
+    result <- t
+x <- f(x, x)
+|]
+      errorRow p `shouldBe` Just 1
+
+  describe "define headers" $ do
+
+    it "accepts typed parameters" $ do
+      let p = [r|
+define f(t : Z, u):
+    result <- t + u
+x <- f(x, 2)
+|]
+      runDefine (Scalar IntegerType 3) p `shouldBe` Right 5

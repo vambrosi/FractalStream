@@ -25,7 +25,6 @@ import Language.Code.Typecheck
 import Language.Code.Dual (tcSolveCompound, tcCriticalCompound)
 
 import Data.Char (isSpace)
-import Data.List (stripPrefix)
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 
@@ -366,16 +365,13 @@ buildFunctionContext env vsplices = go Map.empty Map.empty
     go exprAcc compAcc [] = Right (FunctionContext env exprAcc, compAcc)
     go exprAcc compAcc ((row, blk, snaps) : rest) = do
       result <- parseOneDefine env vsplices exprAcc compAcc snaps row blk
-      let nm = either fiName cfName result
-      when (Map.member nm exprAcc || Map.member nm compAcc) $
-        defError ("The function `" ++ nm ++ "` is already defined.")
       case result of
         Left  fi -> go (Map.insert (fiName fi) fi exprAcc) compAcc rest
         Right cf -> go exprAcc (Map.insert (cfName cf) cf compAcc) rest
 
 -- | A semantic (non-parse) error raised while resolving a definition.
-defError :: String -> Either (Either ParseError TCError) a
-defError msg = Left (Right (Advice NoSourceRange msg))
+defError :: SourceRange -> String -> Either (Either ParseError TCError) a
+defError sr msg = Left (Right (Advice sr msg))
 
 -- | Parse a single define block. A body that is a single @slot <- expression@
 -- becomes an expression-reducible 'FunctionInfo'; any other (multi-statement)
@@ -394,9 +390,18 @@ parseOneDefine
 parseOneDefine env vsplices exprFuncs compFuncs snaps headerRow blk = case lines blk of
   [] -> Left (Left defineParseError)
   (headerLine : rawBodyLines) -> do
-    (name, params) <- first Left (parseDefineHeader headerLine)
-    checkReserved "a function name" name
-    mapM_ (checkReserved "a parameter name" . fst) params
+    let headerToks  = shiftTokens headerRow 0 (tokenize headerLine)
+        headerRange = foldMap tokenSourceRange headerToks
+        defErr      = defError headerRange
+    (name, params) <- first Left (parse defineHeaderGrammar headerToks)
+    when (Map.member name exprFuncs || Map.member name compFuncs) $
+      defErr ("The function `" ++ name ++ "` is already defined.")
+    checkReserved defErr "a function name" name
+    mapM_ (checkReserved defErr "a parameter name" . fst) params
+    let counts = Map.fromListWith (+) [ (p, 1 :: Int) | (p, _) <- params ]
+    case Map.keys (Map.filter (> 1) counts) of
+      (dup : _) -> defErr ("The parameter `" ++ dup ++ "` appears more than once.")
+      []        -> pure ()
     let indent     = commonIndent rawBodyLines
         bodyLines  = map (drop indent) rawBodyLines
         -- Body tokens are produced from the dedented body alone; shift them
@@ -434,10 +439,10 @@ parseOneDefine env vsplices exprFuncs compFuncs snaps headerRow blk = case lines
                                       , cfResultName  = resultName
                                       , cfBody        = body })
   where
-    checkReserved role n
+    checkReserved defErr role n
       | n `Set.member` reservedIdentifiers =
-          defError ("`" ++ n ++ "` is a reserved word and can't be used as "
-                    ++ role ++ ".")
+          defErr ("`" ++ n ++ "` is a reserved word and can't be used as "
+                  ++ role ++ ".")
       | otherwise = Right ()
 
 -- | Parse a compound (multi-statement) function body as a code block, with
@@ -462,30 +467,17 @@ parseCompoundBody env vsplices exprFuncs compFuncs renameMap bodyToks =
 freshResultName :: String -> String
 freshResultName fn = "[fn-res " ++ fn ++ "]"
 
--- | Parse a define header of the form @define name(p1, p2 : T, ...)@.
-parseDefineHeader :: String -> Either ParseError (String, [(String, Maybe SomeType)])
-parseDefineHeader line0 =
-  case stripPrefix "define" (trim line0) of
-    Nothing -> Left defineParseError
-    Just afterDefine -> case break (== '(') (trim afterDefine) of
-      (namePart, '(' : rest) -> case break (== ')') rest of
-        (paramsPart, ')' : _) -> do
-          params <- parseParams paramsPart
-          Right (trim namePart, params)
-        _ -> Left defineParseError
-      _ -> Left defineParseError
-
-parseParams :: String -> Either ParseError [(String, Maybe SomeType)]
-parseParams s
-  | null (trim s) = Right []
-  | otherwise     = traverse parseParam (splitOn ',' s)
-
-parseParam :: String -> Either ParseError (String, Maybe SomeType)
-parseParam s = case break (== ':') s of
-  (nm, ':' : tyStr) -> do
-    ty <- parseType tyStr
-    Right (trim nm, Just ty)
-  (nm, _) -> Right (trim nm, Nothing)
+-- | Grammar for a define header, @define name(p1, p2 : T, ...):@. Each
+-- parameter may carry a type annotation.
+defineHeaderGrammar :: forall r. Grammar r (Prod r (String, [(String, Maybe SomeType)]))
+defineHeaderGrammar = do
+  typ <- typeGrammar
+  param <- rule ((,) <$> ident
+                     <*> optional (token Colon *> fmap (`withType` SomeType) typ))
+  params <- rule (((:) <$> param <*> many (token Comma *> param)) <|> pure [])
+  rule (((,) <$> (tok "define" *> ident)
+             <*> (token OpenParen *> params <* token CloseParen <* token Colon))
+        <?> "a function definition like `define f(x):`")
 
 -- | Parse the body of a define (a single @slot <- expression@). Parameter
 -- references are renamed to fresh, collision-proof internal names at the token
@@ -546,7 +538,3 @@ shiftTokens dr dc = map shift
                     SourceRange a b -> SourceRange (move a) (move b) }
     move (Pos r c) = Pos (r + dr) (c + dc)
 
-splitOn :: Char -> String -> [String]
-splitOn c s = case break (== c) s of
-  (a, _ : rest) -> a : splitOn c rest
-  (a, [])       -> [a]
