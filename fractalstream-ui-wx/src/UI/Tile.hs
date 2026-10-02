@@ -42,22 +42,16 @@ data Tile = Tile
       -- ^ The worker thread which is drawing this tile.
     , shouldRedrawTile :: MVar ()
       -- ^ A value which signals that the tile needs to be redrawn.
-    , tileCancelled    :: MVar ()
-      -- ^ Filled by the first 'cancelTileSync', making later calls no-ops
-      --   (a tile can be cancelled both on window close and at shutdown).
     }
 
--- | Cancel the tile, but don't wait for it to finish.
+-- | Cancel the tile, but don't wait for it to finish
 cancelTile :: Tile -> IO ()
-cancelTile = void . forkIO . cancelTileSync
+cancelTile = void . forkIO . cancel . tileWorker
 
 -- | Cancel the tile and wait until the worker has stopped, e.g. before the
 -- compiled kernel is unmapped. Safe to call more than once.
 cancelTileSync :: Tile -> IO ()
-cancelTileSync tile = do
-  firstTime <- tryPutMVar (tileCancelled tile) ()
-  when firstTime $ do
-    cancel (tileWorker tile)
+cancelTileSync = cancel . tileWorker
 
 withSynchedTileBuffer :: Tile -> (Ptr Word8 -> IO b) -> IO b
 withSynchedTileBuffer tile action = synchedWith (tileBuffer tile) (`withForeignPtr` action)
@@ -127,11 +121,8 @@ renderTile smooth renderingAction (width, height) mRect = do
                             }
     link worker
 
-    cancelled <- newEmptyMVar
-
     return Tile { imageRect = iRect
                 , tileBuffer = managedBuf
                 , tileWorker = worker
                 , shouldRedrawTile = redraw
-                , tileCancelled = cancelled
                 }
