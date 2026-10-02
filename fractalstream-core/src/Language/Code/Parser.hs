@@ -304,7 +304,7 @@ splitDefines input = go (0 :: Int) [] [] [] (zip [0 ..] (lines input))
       | isTopLevelDefine l =
           let (body, rest) = span (isBodyLine . snd) ls
               mk (dn, tystr, sty) =
-                let sn = "fsSnap_" ++ show i ++ "_" ++ dn
+                let sn = snapshotName i dn
                 in ((dn, sn, sty), (row, sn ++ " : " ++ tystr ++ " <- " ++ dn))
               (snaps, snapLines) = unzip (map mk (reverse decls))
           in go (i + 1) decls ((row, unlines (l : map snd body), snaps) : defs)

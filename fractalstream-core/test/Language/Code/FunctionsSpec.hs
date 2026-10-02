@@ -14,6 +14,7 @@ import Language.Draw
 import Language.Parser.SourceRange
 
 import Text.RawString.QQ
+import Data.List (isInfixOf)
 
 -- | Run a script with a single variable @x@ in scope; return the final @x@.
 runDefine :: forall xt
@@ -195,6 +196,17 @@ x <- twiceInc(x)
       runDefine (Scalar IntegerType 5) p `shouldBe` Right 7
 
   describe "compound function bodies (statement position)" $ do
+
+    it "names the top-level variable a body may not modify" $ do
+      let p = [r|
+a : Z <- 1
+define f(t):
+    a <- t
+    result <- t
+x <- f(x)
+|]
+      runDefine (Scalar IntegerType 0) p
+        `shouldSatisfy` either ("may not modify `a`" `isInfixOf`) (const False)
 
     it "splices a body with local variables" $ do
       let p = [r|

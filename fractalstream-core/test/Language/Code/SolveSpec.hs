@@ -155,6 +155,18 @@ spec = do
       -- Two Newton steps from 1 do not reach the default 1e-10 tolerance.
       stuckOf (runR 1 2 2 "solve x -> x^2 - a up to 2 times") `shouldBe` Right True
 
+    it "allows `solve` inside a compound function body" $ do
+      let p = [r|
+define g(t):
+    w : R <- t
+    solve w -> w^2 - a
+    result <- re solution
+x <- g(x)
+|]
+      case runR 1 2 100 p of
+        Left e             -> expectationFailure e
+        Right (_, x, _, _) -> abs (x - sqrt 2) `shouldSatisfy` (< 1e-7)
+
     it "solves through a compound function using |.| and if/then/else" $ do
       let p = [r|
 define f(t):

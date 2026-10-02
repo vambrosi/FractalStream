@@ -15,6 +15,7 @@ import Language.Value.Derivative (derivative)
 import Data.Color (black)
 import Data.Indexed.Functor (indexedFoldM)
 import qualified Data.Set as Set
+import Data.List (stripPrefix)
 
 ------------------------------------------------------
 -- Parsed code
@@ -392,19 +393,36 @@ tcSetCompound targetName cf args sr env = do
                   resPf <- findVarAtType sr res rty envR
                   pure (Block [ body, Set tgtPf target (Var res rty resPf) ])
 
--- | A compound body may assign only its result slot, parameters, locals and
--- bracketed internal names (e.g. loop counters).
+-- | A compound body may assign only its result slot, parameters, locals, and
+-- the outputs of its own loops and Newton statements (@iterations@,
+-- @stuck@, @solution@).
 checkPure :: CompoundFunction -> SourceRange -> Code env -> TC ()
 checkPure cf sr body =
   case Set.toList illegal of
     []        -> pure ()
     (bad : _) -> throwError (Advice sr
-      ("A function body may not modify `" ++ bad ++ "`; functions must be pure."))
+      ("A function body may not modify `" ++ originalName bad ++ "`; functions must be pure."))
   where
     (setVars, letVars) = fnBodyVars body
+    -- Loops and Newton statements in the body also set these outputs.
+    outputs = Set.fromList [ symbolVal (Proxy @InternalIterations)
+                           , symbolVal (Proxy @InternalStuck)
+                           , symbolVal (Proxy @InternalSolution) ]
     allowed = Set.insert (cfResultName cf)
-            $ Set.union (Set.fromList (cfFreshParams cf)) letVars
-    illegal = Set.filter (\n -> take 1 n /= "[") (setVars `Set.difference` allowed)
+            . Set.union outputs
+            . Set.union (Set.fromList (cfFreshParams cf))
+            $ letVars
+    illegal = setVars `Set.difference` allowed
+
+-- | The snapshot of top-level variable @name@ for the @i@-th define.
+snapshotName :: Int -> String -> String
+snapshotName i name = "fsSnap_" ++ show i ++ "_" ++ name
+
+-- | The variable a name refers to in the script (undoes 'snapshotName').
+originalName :: String -> String
+originalName n = case stripPrefix "fsSnap_" n of
+  Just rest -> drop 1 (dropWhile (/= '_') rest)
+  Nothing   -> n
 
 -- | Collect the names a code block assigns to (via @Set@) and the names it
 -- declares locally (via @Let@), at any depth.
