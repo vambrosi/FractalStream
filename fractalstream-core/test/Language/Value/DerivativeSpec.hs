@@ -65,11 +65,13 @@ spec = do
         ,""
         ,"I expected a real number here, but the result of a comparison is a truth value."])
 
+    it "differentiates |x| for real x" $
+      parseR (-2) "diff(x, |x|)" `shouldBe` Right (-1)
+
     it "throws errors when trying to differentiate non-differentiable functions" $ do
-      -- `|x|` for real x is unsupported.
-      parseR 0 "diff(x, |x|)" `shouldBe` Left (unlines
-        ["  diff(x, |x|)"
-        ,"          ^^^"
+      parseR 0 "diff(x, mod(x, 2))" `shouldBe` Left (unlines
+        ["  diff(x, mod(x, 2))"
+        ,"          ^^^^^^^^^"
         ,""
         ,"The derivative of this function with respect to x is not implemented."])
 

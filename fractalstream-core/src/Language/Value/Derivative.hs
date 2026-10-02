@@ -58,6 +58,7 @@ derivativeWith blameName shadowOf sr2 = indexedFoldWithOriginalM derivativeRules
         ComplexType -> pure 0
         RealType    -> pure 0
         IntegerType -> pure 0
+        BooleanType -> pure false
         _           -> throwError $ DiffNotImplemented sr2 blameName
 
       -- | A free variable is differentiated via the caller-supplied shadow,
@@ -67,6 +68,8 @@ derivativeWith blameName shadowOf sr2 = indexedFoldWithOriginalM derivativeRules
         Nothing -> case ty of
           ComplexType -> pure $ Const $ Scalar ComplexType 0
           RealType    -> pure $ Const $ Scalar RealType 0
+          IntegerType -> pure 0
+          BooleanType -> pure false
           _           -> throwError $ DiffNotImplemented sr2 blameName
 
       -- | Basic algebra
@@ -125,7 +128,42 @@ derivativeWith blameName shadowOf sr2 = indexedFoldWithOriginalM derivativeRules
       R2C  (_, dx) -> pure $ R2C dx
       C2R2 (_, dx) -> pure $ C2R2 dx
 
+      -- | Real absolute value (d|x|/dx = x/|x|).
+      AbsF (x, dx) -> pure $ x / AbsF x * dx
+
+      -- | Branches. (Differentiate each side and keep the condition; the
+      -- boundary between branches is ignored.)
+      ITE ty (c, _) (_, dyes) (_, dno) -> pure $ ITE ty c dyes dno
+
+      -- | Booleans aren't differentiated. (The fold still visits them, e.g.
+      -- the condition of an `if`, so they get a placeholder that is never
+      -- used.)
+      Or{}  -> pure false
+      And{} -> pure false
+      Not{} -> pure false
+      Eql{} -> pure false
+      NEq{} -> pure false
+      LTI{} -> pure false
+      LTF{} -> pure false
+
+      -- | Integers (locally constant, so 0).
+      RoundF{}   -> pure 0
+      FloorF{}   -> pure 0
+      CeilingF{} -> pure 0
+      AddI{}     -> pure 0
+      SubI{}     -> pure 0
+      MulI{}     -> pure 0
+      DivI{}     -> pure 0
+      ModI{}     -> pure 0
+      PowI{}     -> pure 0
+      AbsI{}     -> pure 0
+      NegI{}     -> pure 0
+      Length{}   -> pure 0
+
       _ -> throwError $ DiffNotImplemented sr2 blameName
+
+    false :: forall env. KnownEnvironment env => Value '(env, 'BooleanT)
+    false = Const (Scalar BooleanType False)
 
 -- | The Wirtinger derivative @∂F/∂z@ for complex @z@. The result and all
 -- shadows are complex, whatever their own types.

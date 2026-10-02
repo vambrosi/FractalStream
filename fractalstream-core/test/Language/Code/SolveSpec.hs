@@ -155,6 +155,15 @@ spec = do
       -- Two Newton steps from 1 do not reach the default 1e-10 tolerance.
       stuckOf (runR 1 2 2 "solve x -> x^2 - a up to 2 times") `shouldBe` Right True
 
+    it "solves through a compound function using |.| and if/then/else" $ do
+      let p = [r|
+define f(t):
+    s : R <- |t| * t
+    result <- if s > 0 then s - a else s - a
+solve x -> f(x)
+|]
+      runR 1 2 100 p `shouldConvergeToR` sqrt 2
+
   -- Preimage desugars to solve of F - v.
   describe "preimage" $ do
 
