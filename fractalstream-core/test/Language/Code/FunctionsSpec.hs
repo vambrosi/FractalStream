@@ -332,6 +332,17 @@ x <- f(x)
 |]
       errorRow p `shouldBe` Just 1
 
+    it "reports positions after a define preceded by many declarations" $ do
+      let p = [r|
+a : Z <- 1
+b : Z <- 2
+c : Z <- 3
+define f(t):
+    result <- t
+x <- f(a) + true
+|]
+      errorRow p `shouldBe` Just 6
+
     it "rejects a repeated parameter name" $ do
       let p = [r|
 define f(t, t):

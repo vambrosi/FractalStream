@@ -48,10 +48,14 @@ parseCode :: forall env
           -> String
           -> Either (Either ParseError TCError) (Code env)
 parseCode env splices input = do
-  let (defs, mainSrc) = splitDefines input
+  let (defs, mainLines) = splitDefines input
+      scriptRow = Map.fromList (zip [0 ..] (map fst mainLines))
+      toks = mapPositions (\(Pos r c) -> Pos (Map.findWithDefault r r scriptRow) c)
+                          (tokenizeWithIndentation (unlines (map snd mainLines)))
   (fctx, cfs) <- buildFunctionContext env (valueSplices splices) defs
-  ParsedCode c <- parseParsedCode (splices { functionContext = fctx
-                                           , codeFunctions = cfs }) mainSrc
+  ParsedCode c <- first Left (parse (codeGrammar splices { functionContext = fctx
+                                                         , codeFunctions = cfs })
+                                    toks)
   case c env of TC x -> first Right x
 
 parseParsedCode :: Splices -> String -> Either (Either ParseError TCError) ParsedCode
@@ -290,26 +294,26 @@ type Snapshot = (String, String, SomeType)
 --   snapshots of the top-level variables declared before it.
 -- * In the main source, the block is replaced by the snapshots' @Let@s, so
 --   they run before any later mutation.
-splitDefines :: String -> ([(Int, String, [Snapshot])], String)
+-- * Each main-source line carries its row in the script (the define's row,
+--   for snapshot lines).
+splitDefines :: String -> ([(Int, String, [Snapshot])], [(Int, String)])
 splitDefines input = go (0 :: Int) [] [] [] (zip [0 ..] (lines input))
   where
-    go _ _     defs mainLs [] = (reverse defs, unlines (reverse mainLs))
+    go _ _     defs mainLs [] = (reverse defs, reverse mainLs)
     go i decls defs mainLs ((row, l) : ls)
       | isTopLevelDefine l =
           let (body, rest) = span (isBodyLine . snd) ls
               mk (dn, tystr, sty) =
                 let sn = "fsSnap_" ++ show i ++ "_" ++ dn
-                in ((dn, sn, sty), sn ++ " : " ++ tystr ++ " <- " ++ dn)
+                in ((dn, sn, sty), (row, sn ++ " : " ++ tystr ++ " <- " ++ dn))
               (snaps, snapLines) = unzip (map mk (reverse decls))
-              -- Pad with blank lines so line numbers stay aligned.
-              block = snapLines ++ replicate (1 + length body - length snapLines) ""
           in go (i + 1) decls ((row, unlines (l : map snd body), snaps) : defs)
-                (reverse block ++ mainLs) rest
+                (reverse snapLines ++ mainLs) rest
       | otherwise =
           let decls' = case (startsWithSpace l, parseTopLevelDecl l) of
                          (False, Just d) -> d : decls
                          _               -> decls
-          in go i decls' defs (l : mainLs) ls
+          in go i decls' defs ((row, l) : mainLs) ls
 
     isTopLevelDefine l = case words l of
       ("define" : _) -> not (startsWithSpace l)
@@ -529,10 +533,10 @@ commonIndent ls = case map indentOf (filter (not . null . trim) ls) of
 
 -- | Move tokens by a number of rows and columns.
 shiftTokens :: Int -> Int -> [SRToken] -> [SRToken]
-shiftTokens dr dc = map shift
-  where
-    shift t = t { tokenSourceRange = case tokenSourceRange t of
-                    NoSourceRange   -> NoSourceRange
-                    SourceRange a b -> SourceRange (move a) (move b) }
-    move (Pos r c) = Pos (r + dr) (c + dc)
+shiftTokens dr dc = mapPositions (\(Pos r c) -> Pos (r + dr) (c + dc))
+
+mapPositions :: (Pos -> Pos) -> [SRToken] -> [SRToken]
+mapPositions f = map $ \t -> t { tokenSourceRange = case tokenSourceRange t of
+  NoSourceRange   -> NoSourceRange
+  SourceRange a b -> SourceRange (f a) (f b) }
 
