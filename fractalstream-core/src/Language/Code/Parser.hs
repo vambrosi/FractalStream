@@ -428,7 +428,8 @@ parseOneDefine env vsplices exprFuncs compFuncs snaps headerRow blk = case lines
                                  , fiParams      = params
                                  , fiFreshParams = freshes
                                  , fiBody        = body
-                                 , fiDefEnv      = defSiteEnv })
+                                 , fiDefEnv      = defSiteEnv
+                                 , fiDefRow      = headerRow })
       _ -> do
         let resultName = freshResultName name
             renameMap  = Map.insert name resultName
@@ -441,7 +442,8 @@ parseOneDefine env vsplices exprFuncs compFuncs snaps headerRow blk = case lines
                                       , cfParams      = params
                                       , cfFreshParams = freshes
                                       , cfResultName  = resultName
-                                      , cfBody        = body })
+                                      , cfBody        = body
+                                      , cfDefRow      = headerRow })
   where
     checkReserved defErr role n
       | n `Set.member` reservedIdentifiers =

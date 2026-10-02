@@ -343,6 +343,15 @@ x <- f(a) + true
 |]
       errorRow p `shouldBe` Just 6
 
+    it "reports a call before the function's definition" $ do
+      let p = [r|
+a : Z <- 7
+x <- addA(x)
+define addA(t):
+    result <- t + a
+|]
+      errorRow p `shouldBe` Just 2
+
     it "rejects a repeated parameter name" $ do
       let p = [r|
 define f(t, t):

@@ -9,7 +9,7 @@ import Language.Value.Parser
 import Language.Code
 import Language.Draw
 import Language.Parser.SourceRange
-import Language.Value.Typecheck (tcVar, internalIterationLimit, InternalIterations, InternalStuck, InternalSolution)
+import Language.Value.Typecheck (tcVar, checkCall, internalIterationLimit, InternalIterations, InternalStuck, InternalSolution)
 import Language.Value.Derivative (derivative)
 
 import Data.Color (black)
@@ -366,6 +366,7 @@ data CompoundFunction = CompoundFunction
   , cfFreshParams :: [String]
   , cfResultName  :: String     -- ^ fresh name the result slot was renamed to
   , cfBody        :: ParsedCode
+  , cfDefRow      :: Int        -- ^ the row of the @define@ line
   }
 
 -- | @target <- f(args)@ for a compound @f@ becomes:
@@ -374,12 +375,9 @@ data CompoundFunction = CompoundFunction
 -- * a @Let@ for the result slot, with a default value;
 -- * the body, then @target <- result@.
 tcSetCompound :: String -> CompoundFunction -> [ParsedValue] -> CheckedCode
-tcSetCompound targetName cf args sr env
-  | length args /= length (cfParams cf) =
-      throwError (Advice sr ("The function " ++ cfName cf ++ " expects "
-        ++ show (length (cfParams cf)) ++ " argument(s), but "
-        ++ show (length args) ++ " were given."))
-  | otherwise = withEnvironment env $ case someSymbolVal targetName of
+tcSetCompound targetName cf args sr env = do
+  checkCall sr (cfName cf) (cfDefRow cf) (length (cfParams cf)) (length args)
+  withEnvironment env $ case someSymbolVal targetName of
       SomeSymbol target ->
         spliceArgs sr (zip3 (cfFreshParams cf) (map snd (cfParams cf)) args) env $ \envP -> do
           FoundVar rty _ <- findVar sr target envP

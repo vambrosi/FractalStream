@@ -694,6 +694,8 @@ data FunctionInfo = FunctionInfo
   , fiDefEnv      :: SomeEnvironment
     -- ^ The environment at the @define@. Free variables of the body resolve
     -- here, not at the call site.
+  , fiDefRow      :: Int
+    -- ^ The row of the @define@ line.
   }
 
 -- | The expression functions in scope, with the script's base environment.
@@ -724,15 +726,9 @@ tcApply _baseEnv fi args sr = go
     params  = fiParams fi
     freshes = fiFreshParams fi
 
-    arityMsg = "The function " ++ fiName fi ++ " expects "
-             ++ show (length params) ++ " argument(s), but "
-             ++ show (length args) ++ " were given."
-
     go :: forall env ty. (KnownEnvironment env, KnownType ty)
        => TypeProxy ty -> TC (Value '(env, ty))
-    go resultTy
-      | length args /= length params = throwError (Advice sr arityMsg)
-      | otherwise = do
+    go resultTy = checkCall sr (fiName fi) (fiDefRow fi) (length params) (length args) *> do
           -- The annotation pins the (otherwise ambiguous) environment.
           let typed :: forall t. KnownType t => ParsedValue -> TypeProxy t -> TC SomeType
               typed a t = (atType a t :: TC (Value '(env, t))) $> SomeType t
@@ -760,6 +756,17 @@ tcApply _baseEnv fi args sr = go
                 bodyVal <- withEnvironment defEnv (atType (fiBody fi) resultTy)
                              :: TC (Value '(defE, ty))
                 pure (reindexValueWith substMap (envProxy (Proxy @env)) bodyVal)
+
+-- | Check that a call to a user-defined function comes after its @define@
+-- (defined on row @defRow@), with the right number of arguments.
+checkCall :: SourceRange -> String -> Int -> Int -> Int -> TC ()
+checkCall sr name defRow nParams nArgs
+  | SourceRange (Pos row _) _ <- sr, row < defRow =
+      throwError (Advice sr ("The function `" ++ name ++ "` is used before its definition."))
+  | nArgs /= nParams =
+      throwError (Advice sr ("The function " ++ name ++ " expects "
+        ++ show nParams ++ " argument(s), but " ++ show nArgs ++ " were given."))
+  | otherwise = pure ()
 
 -- | The definition-site environment (the fresh parameters on top of the base
 -- environment). Fresh names are bracketed, so they are never already present.

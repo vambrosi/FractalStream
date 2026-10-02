@@ -25,7 +25,7 @@ module Language.Code.Dual
 import FractalStream.Prelude
 import Language.Value
 import Language.Value.Typecheck
-  ( ParsedValue(..), atType, tcVar, internalIterationLimit
+  ( ParsedValue(..), atType, tcVar, checkCall, internalIterationLimit
   , InternalIterations, InternalStuck, InternalSolution
   )
 import Language.Value.Derivative (derivativeWith, wirtingerWith)
@@ -434,12 +434,9 @@ spliceCompoundDual
   -> EnvironmentProxy env
   -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Value '(env', ty) -> Value '(env', ty) -> TC (Code env'))
   -> TC (Code env)
-spliceCompoundDual sr blame gen tracked0 cf args ty env k
-  | length args /= length (cfParams cf) =
-      throwError (Advice sr ("The function " ++ cfName cf ++ " expects "
-        ++ show (length (cfParams cf)) ++ " argument(s), but "
-        ++ show (length args) ++ " were given."))
-  | otherwise = withEnvironment env $
+spliceCompoundDual sr blame gen tracked0 cf args ty env k = do
+  checkCall sr (cfName cf) (cfDefRow cf) (length (cfParams cf)) (length args)
+  withEnvironment env $
       spliceArgsDual sr blame gen tracked0
         (zip3 (cfFreshParams cf) (map snd (cfParams cf)) args) env $ \envP tracked ->
         withKnownType ty $ do
@@ -500,12 +497,9 @@ spliceCompoundDualWirtinger
   -> EnvironmentProxy env
   -> (forall env'. KnownEnvironment env' => EnvironmentProxy env' -> Value '(env', ty) -> Value '(env', 'ComplexT) -> TC (Code env'))
   -> TC (Code env)
-spliceCompoundDualWirtinger sr blame gen tracked0 cf args ty env k
-  | length args /= length (cfParams cf) =
-      throwError (Advice sr ("The function " ++ cfName cf ++ " expects "
-        ++ show (length (cfParams cf)) ++ " argument(s), but "
-        ++ show (length args) ++ " were given."))
-  | otherwise = withEnvironment env $
+spliceCompoundDualWirtinger sr blame gen tracked0 cf args ty env k = do
+  checkCall sr (cfName cf) (cfDefRow cf) (length (cfParams cf)) (length args)
+  withEnvironment env $
       spliceArgsDualWirtinger sr blame gen tracked0
         (zip3 (cfFreshParams cf) (map snd (cfParams cf)) args) env $ \envP tracked ->
         withKnownType ty $ do
