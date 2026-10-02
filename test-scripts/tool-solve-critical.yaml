@@ -1,0 +1,121 @@
+# `diff`, `solve` and `critical` inside tool event handlers
+#
+#   The viewer is the Newton fractal of z^3 - 1, colored by the root each
+#   pixel converges to. Each tool runs differentiation code in a different
+#   kind of event handler.
+#
+# Exercises
+#   - `solve` in a click handler (closed-form body)
+#   - `critical` in a drag handler, on a compound function
+#   - `diff` and `solve` in a button handler
+#   - `solution` and `stuck` in tools
+#
+# Expected
+#   - Solve (s), click anywhere: a line from the click to a cube root of unity,
+#     the root of the basin clicked (matching its color)
+#   - Critical (c), drag anywhere: a line from the pointer to the critical
+#     point of z^3 - 3z, i.e. 1 on the right half-plane and -1 on the left
+#   - Button tool (b), press "Run": a circle around 1, with a point at its
+#     center
+#
+# Failure looks like
+#   - an error when the project loads: a handler doesn't typecheck (e.g.
+#     `solution` is missing from the tool environment)
+#   - red marks: Newton reported `stuck`
+#   - a line that ends away from the expected point: a wrong derivative
+
+viewer:
+  style: complex-plane
+  title: "Differentiation in tools"
+  size: 512x512
+  resizable: true
+  z-coord: z
+  initial-center: 0
+  initial-pixel-size: 1/128
+  iteration-limit: maxIters
+  code: |
+    solve z -> z^3 - 1
+
+    if stuck:
+        color <- black
+    else:
+        color <- rainbow(arg solution / (2 pi))
+
+  tools:
+    - name: Solve
+      shortcut: s
+      actions:
+        - event: deactivated
+          code: erase
+        - event: click
+          code: |
+            erase
+            solve z -> z^3 - 1
+            if stuck:
+              use red for stroke
+            else:
+              use white for stroke
+            draw line from z to solution
+            draw point at solution
+
+    - name: Critical
+      shortcut: c
+      actions:
+        - event: deactivated
+          code: erase
+        - event: drag
+          start: z0
+          code: |
+            define g(w):
+                u : C <- w^3
+                result <- u - 3 w
+
+            erase
+            critical z -> g(z)
+            if stuck:
+              use red for stroke
+            else:
+              use white for stroke
+            draw line from z to solution
+            draw point at solution
+
+    - name: Button tool
+      shortcut: b
+      configuration:
+        title: Button tool
+        size: 200x80
+        vertical-contents:
+          - button: "Run"
+      actions:
+        - event: deactivated
+          code: erase
+        - event: button
+          label: "Run"
+          code: |
+            erase
+
+            # Newton by hand, with `diff`
+            w : C <- 2
+            k : Z <- 0
+            while k < 20:
+              w <- w - (w^3 - 1) / diff(w, w^3 - 1)
+              k <- k + 1
+            use white for stroke
+            draw point at w
+
+            # Newton with `solve`
+            v : C <- 2
+            solve v -> v^3 - 1
+            if stuck:
+              use red for stroke
+            draw circle at solution with radius 0.1
+
+configuration:
+  title: Configuration
+  size: 400x120
+  vertical-contents:
+    - text-entry:
+        label: "Max. iterations:"
+        value: "100"
+        type: Z
+        variable: maxIters

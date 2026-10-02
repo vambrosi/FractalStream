@@ -397,7 +397,7 @@ assertMissingClickArgs env k =
 
 type Bookkeeping env =
     ( '(InternalIterations, 'IntegerT) ': '(InternalStuck, 'BooleanT) ':
-      '(InternalIterationLimit, 'IntegerT) ':
+      '(InternalSolution, 'ComplexT) ': '(InternalIterationLimit, 'IntegerT) ':
       '(InternalEscapeRadius, 'RealT) ': '(InternalVanishingRadius, 'RealT) ':
       env)
 
@@ -414,6 +414,7 @@ withBookkeeping env splices (pMaxIters, pMaxRadius, pMinRadius) action = withEnv
   env' :: EnvironmentProxy (Bookkeeping env) <-
       (     declareE InternalIterations      IntegerType
         <=< declareE InternalStuck           BooleanType
+        <=< declareE InternalSolution        ComplexType
         <=< declareE InternalIterationLimit  IntegerType
         <=< declareE InternalEscapeRadius    RealType
         <=< declareE InternalVanishingRadius RealType
@@ -424,6 +425,7 @@ withBookkeeping env splices (pMaxIters, pMaxRadius, pMinRadius) action = withEnv
     let (env0@(BindingProxy _ _ env1@(BindingProxy _ _ env2@(BindingProxy _ _ env3))), code0) =
           (env', code) & letInEnv (Const (Scalar typeProxy 0))
                        & letInEnv (Const (Scalar typeProxy False))
+                       & letInEnv (Const (Scalar typeProxy 0))
     code1 <- snd . (`letInEnv` (env0, code0)) <$> pvAtType pMaxIters  IntegerType env1
     code2 <- snd . (`letInEnv` (env1, code1)) <$> pvAtType pMaxRadius RealType    env2
     code' <- snd . (`letInEnv` (env2, code2)) <$> pvAtType pMinRadius RealType    env3
@@ -530,14 +532,6 @@ type DragHandlerEnv env =
     '(InternalOldX, 'RealT) ': '(InternalOldY, 'RealT) ':
     '(InternalPx, 'RealT) ': env )
 
-type InternalDragHandlerEnv env =
-  ( '(InternalIterations, 'IntegerT) ':
-    '(InternalStuck, 'BooleanT) ':
-    '(InternalIterationLimit, 'IntegerT) ':
-    '(InternalEscapeRadius, 'RealT) ':
-    '(InternalVanishingRadius, 'RealT) ':
-    DragHandlerEnv env)
-
 bindOrDeclare :: forall name ty env
                . KnownSymbol name
               => Proxy name
@@ -568,61 +562,42 @@ parseDragScript :: Splices
                 -> CodeString
                 -> (forall env. EnvironmentProxy env
                     -> Either (SourceRange, String) (Code (DragHandlerEnv env)))
-parseDragScript splices curCoord oldCoord (pMaxIters, pMaxRadius, pMinRadius) mpixel (CodeString src)
+parseDragScript splices0 curCoord oldCoord limits mpixel (CodeString src)
   (env :: EnvironmentProxy env) = do
-  withEnvironment env $ do
-    -- Bind all of the internal bookkeeping variables
-    env' :: EnvironmentProxy (InternalDragHandlerEnv env) <-
-      (     declareE InternalIterations      IntegerType
-        <=< declareE InternalStuck           BooleanType
-        <=< declareE InternalIterationLimit  IntegerType
-        <=< declareE InternalEscapeRadius    RealType
-        <=< declareE InternalVanishingRadius RealType
-        <=< declareE InternalX               RealType
-        <=< declareE InternalY               RealType
-        <=< declareE InternalOldX            RealType
-        <=< declareE InternalOldY            RealType
-        <=< declareE InternalPx              RealType
+    envD :: EnvironmentProxy (DragHandlerEnv env) <-
+      (     declareE InternalX    RealType
+        <=< declareE InternalY    RealType
+        <=< declareE InternalOldX RealType
+        <=< declareE InternalOldY RealType
+        <=< declareE InternalPx   RealType
       ) env
 
-    withEnvironment env' $ do
+    withBookkeeping envD splices0 limits $ \env' splices ->
+      case (coordName curCoord, coordName oldCoord) of
+        (SomeSymbol coord1, SomeSymbol coord2) -> do
+          x  <- getVar InternalX    RealType env'
+          y  <- getVar InternalY    RealType env'
+          bindOrDeclare coord1 ComplexType (R2C x  + i * R2C y ) env' $ \env1 -> do
+            x' <- getVar InternalOldX RealType env1
+            y' <- getVar InternalOldY RealType env1
+            bindOrDeclare coord2 ComplexType (R2C x' + i * R2C y') env1 $ \env2 ->
+              case someSymbolVal <$> mpixel of
+                Nothing -> left (errorLocation &&& unlines . pp) (parseCode env2 splices src)
+                Just (SomeSymbol (px :: Proxy px)) -> do
+                  case lookupEnv px RealType env2 of
+                    Absent pf -> recallIsAbsent pf $ do
+                      let env3 = BindingProxy px RealType env2
+                      p <- getVar InternalPx RealType env2
+                      c <- left (errorLocation &&& unlines . pp) (parseCode env3 splices src)
+                      pure (snd $ letInEnv @px p (env3, c))
+                    _ -> Left (NoSourceRange, "The pixel size variable `" ++ symbolVal px ++ "` was redefined.")
+  where
+    coordName = \case
+      ComplexCoordinate c -> someSymbolVal c
+      RealCoordinates{}   -> error "INTERNAL ERROR: Non-complex event coordinates are not yet implemented."
 
-      SomeSymbol (coord1 :: Proxy coordT1) <- pure $ case curCoord of
-        ComplexCoordinate c -> someSymbolVal c
-        RealCoordinates{}   -> error "INTERNAL ERROR: Non-complex event coordinates are not yet implemented."
-      SomeSymbol (coord2 :: Proxy coordT2) <- pure $ case oldCoord of
-        ComplexCoordinate c -> someSymbolVal c
-        RealCoordinates{}   -> error "INTERNAL ERROR: Non-complex event coordinates are not yet implemented."
-
-      let i :: forall e. KnownEnvironment e => Value '(e, ComplexT)
-          i = Const (Scalar ComplexType (0 :+ 1))
-      x  <- getVar InternalX    RealType env'
-      y  <- getVar InternalY    RealType env'
-
-      code :: Code (InternalDragHandlerEnv env) <-
-        bindOrDeclare coord1 ComplexType (R2C x  + i * R2C y ) env' $ \env1 -> do
-          x' <- getVar InternalOldX RealType env1
-          y' <- getVar InternalOldY RealType env1
-          bindOrDeclare coord2 ComplexType (R2C x' + i * R2C y') env1 $ \env2 ->
-            case someSymbolVal <$> mpixel of
-              Nothing -> left (errorLocation &&& unlines . pp) (parseCode env2 splices src)
-              Just (SomeSymbol (px :: Proxy px)) -> do
-                case lookupEnv px RealType env2 of
-                  Absent pf -> recallIsAbsent pf $ do
-                    let env3 = BindingProxy px RealType env2
-                    p <- getVar InternalPx RealType env2
-                    c <- left (errorLocation &&& unlines . pp) (parseCode env3 splices src)
-                    pure (snd $ letInEnv @px p (env3, c))
-                  _ -> Left (NoSourceRange, "The pixel size variable `" ++ symbolVal px ++ "` was redefined.")
-
-      -- Now bind all of the bookkeeping variables
-      let (env0@(BindingProxy _ _ env1@(BindingProxy _ _ env2@(BindingProxy _ _ env3))), code0) =
-            (env', code) & letInEnv (Const (Scalar typeProxy 0))
-                         & letInEnv (Const (Scalar typeProxy False))
-      code1 <- snd . (`letInEnv` (env0, code0)) <$> pvAtType pMaxIters  IntegerType env1
-      code2 <- snd . (`letInEnv` (env1, code1)) <$> pvAtType pMaxRadius RealType    env2
-      code' <- snd . (`letInEnv` (env2, code2)) <$> pvAtType pMinRadius RealType    env3
-      pure code'
+    i :: forall e. KnownEnvironment e => Value '(e, ComplexT)
+    i = Const (Scalar ComplexType (0 :+ 1))
 
 ------------------------------------------------------------
 -- Nullary event handlers
@@ -633,14 +608,6 @@ newtype SomeUnitHandler = SomeUnitHandler (forall env. EnvironmentProxy env -> E
 newtype UnitHandler = UnitHandler (Mapped CodeString SomeUnitHandler)
 
 type UnitHandlerEnv env = '(InternalPx, 'RealT) ': env
-
-type InternalUnitHandlerEnv env =
-  ( '(InternalIterations, 'IntegerT) ':
-    '(InternalStuck, 'BooleanT) ':
-    '(InternalIterationLimit, 'IntegerT) ':
-    '(InternalEscapeRadius, 'RealT) ':
-    '(InternalVanishingRadius, 'RealT) ':
-    UnitHandlerEnv env)
 
 type MissingUnitArgs env = ( NotPresent InternalPx env )
 
@@ -704,34 +671,12 @@ parseUnitScript :: Splices
                 -> CodeString
                 -> (forall env. EnvironmentProxy env
                     -> Either (SourceRange, String) (Code (UnitHandlerEnv env)))
-parseUnitScript splices (pMaxIters, pMaxRadius, pMinRadius) _vc mpx (CodeString src)
+parseUnitScript splices0 limits _vc mpx (CodeString src)
   (env :: EnvironmentProxy env) = do
+    envU :: EnvironmentProxy (UnitHandlerEnv env) <- declareE InternalPx RealType env
 
-  withEnvironment env $ do
-    -- Bind all of the internal bookkeeping variables
-    env' :: EnvironmentProxy (InternalUnitHandlerEnv env) <-
-      (     declareE InternalIterations      IntegerType
-        <=< declareE InternalStuck           BooleanType
-        <=< declareE InternalIterationLimit  IntegerType
-        <=< declareE InternalEscapeRadius    RealType
-        <=< declareE InternalVanishingRadius RealType
-        <=< declareE InternalPx              RealType
-      ) env
-
-    withEnvironment env' $ case someSymbolVal <$> mpx of
-      Nothing -> do
-
-        code <- left (errorLocation &&& unlines . pp) (parseCode env' splices src)
-
-        let (env0@(BindingProxy _ _ env1@(BindingProxy _ _ env2@(BindingProxy _ _ env3))), code0) =
-              (env', code) & letInEnv (Const (Scalar typeProxy 0))
-                           & letInEnv (Const (Scalar typeProxy False))
-
-        code1 <- snd . (`letInEnv` (env0, code0)) <$> pvAtType pMaxIters  IntegerType env1
-        code2 <- snd . (`letInEnv` (env1, code1)) <$> pvAtType pMaxRadius RealType    env2
-        code' <- snd . (`letInEnv` (env2, code2)) <$> pvAtType pMinRadius RealType    env3
-
-        pure code'
+    withBookkeeping envU splices0 limits $ \env' splices -> case someSymbolVal <$> mpx of
+      Nothing -> left (errorLocation &&& unlines . pp) (parseCode env' splices src)
 
       Just (SomeSymbol px) -> do
         case lookupEnv px RealType env' of
@@ -739,16 +684,7 @@ parseUnitScript splices (pMaxIters, pMaxRadius, pMinRadius) _vc mpx (CodeString 
             let env'' = recallIsAbsent pf $ BindingProxy px RealType env'
 
             code0 <- left (errorLocation &&& unlines . pp) (parseCode env'' splices src)
-            let code = Let bindingEvidence px (Var (Proxy @InternalPx) RealType bindingEvidence) code0
-            let (env0@(BindingProxy _ _ env1@(BindingProxy _ _ env2@(BindingProxy _ _ env3))), codeX) =
-                  (env', code) & letInEnv (Const (Scalar typeProxy 0))
-                               & letInEnv (Const (Scalar typeProxy False))
-
-            code1 <- snd . (`letInEnv` (env0, codeX)) <$> pvAtType pMaxIters  IntegerType env1
-            code2 <- snd . (`letInEnv` (env1, code1)) <$> pvAtType pMaxRadius RealType    env2
-            code' <- snd . (`letInEnv` (env2, code2)) <$> pvAtType pMinRadius RealType    env3
-
-            pure code'
+            pure (Let bindingEvidence px (Var (Proxy @InternalPx) RealType bindingEvidence) code0)
           _ -> Left (NoSourceRange, "Pixel variable `" ++ symbolVal px ++ "` was redefined.")
 
 
