@@ -139,8 +139,7 @@ data Viewer = Viewer
       -> SomeContext EventArgument_
       -> [SingleEventHandler]
       -> IO (Either String (Double -> Event -> Maybe (IO ())))
-    -- ^ Build a tool's event dispatcher for the given draw layer.  Supplied by
-    --   the backend (interpreter or JIT-compiled); see 'ToolRunner'.
+    -- ^ Builds a tool's event dispatcher for a draw layer.
   }
 
 snapshotToFile :: Viewer -> Bool -> FilePath -> IO (Maybe String)
@@ -367,11 +366,11 @@ defaultMinRadius = fromRight (error "INTERNAL ERROR: defaultMinRadius") $ parseP
 -- Backend
 ------------------------------------------------------------------------
 
--- | A factory that sets up the draw-command accumulation system for a viewer's
--- tools.  Returns three things:
---   * an action to read all accumulated draw commands (grouped by layer),
---   * an action to check whether any commands have been added since last read,
---   * a function from layer number to a 'DrawSink' for that layer.
+-- | Sets up draw-command accumulation for a viewer's tools. Returns:
+--
+-- * an action reading the accumulated commands, by layer;
+-- * an action checking for new commands since the last read;
+-- * the 'DrawSink' of each layer.
 newtype ToolRunnerFactory = ToolRunnerFactory
   { makeToolRunnerForLayer :: IO ( IO [[DrawCommand]]
                                  , IO Bool
@@ -384,13 +383,11 @@ data Backend = Backend
   { bViewerCompiler    :: ViewerCompiler
   , bToolRunnerFactory :: ToolRunnerFactory
   , bToolRunner        :: ToolRunner
-    -- ^ How tool event handlers are executed: 'defaultToolRunner' (interpreter)
-    --   or a backend-specific JIT-compiled runner.
+    -- ^ How tool event handlers run (interpreted or JIT-compiled).
   }
 
--- | The default 'ToolRunnerFactory': tool scripts are executed by the
--- pure Haskell interpreter, and draw commands are accumulated in an
--- in-memory layer map for the UI to paint afterward.
+-- | The default 'ToolRunnerFactory', which accumulates draw commands in an
+-- in-memory map of layers for the UI to paint.
 defaultToolRunnerFactory :: ToolRunnerFactory
 defaultToolRunnerFactory = ToolRunnerFactory $ do
   layersMVar <- newMVar (Map.empty :: Map Int [DrawCommand])

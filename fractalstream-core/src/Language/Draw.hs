@@ -22,10 +22,9 @@ type DrawCommand = Draw_ ConcreteValue '[]
 data ConcreteValue :: Environment -> FSType -> Exp Type
 type instance Eval (ConcreteValue env t) = HaskellType t
 
--- | A backend-agnostic sink for draw commands, in concrete (plane-coordinate)
--- Haskell values.  The interpreter adapts a 'DrawHandler' onto one of these;
--- the LLVM backend wraps each field as a C callback for compiled tools.  There
--- is no compiled support for 'dsWrite' (text) yet — only the interpreter uses it.
+-- | A backend-independent sink for draw commands, with concrete values in
+-- plane coordinates. Compiled tools call each field as a C callback, except
+-- 'dsWrite' (text), which only the interpreter supports.
 data DrawSink = DrawSink
   { dsClear  :: IO ()
   , dsStroke :: HaskellType 'ColorT -> IO ()

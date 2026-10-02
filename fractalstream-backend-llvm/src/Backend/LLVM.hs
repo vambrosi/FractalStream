@@ -138,13 +138,14 @@ toFFIArg _ t v = case t of
   BooleanType -> pure (argInt8 (if v then 1 else 0), pure ())
   _ -> error ("todo: toFFIArg " ++ showType t)
 
--- | Like 'toFFIArg', but for tool handlers, which may /set/ config variables.
--- Scalar values (Integer/Real/Boolean/Complex/Color) are passed as pointers and
--- bound in/out by the compiled kernel, so the caller's cell holds the final
--- value after the call.  The returned write-back action reads that cell and, if
--- the value changed and the argument is settable, propagates it back to the
--- host.  Lists and text are passed by value (no write-back).  The set of in/out
--- types must match 'Backend.LLVM.Code.toolInOut'.
+-- | Like 'toFFIArg', but for tool handlers, which may set config variables.
+--
+-- * Scalars (Integer, Real, Boolean, Complex, Color) are passed by pointer.
+--   The returned write-back action copies a changed value to the host, if
+--   the argument is settable.
+-- * Lists and text are passed by value, with no write-back.
+--
+-- The in/out types must match 'Backend.LLVM.Code.toolInOut'.
 toFFIArgInOut :: TypeProxy ty
               -> EventArgument ty
               -> HaskellType ty
@@ -186,8 +187,8 @@ toFFIArgInOut t earg v = case t of
     Just setter | Scalar ty v /= Scalar ty newV -> setter ty newV
     _ -> pure ()
 
--- | Allocate and populate a contiguous buffer of linked-list nodes for a
--- Haskell list.  Returns the head pointer (null for empty) and a cleanup action.
+-- | Build a Haskell list as linked-list nodes in one buffer. Returns the head
+-- pointer (null for empty) and a cleanup action.
 -- Node layout (stride = listNodeStride itemTy):
 --   bytes 0-7:  next pointer (null = end of list)
 --   bytes 8+:   element data
@@ -206,8 +207,8 @@ buildListBuffer itemTy items = do
     pokeListElem itemTy (nodeBase `plusPtr` 8) item
   pure (buf, free buf)
 
--- | Write element data for a single list node at the given byte address.
--- Returns an optional cleanup action for recursively allocated sub-lists.
+-- | Write one node's element at the given address. Returns a cleanup action
+-- for nested lists, if any.
 pokeListElem :: TypeProxy t -> Ptr Word8 -> HaskellType t -> IO ()
 pokeListElem t ptr item = case t of
   BooleanType -> poke (castPtr ptr :: Ptr Word8)
@@ -225,9 +226,9 @@ pokeListElem t ptr item = case t of
     poke (ptr `plusPtr` 1) g
     poke (ptr `plusPtr` 2) b
   ListType itemTy' -> do
-    -- Nested list: recursively build and store the head pointer.
+    -- Nested list (store its head pointer).
     (headPtr, _cleanup) <- buildListBuffer itemTy' item
-    -- Note: _cleanup leaks for now; nested lists are uncommon.
+    -- Leaks the nested buffer (nested lists are rare).
     poke (castPtr ptr :: Ptr (Ptr Word8)) headPtr
   _ -> pure ()  -- unsupported element types: leave zeroed
 
@@ -364,10 +365,8 @@ withJittedViewer (dylib, session, compileLayer, nextId, arenaPool) mPrepScript c
 
             let fn = castPtrToFunPtr (wordPtrToPtr kernelFn)
 
-            -- Borrow an arena from the session-wide pool for the duration of each
-            -- kernel call; bracket returns it even if AsyncCancelled is thrown.
-            -- The pool (and the arena lifetime) is owned by withJIT, not here,
-            -- because rendering outlives this action (see LLVMJit).
+            -- Each kernel call borrows an arena from the session-wide pool
+            -- ('bracket' returns it even when the render is cancelled).
             action $ ViewerFunction $ \ViewerArgs{..} ->
               bracket (readChan arenaPool) (writeChan arenaPool) $ \arena -> do
                 (colorArg, colorFree) <- toFFIArg (Proxy @"color") ColorType grey
@@ -378,7 +377,7 @@ withJittedViewer (dylib, session, compileLayer, nextId, arenaPool) mPrepScript c
                     (x0, y0) = vaPoint
                     (dx, dy) = vaStep
                 withPrepArrays prepEnvProxy nPixels $ \prepPtrs -> do
-                  -- Haskell prep pass: populate prep arrays before LLVM kernel
+                  -- Fill the prep arrays before calling the kernel.
                   case mPrepScript of
                     Nothing -> pure ()
                     Just (PrepScript _ prepCode) -> do
@@ -397,7 +396,7 @@ withJittedViewer (dylib, session, compileLayer, nextId, arenaPool) mPrepScript c
                             (Map.empty, iorefs)
                           writePrepOutputsFromMap prepEnvProxy prepPtrs lastVals
                             (row * w + col)
-                  -- Call the LLVM kernel with the arena + prep arrays as raw pointers
+                  -- Call the kernel with the arena and prep arrays.
                   let fullArgs = argPtr   vaBuffer
                                : argInt32 vaWidth
                                : argInt32 vaHeight
@@ -435,8 +434,7 @@ foreign import ccall "wrapper"
   wrapRect :: (Word8 -> CDouble -> CDouble -> CDouble -> CDouble -> IO ())
            -> IO (FunPtr (Word8 -> CDouble -> CDouble -> CDouble -> CDouble -> IO ()))
 
--- | Build the seven C callbacks for a 'DrawSink', run the action with them, and
--- free them afterwards.
+-- | Run an action with the seven C callbacks of a 'DrawSink'.
 withDrawVTablePtrs
   :: DrawSink
   -> ( ( FunPtr (IO ())
@@ -468,19 +466,17 @@ withDrawVTablePtrs sink action = do
                >> freeHaskellFunPtr lineFP   >> freeHaskellFunPtr circleFP
                >> freeHaskellFunPtr rectFP )
 
--- | Execute a tool event handler by JIT-compiling it and calling it, with draw
--- commands routed back to the given sink.  Compiles once per invocation for now.
+-- | JIT-compile a tool event handler once, and return an invoker that runs
+-- it per event, with draw commands sent to the sink.
 compiledToolExec :: LLVMJit -> DrawSink -> ToolExec
 compiledToolExec (dylib, session, compileLayer, nextId, arenaPool) sink =
   \envp code -> do
-    -- Compile the handler ONCE, when the dispatcher is built.  OrcJIT's
-    -- 'addModule' hands a clone of the module to the session-wide JIT, so the
-    -- resulting function pointer stays valid after these brackets close.
+    -- The function pointer outlives these brackets, since 'addModule' gives
+    -- the session-wide JIT its own copy of the module.
     name <- modifyMVar nextId (\n -> pure (n + 1, "tool_" ++ show n))
 
-    -- Same AST pre-pass as viewers: turn constant-exponent powers (e.g. z²)
-    -- into multiplications instead of generic exp/log complex powers, which
-    -- otherwise lose precision and shift a Newton iteration off course.
+    -- As for viewers, constant powers (e.g. z²) become multiplications
+    -- (exp/log powers lose precision).
     let code' = transformValues (integerPowers . avoidSqrt) code
 
     m <- either error pure (compileToolHandler envp (fromString name) code')
@@ -506,7 +502,7 @@ compiledToolExec (dylib, session, compileLayer, nextId, arenaPool) sink =
             Right (JITSymbol fnPtr _) ->
               pure (castPtrToFunPtr (wordPtrToPtr fnPtr) :: FunPtr ())
 
-    -- The per-event invoker: snapshot args, marshal, call, write back.
+    -- Per event (snapshot the arguments, call, write back).
     pure $ \ctx -> snapshotEventArgs ctx >>= \case
       Nothing -> pure ()
       Just haskArgs ->
@@ -530,8 +526,8 @@ compiledToolExec (dylib, session, compileLayer, nextId, arenaPool) sink =
                 , argPtr overflowPtr ]
                 ++ envArgs
           callFFI fn retVoid fullArgs
-          -- Propagate any config-variable Sets back to the host
-          -- (e.g. the Select tool sets the coordinate), then free.
+          -- Copy assigned config variables back (e.g. the Select tool's
+          -- coordinate), then free.
           sequence_ envWriteBacks
           sequence_ envFrees
 
@@ -591,10 +587,8 @@ withCompiledCode env code run = do
 arenaCapacity :: Int
 arenaCapacity = 1024 * 1024
 
--- | The arena pool lives for the whole JIT session: the JIT'd kernels stay
--- resident until the session is torn down, and rendering runs on the wx event
--- loop *after* each 'withJittedViewer' action returns, so the arenas must
--- outlive any single viewer compile (and be shared across viewers).
+-- | The arena pool lives as long as the JIT session (rendering continues after
+-- 'withJittedViewer' returns, and the pool is shared by all viewers).
 type LLVMJit = (JITDylib, ExecutionSession, IRCompileLayer, MVar Int, Chan (Ptr Word8))
 
 withJIT :: (LLVMJit -> IO t) -> IO t
@@ -609,15 +603,13 @@ withJIT action = do
       addDynamicLibrarySearchGeneratorForCurrentProcess compileLayer dylib
       nextId <- newMVar 0
 
-      -- Fixed pool of arenas (one per capability), shared by all viewers.
+      -- One arena per capability.
       numWorkers <- getNumCapabilities
       arenas <- replicateM numWorkers (mallocBytes arenaCapacity :: IO (Ptr Word8))
       arenaPool <- newChan
       mapM_ (writeChan arenaPool) arenas
-      -- On teardown, reading all arenas back blocks until every in-flight kernel
-      -- call has returned its arena (each call holds one for exactly its
-      -- duration via bracket below) and leaves the pool empty so none can start
-      -- -- so freeing them and unmapping the session afterwards is safe.
+      -- Teardown takes every arena back first. This waits for in-flight
+      -- calls and stops new ones, so freeing and unmapping is then safe.
       let drainAndFreeArenas =
             replicateM numWorkers (readChan arenaPool) >>= mapM_ free
       action (dylib, session, compileLayer, nextId, arenaPool)

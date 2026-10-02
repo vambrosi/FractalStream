@@ -404,9 +404,11 @@ compileRenderer' prepOutputEnv name code = runExcept $
         blockHeightPtr <- allocaArg IntegerType blockHeightArg
         subsamplesPtr  <- allocaArg IntegerType subsamplesArg
 
-        -- Arena setup: bumpAlloca tracks the current allocation position.
-        -- arenaEnd is constant = arenaBase + arenaSize.
-        -- overflowFlag is reset per subsample and set by arenaAlloc on overflow.
+        -- Arena state:
+        --
+        -- * bumpAlloca holds the next free address;
+        -- * arenaEnd = arenaBase + arenaSize;
+        -- * overflowFlag is set by 'arenaAlloc', and reset per subsample.
         bumpAlloca <- alloca (AST.ptr AST.i8) Nothing 0
         store bumpAlloca 0 arenaPtrArg
         arenaEnd <- gep arenaPtrArg [arenaSizeArg]
@@ -480,8 +482,7 @@ compileRenderer' prepOutputEnv name code = runExcept $
           storeOperand (RealOp xVal) (getBinding args pfX)
           storeOperand (RealOp yVal) (getBinding args pfY)
 
-          -- Reset the arena at the start of each subsample so each pixel's
-          -- dynamic list allocations are independent.
+          -- Reset the arena per subsample, so pixels don't share lists.
           store bumpAlloca 0 arenaPtrArg
           store overflowFlag 0 (C.bit 0)
 
@@ -494,7 +495,7 @@ compileRenderer' prepOutputEnv name code = runExcept $
           (cr0, cg0, cb0) <- case getBinding args pfOutput of
             PtrOp (ColorOp outputR outputG outputB) ->
               (,,) <$> load outputR 0 <*> load outputG 0 <*> load outputB 0
-          -- On arena overflow, render the pixel magenta so it's visually obvious.
+          -- Arena overflow makes the pixel magenta.
           cr0' <- select overflowed (C.int8 255) cr0
           cg0' <- select overflowed (C.int8 0)   cg0
           cb0' <- select overflowed (C.int8 255) cb0
@@ -585,10 +586,9 @@ compileRenderer' prepOutputEnv name code = runExcept $
         retVoid
 
 
--- | C function pointers (one per draw primitive) that a compiled tool's
--- 'DrawCommand's call back into Haskell.  Each field is an LLVM operand of the
--- appropriate function-pointer type.  Viewers don't draw, so they pass
--- 'Nothing' to 'compileCode'; tool handlers pass 'Just'.
+-- | Function pointers, one per draw primitive, that a compiled tool's
+-- 'DrawCommand's call back into Haskell. Viewers don't draw, so they pass
+-- 'Nothing' to 'compileCode'.
 data DrawVTable = DrawVTable
   { dvClear  :: Operand   -- ^ void()
   , dvStroke :: Operand   -- ^ void(i8 r, i8 g, i8 b)
@@ -599,13 +599,13 @@ data DrawVTable = DrawVTable
   , dvRect   :: Operand   -- ^ void(i8 fill, double x1, double y1, double x2, double y2)
   }
 
--- | Compile a single tool event handler into a native function.  Unlike a
--- viewer kernel there is no pixel loop: the body runs once.  ABI (in order):
--- seven draw-callback function pointers (passed as i8*), the arena pointer and
--- size, a 1-byte overflow-out pointer, then the handler's environment values
--- (read-only inputs, marshalled like viewer args).  Draw commands in the body
--- 'call' the vtable; list allocations use the arena; on overflow the kernel
--- writes 1 to the overflow byte.
+-- | Compile a tool event handler to a native function. The body runs once
+-- (no pixel loop). Arguments, in order:
+--
+-- * the seven draw callbacks (as @i8*@);
+-- * the arena pointer and size;
+-- * a pointer to an overflow byte (set to 1 on arena overflow);
+-- * the handler's environment values (see 'toolInOut').
 compileToolHandler :: forall e
                     . EnvironmentProxy e
                    -> AST.Name
@@ -852,12 +852,11 @@ allocaArg t op = do
   storeOperand x ptr
   pure ptr
 
--- | Scalar tool-handler arguments are passed in/out: the caller hands the
--- kernel a pointer to a cell, so a 'Set' of a config variable is visible to the
--- host after the call (write-back; e.g. the Select tool sets a coordinate, or
--- newton3's \"Move roots\" tool sets @drag_target@).  Lists and text are passed
--- by value (read-only — no write-back).  This predicate must agree between
--- 'toToolParameterList' (param types), 'bindToolArg', and the host's marshaller.
+-- | Whether a tool argument type is passed in/out, by pointer, so that
+-- assignments reach the host (e.g. the Select tool's coordinate). Lists and
+-- text are passed by value.
+--
+-- 'toToolParameterList', 'bindToolArg' and the host's marshaller must agree.
 toolInOut :: TypeProxy t -> Bool
 toolInOut = \case
   IntegerType -> True

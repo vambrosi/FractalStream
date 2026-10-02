@@ -79,7 +79,7 @@ buildValue getExtern arena = indexedFold go'
         throwError ("The LLVM backend can not compile constants of type " ++ showType t)
 
       -- ------------------------------------------------------------------ --
-      -- List literal: allocate one node per element in the arena, link them.
+      -- List literal (one arena node per element, linked).
       -- ------------------------------------------------------------------ --
       List ty mElems -> do
         let stride = listNodeStride ty
@@ -89,8 +89,8 @@ buildValue getExtern arena = indexedFold go'
           _  -> lift $ buildLitList arena ty stride elems
 
       -- ------------------------------------------------------------------ --
-      -- Join: copy every list from every input (conservative; safe for
-      -- future mutations).  Concatenate the copies in order.
+      -- Join (concatenate copies of every input list, so inputs are never
+      -- shared).
       -- ------------------------------------------------------------------ --
       Join ty mLists -> do
         lists <- sequence mLists
@@ -98,7 +98,7 @@ buildValue getExtern arena = indexedFold go'
         lift $ buildJoin arena ty headPtrs
 
       -- ------------------------------------------------------------------ --
-      -- Remove: filter by predicate; keep elements where pred is FALSE.
+      -- Remove (keep the elements where the predicate is false).
       -- ------------------------------------------------------------------ --
       Remove name ty pf mxs mtest -> recallIsAbsent pf $ do
         ctx <- ask
@@ -110,7 +110,7 @@ buildValue getExtern arena = indexedFold go'
           detypeOperand BooleanType testOp
 
       -- ------------------------------------------------------------------ --
-      -- Transform: apply a function to every element, producing a new list.
+      -- Transform (a new list with a function applied to every element).
       -- ------------------------------------------------------------------ --
       Transform name ty1 _ty2 pf mxs mf -> recallIsAbsent pf $ do
         ctx <- ask
@@ -122,7 +122,7 @@ buildValue getExtern arena = indexedFold go'
           runReaderT mf (Bind name ty1 slot ctx)
 
       -- ------------------------------------------------------------------ --
-      -- Find: return the first element matching pred, or the default.
+      -- Find (the first element matching the predicate, or the default).
       -- ------------------------------------------------------------------ --
       Find name ty pf mxs mtest mdefault -> recallIsAbsent pf $ do
         ctx <- ask
@@ -135,7 +135,7 @@ buildValue getExtern arena = indexedFold go'
           detypeOperand BooleanType testOp
 
       -- ------------------------------------------------------------------ --
-      -- Length: count nodes.
+      -- Length
       -- ------------------------------------------------------------------ --
       Length ty mxs -> do
         xs <- mxs
@@ -143,7 +143,7 @@ buildValue getExtern arena = indexedFold go'
         lift $ buildLength headPtr (toLLVMType ty)
 
       -- ------------------------------------------------------------------ --
-      -- Index: 1-based indexing, optionally cyclic.
+      -- Index (1-based, optionally cyclic).
       -- ------------------------------------------------------------------ --
       Index ty cyclic mxs mi -> do
         xs <- mxs
@@ -153,7 +153,7 @@ buildValue getExtern arena = indexedFold go'
         lift $ buildIndex arena ty cyclic headPtr iOp
 
       -- ------------------------------------------------------------------ --
-      -- Range: integer range [lo..hi].
+      -- Range (integers [lo..hi]).
       -- ------------------------------------------------------------------ --
       Range mlo mhi -> do
         lo <- mlo
@@ -537,11 +537,12 @@ buildValue getExtern arena = indexedFold go'
 -- List IR helpers
 ------------------------------------------------------------------------
 
--- | Allocate one node per element, link them, and return the head pointer.
--- Elements are pre-evaluated.  A literal has a known length, so we do a single
--- up-front bounds check: if the whole list will not fit, set the overflow flag
--- (pixel goes magenta) and return the empty list.  Otherwise every per-node
--- 'arenaAlloc' below is guaranteed to succeed, so no null can be written.
+-- | Allocate and link one node per (already evaluated) element; return the
+-- head pointer.
+--
+-- The length is known, so there is one bounds check up front. If the list
+-- doesn't fit, the overflow flag is set (magenta pixel) and the list is
+-- empty; otherwise every 'arenaAlloc' below succeeds.
 buildLitList :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
              => ArenaState -> TypeProxy t -> Int -> [Op t] -> m (Op ('ListT t))
 buildLitList arena ty stride elems = mdo
@@ -573,8 +574,8 @@ buildLitList arena ty stride elems = mdo
   litDone <- block `named` "lit_done"
   ListOp <$> load headSlot 0
 
--- | Copy every node from every input-list head ptr into the arena, linking
--- the copies end-to-end.  All input lists are copied (no sharing).
+-- | Copy the nodes of every input list into the arena, linked end to end
+-- (no sharing with the inputs).
 buildJoin :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
           => ArenaState -> TypeProxy t -> [Operand] -> m (Op ('ListT t))
 buildJoin arena ty inputHeads = do
@@ -613,8 +614,8 @@ buildJoin arena ty inputHeads = do
       pure ()
   ListOp <$> load headSlot 0
 
--- | Filter: keep elements where the predicate callback returns 0 (false).
--- The callback receives the element slot and returns an i1 Operand.
+-- | Filter (keep the elements where the predicate returns 0). The predicate
+-- receives the element slot and returns an i1.
 buildFilter :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
             => ArenaState -> TypeProxy t -> Operand -> PtrOp t
             -> (PtrOp t -> m Operand)   -- ^ predicate; keep when result = 0
@@ -656,7 +657,7 @@ buildFilter arena ty inputHead elemSlot predCb = do
     pure ()
   ListOp <$> load headSlot 0
 
--- | Map: apply a callback to every element, building a new list with the results.
+-- | Map (a new list with the callback applied to every element).
 buildMap :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
          => ArenaState -> TypeProxy t1 -> TypeProxy t2 -> Operand -> PtrOp t1
          -> (PtrOp t1 -> m (Op t2))   -- ^ transform callback
@@ -694,8 +695,8 @@ buildMap arena ty1 ty2 inputHead elemSlot transformCb = do
     pure ()
   ListOp <$> load headSlot 0
 
--- | Find: return first element where the predicate callback returns 1 (true),
--- or the default value if no element matches.
+-- | Find (the first element where the predicate returns 1, or the
+-- default).
 buildFind :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
           => ArenaState -> TypeProxy t -> Operand -> PtrOp t -> Op t
           -> (PtrOp t -> m Operand)  -- ^ predicate callback
@@ -754,12 +755,13 @@ buildLength inputHead _elemTy = do
     pure ()
   IntegerOp <$> load countSlot 0
 
--- | 1-based list indexing.  For cyclic = False: positive indices count from
--- the front, negative from the back.  For cyclic = True: wraps around.
--- Out-of-bounds (and indexing an empty list) sets the overflow flag, which the
--- renderer surfaces as a magenta pixel.  This mirrors the interpreter, which
--- terminates on out-of-range indices (see LANGUAGE.md); a JIT pixel kernel
--- can't abort per pixel, so we signal instead of silently returning a value.
+-- | 1-based list indexing.
+--
+-- * Without cycling, positive indices count from the front, others from the
+--   back.
+-- * With cycling, indices wrap around.
+-- * Out of bounds (or an empty list) sets the overflow flag (magenta pixel).
+--   The interpreter stops instead, but a kernel can't abort one pixel.
 buildIndex :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m, MonadFix m)
            => ArenaState -> TypeProxy t -> Bool -> Operand -> Operand
            -> m (Op t)
@@ -769,8 +771,8 @@ buildIndex arena ty cyclic inputHead iOp = do
   currSlot   <- alloca (AST.ptr AST.i8) Nothing 0
   resultSlot <- allocaOp ty
   store currSlot 0 inputHead
-  -- Compute 0-based step count.  We always compute the length because we need
-  -- it for both cyclic wrapping and negative non-cyclic indices.
+  -- The 0-based step count. (The length is needed both for cyclic wrapping
+  -- and for indices counted from the back.)
   len <- getIntegerOp <$> buildLength inputHead (toLLVMType ty)
   if cyclic
     then do
@@ -880,12 +882,8 @@ appendNode headSlot prevSlot newNode = do
     pure ()
   store prevSlot 0 newNode
 
--- | Emit a loop computing @base ^ expo@ for a non-negative integer exponent by
--- repeated multiplication.  This matches the interpreter's integer power and
--- replaces a bogus @llvm.powi.i32@ "intrinsic" (LLVM's @llvm.powi@ only takes a
--- floating-point base, so the old declaration produced garbage when actually
--- called — which only happened from tools, since viewer code's constant
--- exponents are rewritten to multiplications).  A negative exponent yields 1.
+-- | Integer @base ^ expo@ by repeated multiplication, as in the interpreter.
+-- (@llvm.powi@ needs a floating-point base.) A negative exponent gives 1.
 intPow :: (MonadModuleBuilder m, MonadIRBuilder m, MonadFix m)
        => Operand -> Operand -> m Operand
 intPow base expo = mdo

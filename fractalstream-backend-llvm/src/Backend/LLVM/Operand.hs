@@ -267,8 +267,8 @@ typedOperand t op = do
 nullI8Ptr :: Operand
 nullI8Ptr = ConstantOperand (AST.Null (AST.ptr AST.i8))
 
--- | Byte stride between consecutive nodes in a serialized list buffer.
--- Layout: 8 bytes (next i8* pointer) + element data, rounded up to 8-byte alignment.
+-- | Byte stride between nodes in a list buffer (the 8-byte next pointer plus
+-- the element, rounded up to a multiple of 8).
 listNodeStride :: TypeProxy t -> Int
 listNodeStride t = roundUp8 (8 + elemBytes t)
   where
@@ -325,8 +325,8 @@ loadListElem t nodePtr = do
       ListOp <$> load p 0
     _ -> throwError ("loadListElem: unsupported element type " ++ showType t)
 
--- | Write element data into a list node at the given byte offset (offset 8 past
--- the start of the node).  Mirror image of 'loadListElem'.
+-- | Store a list node's element (at byte offset 8). The inverse of
+-- 'loadListElem'.
 storeListElem :: (MonadModuleBuilder m, MonadIRBuilder m, MonadError String m)
               => TypeProxy t
               -> Operand   -- ^ i8* base of the node
@@ -363,21 +363,18 @@ storeListElem t nodePtr op = do
       store p 0 headPtr
     _ -> throwError ("storeListElem: unsupported type " ++ showType t)
 
--- | Arena state threaded through LLVM IR generation for dynamic list allocation.
--- The arena is a flat byte buffer; a bump pointer is advanced on each allocation
--- and reset to the base at the start of each pixel/subsample computation.
--- asOverflowFlag is an i1* stack slot set to 1 on the first failed allocation;
--- checked after compileCode to render the pixel magenta.
+-- | The list-allocation arena (a byte buffer with a bump pointer, reset for
+-- each subsample). A failed allocation sets the overflow flag (magenta
+-- pixel).
 data ArenaState = ArenaState
   { asBumpAlloca   :: Operand  -- ^ i8** stack slot holding the current bump pointer
   , asArenaEnd     :: Operand  -- ^ i8* constant end of the arena (base + capacity)
   , asOverflowFlag :: Operand  -- ^ i1* stack slot; set to 1 on overflow
   }
 
--- | Emit inline bump-allocation of 'size' bytes (must be a multiple of 8).
--- Returns the allocated i8* on success; returns null on overflow and sets the
--- overflow flag in ArenaState. Callers MUST null-check the result and bail out
--- of list construction on overflow (see the builders in Backend.LLVM.Value).
+-- | Bump-allocate @size@ bytes (a multiple of 8). On overflow, returns null
+-- and sets the overflow flag, so callers must check for null and stop
+-- building the list.
 arenaAlloc :: (MonadModuleBuilder m, MonadIRBuilder m, MonadFix m)
            => ArenaState
            -> Int        -- ^ compile-time byte count (multiple of 8)

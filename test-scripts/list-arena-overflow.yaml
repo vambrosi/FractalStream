@@ -22,8 +22,8 @@ viewers:
       #   Left  of boundary (~232 px): blue-to-green gradient
       #   Right of boundary (~280 px): solid magenta
       #
-      # If any of those rightmost pixels are NOT magenta after building with
-      # the overflow-flag patch, the signal is broken.
+      # If any pixel right of the boundary is not magenta, the overflow signal
+      # is broken.
 
       n : ℤ ⭠ round(50000.0 * (re z + 1.5))
 

@@ -131,20 +131,15 @@ run draw ctx script = do
                         Just setter -> when (Scalar ty old /= Scalar ty new) (setter ty new)
                     ) ctx'
 
--- | Read the current value of every argument in a tool's event context,
--- yielding a concrete 'HaskellValue' context (or 'Nothing' if any argument is
--- currently unavailable, e.g. an unparsed configuration field).
+-- | The current values of a tool's event arguments ('Nothing' if any is
+-- unavailable, e.g. an unparsed configuration field).
 snapshotEventArgs :: Context EventArgument_ env -> IO (Maybe (Context HaskellValue env))
 snapshotEventArgs ctx =
   mapContextM @MaybeHaskellValue @HaskellValue (\_ _ -> id) <$> mapContextM (\_ _ -> argGetValue) ctx
 
--- | How a tool event handler's 'Code' is /prepared/ for execution: given a
--- witness for its environment and the code, produce an invoker that runs the
--- handler against a (per-event) argument context.  Preparation happens once,
--- when the dispatcher is built; the invoker runs on every event.  The
--- interpreter prepares trivially (returns a closure over 'run'); the LLVM
--- backend JIT-compiles the handler during preparation so each event just
--- marshals arguments and calls the compiled code (rather than recompiling).
+-- | Prepares a tool event handler once, when the dispatcher is built, and
+-- returns an invoker that runs on every event. (The interpreter just closes
+-- over 'run'; the LLVM backend JIT-compiles the handler.)
 type ToolExec =
   forall e. EnvironmentProxy e
          -> Code e
@@ -157,9 +152,8 @@ makeEventHandler :: forall env
                  -> CombinedEventHandler env
                  -> IO (Double -> Event -> Maybe (IO ()))
 makeEventHandler exec ctx CombinedEventHandler{..} = do
-  -- Prepare (e.g. JIT-compile) each present handler once.  The dummy contexts
-  -- only serve to recover each branch's 'EnvironmentProxy'; 'contextToEnv'
-  -- ignores the values.
+  -- Prepare each handler once. (The dummy contexts only provide each
+  -- 'EnvironmentProxy'; 'contextToEnv' ignores the values.)
   let dummyR     = constArg 0 :: EventArgument 'RealT
       clickEnvP  = contextToEnv (dummyR # dummyR # dummyR # ctx)
       dragEnvP   = contextToEnv (dummyR # dummyR # dummyR # dummyR # dummyR # ctx)
@@ -276,13 +270,10 @@ buildHandlerWith exec (SomeContext ctx) handlers = do
             _ -> combined0
       in Right <$> makeEventHandler exec ctx combined
 
--- | How a backend turns a tool's parsed event handlers into the event
--- dispatcher the UI calls.  Given the per-layer draw handler (from the tool
--- draw-command accumulator), the layer number, the tool's variable context, and
--- the parsed handlers, it produces (or fails to produce) a
--- @Double -> Event -> Maybe (IO ())@ dispatcher.  The pure/interpreter backend
--- uses 'defaultToolRunner'; the LLVM backend supplies one that JIT-compiles the
--- handlers.
+-- | How a backend turns a tool's parsed event handlers into the dispatcher
+-- the UI calls, given the draw sink per layer, the layer, and the tool's
+-- variables. (The interpreter uses 'defaultToolRunner'; the LLVM backend
+-- JIT-compiles.)
 newtype ToolRunner = ToolRunner
   { runTool :: (Int -> DrawSink)
             -> Int
