@@ -218,37 +218,46 @@ noHandlers = CombinedEventHandler Nothing Nothing Nothing Nothing Map.empty Map.
 singleToCombined :: EnvironmentProxy env -> SingleEventHandler -> IO (Either String (CombinedEventHandler env))
 singleToCombined env = \case
   OnClick ClickHandler{..} -> getDynamic (dyn chScript) <&> \(SomeClickHandler script) ->
-    bimap snd (\h -> noHandlers { onClick = Just h }) (script env)
+    bimap (located "click") (\h -> noHandlers { onClick = Just h }) (script env)
   OnDoubleClick ClickHandler{..} -> getDynamic (dyn chScript) <&> \(SomeClickHandler script) ->
-    bimap snd (\h -> noHandlers { onDoubleClick = Just h }) (script env)
+    bimap (located "double-click") (\h -> noHandlers { onDoubleClick = Just h }) (script env)
   OnDrag DragHandler{..} -> getDynamic (dyn dhScript) <&> \(SomeDragHandler script) ->
-    bimap snd (\h -> noHandlers { onDrag = Just h }) (script env)
+    bimap (located "drag") (\h -> noHandlers { onDrag = Just h }) (script env)
   OnDragDone DragHandler{..} -> getDynamic (dyn dhScript) <&> \(SomeDragHandler script) ->
-    bimap snd (\h -> noHandlers { onDragDone = Just h }) (script env)
+    bimap (located "drag-finished") (\h -> noHandlers { onDragDone = Just h }) (script env)
   OnClickOrDrag (ClickHandler{..}, DragHandler{..}) ->
     ((,) <$> getDynamic (dyn chScript) <*> getDynamic (dyn dhScript)) <&>
       \(SomeClickHandler cscript, SomeDragHandler dscript) ->
-        bimap snd (\(ch, dh) -> noHandlers { onClick = Just ch
+        bimap (located "click-or-drag") (\(ch, dh) -> noHandlers { onClick = Just ch
                                            , onDrag  = Just dh
                                            }) ((,) <$> cscript env <*> dscript env)
   OnTimer TimerHandler{..} -> do
     name <- getDynamic (dyn thName)
     interval <- getDynamic (dyn thInterval)
     SomeUnitHandler script <- getDynamic (dyn thScript)
-    pure $ bimap snd (\h -> noHandlers { onTimer = Map.singleton name (interval, h) }) (script env)
+    pure $ bimap (located ("timer " ++ show name)) (\h -> noHandlers { onTimer = Map.singleton name (interval, h) }) (script env)
   OnButton ButtonHandler{..} -> do
     name <- getDynamic (dyn bhName)
     SomeUnitHandler script <- getDynamic (dyn bhScript)
-    pure $ bimap snd (\h -> noHandlers { onButton = Map.singleton name h }) (script env)
+    pure $ bimap (located ("button " ++ show name)) (\h -> noHandlers { onButton = Map.singleton name h }) (script env)
   OnRefresh (UnitHandler code) -> do
     SomeUnitHandler script <- getDynamic (dyn code)
-    pure $ bimap snd (\h -> noHandlers { onRefresh = Just h }) (script env)
+    pure $ bimap (located "refresh") (\h -> noHandlers { onRefresh = Just h }) (script env)
   OnActivated (UnitHandler code) -> do
     SomeUnitHandler script <- getDynamic (dyn code)
-    pure $ bimap snd (\h -> noHandlers { onActivated = Just h }) (script env)
+    pure $ bimap (located "activated") (\h -> noHandlers { onActivated = Just h }) (script env)
   OnDeactivated (UnitHandler code) -> do
     SomeUnitHandler script <- getDynamic (dyn code)
-    pure $ bimap snd (\h -> noHandlers { onDeactivated = Just h }) (script env)
+    pure $ bimap (located "deactivated") (\h -> noHandlers { onDeactivated = Just h }) (script env)
+
+-- | An error message with its handler and line (1-based, within the handler's
+-- code).
+located :: String -> (SourceRange, String) -> String
+located event (sr, msg) = "in the `" ++ event ++ "` handler" ++ line ++ ": " ++ msg
+  where
+    line = case sr of
+      SourceRange (Pos r _) _ -> ", line " ++ show (r + 1)
+      NoSourceRange           -> ""
 
 -- | Parse a tool's event handlers and build its event dispatcher, with handler
 -- execution supplied by the given 'ToolExec' (interpreter or JIT-compiled).
