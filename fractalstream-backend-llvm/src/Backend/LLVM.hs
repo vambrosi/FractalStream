@@ -46,7 +46,7 @@ import Language.Code
 import Language.Code.InterpretIO (interpretToIOWithLastValues, ScalarIORefM)
 import Language.Draw
 import Actor.Viewer
-import Actor.Event (ToolExec, buildHandlerWith, snapshotEventArgs, EventArgument(..))
+import Actor.Event (ToolExec, buildHandlerWith, interpretedToolExec, snapshotEventArgs, EventArgument(..))
 import Data.Color
 
 import Data.IORef (newIORef)
@@ -479,57 +479,60 @@ compiledToolExec (dylib, session, compileLayer, nextId, arenaPool) sink =
     -- (exp/log powers lose precision).
     let code' = transformValues (integerPowers . avoidSqrt) code
 
-    m <- either error pure (compileToolHandler envp (fromString name) code')
-    fn <- withContext $ \llctx ->
-      withModuleFromAST llctx m $ \md -> do
-        let pm = CuratedPassSetSpec
-                 { optLevel = Just 2
-                 , sizeLevel = Nothing
-                 , unitAtATime = Nothing
-                 , simplifyLibCalls = Just True
-                 , loopVectorize = Just True
-                 , superwordLevelParallelismVectorize = Nothing
-                 , useInlinerWithThreshold = Nothing
-                 , dataLayout = Nothing
-                 , targetLibraryInfo = Nothing
-                 , targetMachine = Nothing
-                 }
-        _ <- withPassManager pm (`runPassManager` md)
-        withClonedThreadSafeModule md $ \tsm -> do
-          addModule tsm dylib compileLayer
-          lookupSymbol session compileLayer dylib (fromString name) >>= \case
-            Left err -> error ("error JITing tool handler: " ++ show err)
-            Right (JITSymbol fnPtr _) ->
-              pure (castPtrToFunPtr (wordPtrToPtr fnPtr) :: FunPtr ())
+    -- Handlers the compiler can't handle yet (e.g. `write`) are interpreted.
+    case compileToolHandler envp (fromString name) code' of
+      Left _ -> interpretedToolExec sink envp code
+      Right m -> do
+        fn <- withContext $ \llctx ->
+          withModuleFromAST llctx m $ \md -> do
+            let pm = CuratedPassSetSpec
+                     { optLevel = Just 2
+                     , sizeLevel = Nothing
+                     , unitAtATime = Nothing
+                     , simplifyLibCalls = Just True
+                     , loopVectorize = Just True
+                     , superwordLevelParallelismVectorize = Nothing
+                     , useInlinerWithThreshold = Nothing
+                     , dataLayout = Nothing
+                     , targetLibraryInfo = Nothing
+                     , targetMachine = Nothing
+                     }
+            _ <- withPassManager pm (`runPassManager` md)
+            withClonedThreadSafeModule md $ \tsm -> do
+              addModule tsm dylib compileLayer
+              lookupSymbol session compileLayer dylib (fromString name) >>= \case
+                Left err -> error ("error JITing tool handler: " ++ show err)
+                Right (JITSymbol fnPtr _) ->
+                  pure (castPtrToFunPtr (wordPtrToPtr fnPtr) :: FunPtr ())
 
-    -- Per event (snapshot the arguments, call, write back).
-    pure $ \ctx -> snapshotEventArgs ctx >>= \case
-      Nothing -> pure ()
-      Just haskArgs ->
-        withDrawVTablePtrs sink $ \(clearFP, strokeFP, fillFP, pointFP, lineFP, circleFP, rectFP) ->
-        bracket (readChan arenaPool) (writeChan arenaPool) $ \arena ->
-        allocaBytes 1 $ \overflowPtr -> do
-          poke overflowPtr (0 :: Word8)
-          (envArgs, envFrees, envWriteBacks) <-
-            unzip3 <$> fromContextM (\_ ty (earg, v) -> toFFIArgInOut ty earg v)
-                                    (zipContext ctx haskArgs)
-          let fullArgs =
-                [ argPtr (castFunPtrToPtr clearFP)
-                , argPtr (castFunPtrToPtr strokeFP)
-                , argPtr (castFunPtrToPtr fillFP)
-                , argPtr (castFunPtrToPtr pointFP)
-                , argPtr (castFunPtrToPtr lineFP)
-                , argPtr (castFunPtrToPtr circleFP)
-                , argPtr (castFunPtrToPtr rectFP)
-                , argPtr arena
-                , argInt32 (fromIntegral arenaCapacity)
-                , argPtr overflowPtr ]
-                ++ envArgs
-          callFFI fn retVoid fullArgs
-          -- Copy assigned config variables back (e.g. the Select tool's
-          -- coordinate), then free.
-          sequence_ envWriteBacks
-          sequence_ envFrees
+        -- Per event (snapshot the arguments, call, write back).
+        pure $ \ctx -> snapshotEventArgs ctx >>= \case
+          Nothing -> pure ()
+          Just haskArgs ->
+            withDrawVTablePtrs sink $ \(clearFP, strokeFP, fillFP, pointFP, lineFP, circleFP, rectFP) ->
+            bracket (readChan arenaPool) (writeChan arenaPool) $ \arena ->
+            allocaBytes 1 $ \overflowPtr -> do
+              poke overflowPtr (0 :: Word8)
+              (envArgs, envFrees, envWriteBacks) <-
+                unzip3 <$> fromContextM (\_ ty (earg, v) -> toFFIArgInOut ty earg v)
+                                        (zipContext ctx haskArgs)
+              let fullArgs =
+                    [ argPtr (castFunPtrToPtr clearFP)
+                    , argPtr (castFunPtrToPtr strokeFP)
+                    , argPtr (castFunPtrToPtr fillFP)
+                    , argPtr (castFunPtrToPtr pointFP)
+                    , argPtr (castFunPtrToPtr lineFP)
+                    , argPtr (castFunPtrToPtr circleFP)
+                    , argPtr (castFunPtrToPtr rectFP)
+                    , argPtr arena
+                    , argInt32 (fromIntegral arenaCapacity)
+                    , argPtr overflowPtr ]
+                    ++ envArgs
+              callFFI fn retVoid fullArgs
+              -- Copy assigned config variables back (e.g. the Select tool's
+              -- coordinate), then free.
+              sequence_ envWriteBacks
+              sequence_ envFrees
 
 -- | A 'ToolRunner' that JIT-compiles tool event handlers via this JIT session.
 llvmToolRunner :: LLVMJit -> ToolRunner
