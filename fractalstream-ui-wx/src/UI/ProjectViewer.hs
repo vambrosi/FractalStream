@@ -36,7 +36,7 @@ import Actor.Layout
 import Actor.Configuration
 import Actor.Viewer
 import Actor.Ensemble (layoutToArgs)
-import Actor.Event (Event(..), buildHandler, EventArgument_)
+import Actor.Event (Event(..), EventArgument_)
 import Language.Type
 import Language.Draw
 import Language.Environment
@@ -981,7 +981,7 @@ makeWxComplexViewer pending projectWindow addMenuBar saveSession raiseConfigWind
       layer <- getDynamic toolDrawLayer
       getDynamic toolConfig >>= \case
         Nothing -> do
-          getDynamic (dyn toolEventHandlers) >>= (buildHandler (vDrawTo layer) (SomeContext configValues)) >>= \case
+          getDynamic (dyn toolEventHandlers) >>= (vBuildToolHandler layer (SomeContext configValues)) >>= \case
             Left err -> do
               n <- getDynamic (source $ tiName toolInfo)
               putStrLn ("Problem with tool " ++ n ++ ": " ++ err)
@@ -1006,7 +1006,7 @@ makeWxComplexViewer pending projectWindow addMenuBar saveSession raiseConfigWind
           case toolContext0 <> SomeContext' (Right $ SomeContext configValues) of
             SomeContext' (Left _) -> setValue' toolEventHandler (\_ _ -> Nothing)
             SomeContext' (Right toolContext) -> do
-              getDynamic (dyn toolEventHandlers) >>= (buildHandler (vDrawTo layer) toolContext) >>= \case
+              getDynamic (dyn toolEventHandlers) >>= (vBuildToolHandler layer toolContext) >>= \case
                 Left err -> do
                   putStrLn ("Problem with tool " ++ n ++ ": " ++ err)
                   setValue' toolEventHandler (\_ _ -> Nothing)

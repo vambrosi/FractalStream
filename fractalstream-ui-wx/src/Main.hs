@@ -14,7 +14,6 @@ import UI.Session
 import Data.DynamicValue
 import Data.Codec
 import Actor.Ensemble
-import Actor.Viewer (ViewerCompiler)
 
 import qualified Data.Yaml as YAML
 
@@ -32,15 +31,15 @@ import Control.Exception (Exception, catch, ErrorCall(..))
 import qualified Data.ByteString as BS
 
 main :: IO ()
-main = withBackend $ \complexViewerCompiler -> do
+main = withBackend $ \backend -> do
   pending <- newPendingRenders
-  runGUI pending complexViewerCompiler
+  runGUI pending backend
   -- 'start' returns once, when the event loop exits however the app is quit.
   -- Cancel renders there, before 'withBackend' tears down the JIT session.
   drainPendingRenders pending
 
-runGUI :: PendingRenders -> ViewerCompiler -> IO ()
-runGUI pending complexViewerCompiler = start $ do
+runGUI :: PendingRenders -> Backend -> IO ()
+runGUI pending backend = start $ do
 
   wxcAppSetAppName "FractalStream"
 
@@ -75,7 +74,7 @@ runGUI pending complexViewerCompiler = start $ do
           let sessionSave = save prj projectWindow sessionUnsaved
           let si = SessionInfo{..}
           modifyValue activeSessions (si :)
-          runEnsemble complexViewerCompiler
+          runEnsemble backend
             (viewProject pending (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
             prj
 
@@ -89,7 +88,7 @@ runGUI pending complexViewerCompiler = start $ do
         let sessionSave = save prj projectWindow sessionUnsaved
         let si = SessionInfo{..}
         modifyValue activeSessions (si :)
-        runEnsembleFromSetup complexViewerCompiler
+        runEnsembleFromSetup backend
             (viewProject pending (objectCast projectWindow) (makeMenuBar ProjectActions{..}) sessionSave)
             prj
 
